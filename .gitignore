@@ -1,0 +1,15 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+
+# Distribution / packaging
+.Python
+build/
+dist/
+
+# IDE / Editor specific
+.idea/
+.vscode/
+
+# Other
+*.zip
