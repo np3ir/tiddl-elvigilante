@@ -167,7 +167,7 @@ def download_callback(
     def save_m3u(
         resource_type: VALID_M3U_RESOURCE_LITERAL,
         filename: str,
-        tracks_with_path: list[tuple[Path, Track]],
+        tracks_with_path: list[tuple[Path | None, Track | Video]],
     ):
         if not CONFIG.m3u.save:
             return
@@ -288,21 +288,21 @@ def download_callback(
                                         fetched_lyrics_response = ctx.obj.api.get_track_lyrics(item.id)
                                         if fetched_lyrics_response:
                                             fetched_lyrics = fetched_lyrics_response.subtitles
-                                        log.debug(f"Lyrics found for {item.title}")
+                                        log.debug(f"Letras encontradas para {item.title}")
                                         break  # Success
                                     except ApiError as e:
                                         if e.status in [500, 502, 503, 504] and attempt < 2:
                                             wait_time = (attempt + 1) * 2
-                                            log.warning(f"Lyrics unavailable for {item.title} ({e.status}). Retrying in {wait_time}s...")
+                                            log.warning(f"Letras no disponibles para {item.title} ({e.status}). Reintentando en {wait_time}s...")
                                             await asyncio.sleep(wait_time)
                                         elif e.status == 404:
-                                            log.debug(f"Lyrics not found for {item.title} (404)")
+                                            log.debug(f"Letras no encontradas para {item.title} (404)")
                                             break # No point in retrying a 404
                                         else:
-                                            log.error(f"Failed to fetch lyrics for {item.title} after multiple attempts: {e}")
+                                            log.error(f"Fallo al obtener las letras para {item.title} después de múltiples intentos: {e}")
                                             break # Unhandled error, break
                                     except Exception as e:
-                                        log.error(f"An unexpected error occurred while fetching lyrics for {item.title}: {e}")
+                                        log.error(f"Ocurrió un error inesperado al obtener las letras para {item.title}: {e}")
                                         break
 
                                 if fetched_lyrics:
@@ -310,7 +310,7 @@ def download_callback(
                                         try:
                                             lrc_path.write_text(fetched_lyrics, encoding="utf-8")
                                         except Exception as e:
-                                            log.error(f"Could not save .lrc file: {e}")
+                                            log.error(f"No se pudo guardar el archivo .lrc: {e}")
                                     
                                     if CONFIG.metadata.lyrics:
                                         lyrics_subtitles = fetched_lyrics
@@ -326,7 +326,7 @@ def download_callback(
                                     item.album.cover
                                 )._get_data()
                             except Exception as e:
-                                log.warning(f"Could not download track cover: {e}")
+                                log.warning(f"No se pudo descargar la carátula de la pista: {e}")
                                 track_metadata.cover_data = b""
 
                         if REWRITE_METADATA or was_downloaded:
@@ -350,7 +350,7 @@ def download_callback(
                     try:
                         os.utime(download_path, None)
                     except Exception:
-                        log.warning(f"could not update mtime for {download_path}")
+                        log.warning(f"no se pudo actualizar mtime para {download_path}")
 
                 return download_path, item
 
@@ -374,7 +374,7 @@ def download_callback(
                 if CONFIG.metadata.album_review:
                     try:
                         album_review = ctx.obj.api.get_album_review(
-                            album_id=resource.id
+                            album_id=album.id
                         ).normalized_text()
                     except Exception as e:
                         log.error(e)
@@ -462,6 +462,9 @@ def download_callback(
                     track = ctx.obj.api.get_track(resource.id)
                     album = ctx.obj.api.get_album(track.album.id)
 
+                    ctx.obj.console.print(f"\n[bold green]🎵 Descargando Pista:[/] {track.title}")
+                    ctx.obj.console.print(f"[dim]ID de Pista: {resource.id}[/]\n")
+
                     await handle_item(
                         item=track,
                         file_path=format_template(
@@ -493,6 +496,9 @@ def download_callback(
 
                 case "video":
                     video = ctx.obj.api.get_video(resource.id)
+
+                    ctx.obj.console.print(f"\n[bold blue]🎬 Descargando Video:[/] {video.title}")
+                    ctx.obj.console.print(f"[dim]ID de Video: {resource.id}[/]\n")
                     
                     # Fetch album info if available to populate {album.date} and other placeholders
                     album = None
@@ -500,7 +506,7 @@ def download_callback(
                         try:
                             album = ctx.obj.api.get_album(video.album.id)
                         except Exception as e:
-                            log.warning(f"Could not fetch album {video.album.id} for video {video.id}: {e}")
+                            log.warning(f"No se pudo obtener el álbum {video.album.id} para el video {video.id}: {e}")
 
                     await handle_item(
                         item=video,
@@ -515,9 +521,16 @@ def download_callback(
                 case "mix":
                     offset = 0
                     futures = []
+                    mix_id = resource.id
+                    ctx.obj.console.print(f"\n[bold yellow]🎧 Downloading Mix:[/] {mix_id}")
+                    ctx.obj.console.print(f"[dim]Fetching tracks...[/]\n")
 
                     while True:
-                        mix_items = ctx.obj.api.get_mix_items(resource.id, offset=0)
+                        try:
+                            mix_items = ctx.obj.api.get_mix_items(mix_id, offset=offset)
+                        except Exception as e:
+                            log.error(f"Could not fetch mix items for {mix_id}: {e}")
+                            break
 
                         for mix_item in mix_items.items:
                             futures.append(
@@ -526,7 +539,7 @@ def download_callback(
                                     file_path=format_template(
                                         template=resolve_template("", CONFIG.templates.mix),
                                         item=mix_item.item,
-                                        mix_id=resource.id,
+                                        mix_id=mix_id,
                                         quality=get_item_quality(mix_item.item),
                                     ),
                                 ))
@@ -536,8 +549,13 @@ def download_callback(
                         if offset >= mix_items.totalNumberOfItems:
                             break
 
+                    total_items = len(futures)
+                    ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                    ctx.obj.console.print(f"  • {total_items} items in the mix.")
+                    ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
+
                     try:
-                        tracks_with_path = await asyncio.gather(*futures)
+                        results = await asyncio.gather(*futures, return_exceptions=True)
                     except (asyncio.CancelledError, KeyboardInterrupt):
                         for f in futures:
                             if not f.done():
@@ -545,14 +563,29 @@ def download_callback(
                         await asyncio.gather(*futures, return_exceptions=True)
                         raise
 
+                    tracks_with_path = []
+                    failed_count = 0
+                    for res in results:
+                        if isinstance(res, Exception):
+                            log.error(f"Mix track download failed: {res}")
+                            failed_count += 1
+                        else:
+                            tracks_with_path.append(res)
+
                     save_m3u(
                         resource_type="mix",
                         filename=format_template(
                             CONFIG.m3u.templates.mix,
+                            mix_id=mix_id,
                             type="mix",
                         ),
                         tracks_with_path=tracks_with_path,
                     )
+
+                    ctx.obj.console.print(f"\n[bold green]✅ Mix download completed:[/] {mix_id}")
+                    ctx.obj.console.print(f"   • Downloaded: {len(tracks_with_path)} items")
+                    if failed_count > 0:
+                        ctx.obj.console.print(f"   • [red]Failed: {failed_count} items[/]")
 
                 case "album":
                     album = ctx.obj.api.get_album(album_id=resource.id)
@@ -576,20 +609,20 @@ def download_callback(
                     try:
                         artist = ctx.obj.api.get_artist(resource.id)
                         artist_name = artist.name
-                        ctx.obj.console.print(f"\n[bold cyan]🎤 Downloading Artist:[/] {artist_name}")
-                        ctx.obj.console.print(f"[dim]Artist ID: {resource.id}[/]\n")
+                        ctx.obj.console.print(f"\n[bold cyan]🎤 Descargando Artista:[/] {artist_name}")
+                        ctx.obj.console.print(f"[dim]ID de Artista: {resource.id}[/]\n")
                     except Exception as e:
-                        artist_name = f"Artist {resource.id}"
-                        log.warning(f"Could not get artist info: {e}")
+                        artist_name = f"Artista {resource.id}"
+                        log.warning(f"No se pudo obtener la información del artista: {e}")
 
                     collected_albums = []
 
                     def collect_albums(singles: bool):
                         offset = 0
                         filter_type = "EPSANDSINGLES" if singles else "ALBUMS"
-                        display_type = "EPs & Singles" if singles else "Albums"
+                        display_type = "EPs & Sencillos" if singles else "Álbumes"
                         
-                        ctx.obj.console.print(f"[dim]Fetching {display_type}...[/]")
+                        ctx.obj.console.print(f"[dim]Obteniendo {display_type}...[/]")
 
                         while True:
                             artist_albums = None
@@ -604,10 +637,10 @@ def download_callback(
                                 except Exception as e:
                                     if attempt < 2:
                                         wait = (attempt + 1) * 2
-                                        log.warning(f"Error fetching albums (offset {offset}): {e}. Retrying in {wait}s...")
+                                        log.warning(f"Error al obtener álbumes (offset {offset}): {e}. Reintentando en {wait}s...")
                                         time.sleep(wait)
                                     else:
-                                        log.error(f"Failed to fetch albums at offset {offset}: {e}")
+                                        log.error(f"No se pudieron obtener los álbumes en el offset {offset}: {e}")
                                         
                             if not artist_albums:
                                 break
@@ -623,7 +656,7 @@ def download_callback(
                     def get_all_videos():
                         offset = 0
                         
-                        ctx.obj.console.print(f"[dim]Fetching videos...[/]")
+                        ctx.obj.console.print(f"[dim]Obteniendo videos...[/]")
 
                         while True:
                             try:
@@ -650,7 +683,7 @@ def download_callback(
                                 offset += artist_videos.limit
                                 
                             except Exception as e:
-                                log.error(f"Error fetching videos at offset {offset}: {e}")
+                                log.error(f"Error al obtener videos en el offset {offset}: {e}")
                                 break
 
                     # Gather albums and videos based on filters
@@ -728,30 +761,30 @@ def download_callback(
                     unique_albums = len(seen_album_ids)
                     total_items = unique_albums + artist_stats['total_videos']
                     
-                    ctx.obj.console.print(f"\n[green]✓[/] Found:")
-                    ctx.obj.console.print(f"  • {unique_albums} albums (including all versions)")
+                    ctx.obj.console.print(f"\n[green]✓[/] Encontrado:")
+                    ctx.obj.console.print(f"  • {unique_albums} álbumes (incluyendo todas las versiones)")
                     if artist_stats['skipped_duplicates'] > 0:
-                        ctx.obj.console.print(f"  • [yellow]{artist_stats['skipped_duplicates']} true duplicates skipped[/]")
+                        ctx.obj.console.print(f"  • [yellow]{artist_stats['skipped_duplicates']} duplicados verdaderos omitidos[/]")
                     if artist_stats['total_videos'] > 0:
                         ctx.obj.console.print(f"  • {artist_stats['total_videos']} videos")
-                    ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
+                    ctx.obj.console.print(f"  • [bold]{total_items} elementos totales para descargar[/]\n")
                     
                     # Download everything
                     try:
                         await asyncio.gather(*futures)
                         
                         # Fallback: If artist info failed initially, try to get name from downloaded albums
-                        if "Artist " in artist_name and collected_albums:
+                        if "Artista " in artist_name and collected_albums:
                             for alb in collected_albums:
                                 if alb.artist and alb.artist.name:
                                     artist_name = alb.artist.name
                                     break
                         
                         # Final stats
-                        ctx.obj.console.print(f"\n[bold green]✅ Artist download completed:[/] {artist_name}")
-                        ctx.obj.console.print(f"   • Downloaded: {total_items} items")
+                        ctx.obj.console.print(f"\n[bold green]✅ Descarga de artista completada:[/] {artist_name}")
+                        ctx.obj.console.print(f"   • Descargado: {total_items} elementos")
                         if artist_stats['skipped_duplicates'] > 0:
-                            ctx.obj.console.print(f"   • Skipped: {artist_stats['skipped_duplicates']} true duplicates")
+                            ctx.obj.console.print(f"   • Omitido: {artist_stats['skipped_duplicates']} duplicados verdaderos")
                         
                     except (asyncio.CancelledError, KeyboardInterrupt):
                         for f in futures:
@@ -760,14 +793,18 @@ def download_callback(
                         await asyncio.gather(*futures, return_exceptions=True)
                         raise
                     except Exception as e:
-                        ctx.obj.console.print(f"\n[red]❌ Error during artist download:[/] {e}")
-                        log.exception(f"Error downloading artist {resource.id}")
+                        ctx.obj.console.print(f"\n[red]❌ Error durante la descarga del artista:[/] {e}")
+                        log.exception(f"Error al descargar el artista {resource.id}")
 
                 case "playlist":
                     offset = 0
                     futures = []
                     playlist_index = 0
                     playlist = ctx.obj.api.get_playlist(playlist_uuid=resource.id)
+
+                    ctx.obj.console.print(f"\n[bold magenta]🎵 Descargando Playlist:[/] {playlist.title}")
+                    ctx.obj.console.print(f"[dim]ID de Playlist: {resource.id}[/]\n")
+                    ctx.obj.console.print(f"[dim]Obteniendo pistas...[/]")
 
                     while True:
                         playlist_items = ctx.obj.api.get_playlist_items(
@@ -804,8 +841,13 @@ def download_callback(
                         if offset >= playlist_items.totalNumberOfItems:
                             break
 
+                    total_items = len(futures)
+                    ctx.obj.console.print(f"\n[green]✓[/] Encontrado:")
+                    ctx.obj.console.print(f"  • {total_items} elementos en la playlist.")
+                    ctx.obj.console.print(f"  • [bold]{total_items} elementos totales para descargar[/]\n")
+
                     try:
-                        tracks_with_path = await asyncio.gather(*futures, return_exceptions=True)
+                        results = await asyncio.gather(*futures, return_exceptions=True)
                     except (asyncio.CancelledError, KeyboardInterrupt):
                         for f in futures:
                             if not f.done():
@@ -814,13 +856,14 @@ def download_callback(
                         raise
 
                     # Filter out exceptions from results
-                    valid_results = []
-                    for res in tracks_with_path:
+                    tracks_with_path = []
+                    failed_count = 0
+                    for res in results:
                         if isinstance(res, Exception):
-                            log.error(f"Playlist track download failed: {res}")
+                            log.error(f"Fallo en la descarga de una pista de la playlist: {res}")
+                            failed_count += 1
                         else:
-                            valid_results.append(res)
-                    tracks_with_path = valid_results
+                            tracks_with_path.append(res)
 
                     save_m3u(
                         resource_type="playlist",
@@ -847,6 +890,11 @@ def download_callback(
                             )
                         )
 
+                    ctx.obj.console.print(f"\n[bold green]✅ Descarga de playlist completada:[/] {playlist.title}")
+                    ctx.obj.console.print(f"   • Descargado: {len(tracks_with_path)} elementos")
+                    if failed_count > 0:
+                        ctx.obj.console.print(f"   • [red]Fallaron: {failed_count} elementos[/]")
+
         with Live(
             rich_output.group,
             refresh_per_second=10,
@@ -859,18 +907,18 @@ def download_callback(
                     await handle_resource(r)
                 except HTTPError as e:
                     if e.response is not None and e.response.status_code in [404, 406]:
-                         ctx.obj.console.print(f"[yellow]Skipped (Geo-block/Not Found):[/] {r}")
+                         ctx.obj.console.print(f"[yellow]Omitido (Geo-bloqueo/No encontrado):[/] {r}")
                     else:
-                         ctx.obj.console.print(f"[red]HTTP Error:[/] {e} at {r}")
+                         ctx.obj.console.print(f"[red]Error HTTP:[/] {e} en {r}")
                 except ApiError as e:
-                    ctx.obj.console.print(f"[red]API Error:[/] {e} at {r}")
+                    ctx.obj.console.print(f"[red]Error de API:[/] {e} en {r}")
                 except KeyboardInterrupt:
-                    # Silence keyboard interrupt in worker tasks to prevent traceback
+                    # Silenciar la interrupción por teclado en las tareas para evitar el traceback
                     pass
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
+                    ctx.obj.console.print(f"[red]Error:[/] {e} en {r}")
 
             tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
             try:
@@ -888,9 +936,9 @@ def download_callback(
         try:
             asyncio.run(download_resources())
         except KeyboardInterrupt:
-            ctx.obj.console.print("\n[yellow]Download interrupted by user.[/]")
+            ctx.obj.console.print("\n[yellow]Descarga interrumpida por el usuario.[/]")
         except Exception as e:
-            ctx.obj.console.print(f"\n[red]Unexpected error during download: {e}[/]")
+            ctx.obj.console.print(f"\n[red]Error inesperado durante la descarga: {e}[/]")
             import traceback
             log.error(traceback.format_exc())
 

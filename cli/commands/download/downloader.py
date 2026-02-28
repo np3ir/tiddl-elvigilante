@@ -34,113 +34,113 @@ log = getLogger(__name__)
 CHUNK_SIZE = 1024**2
 MAX_RETRIES = 3  # Maximum number of retries for corrupt files
 
-# ==================================================================== 
-# MEJORA 1: Enums para estados de descarga 
-# ==================================================================== 
+# ====================================================================
+# IMPROVEMENT 1: Enums for download states
+# ====================================================================
 
-class DownloadStatus(Enum): 
-    """Estados posibles de una descarga""" 
-    PENDING = "pending" 
-    DOWNLOADING = "downloading" 
-    VERIFYING = "verifying" 
-    COMPLETED = "completed" 
-    FAILED = "failed" 
-    SKIPPED = "skipped" 
-    CORRUPTED = "corrupted" 
-
-
-class DownloadPriority(Enum): 
-    """Prioridades de descarga""" 
-    LOW = 0 
-    NORMAL = 1 
-    HIGH = 2 
-    CRITICAL = 3 
+class DownloadStatus(Enum):
+    """Possible statuses of a download"""
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    VERIFYING = "verifying"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    CORRUPTED = "corrupted"
 
 
-# ==================================================================== 
-# MEJORA 2: Dataclass para tracking de descarga 
-# ==================================================================== 
+class DownloadPriority(Enum):
+    """Download priorities"""
+    LOW = 0
+    NORMAL = 1
+    HIGH = 2
+    CRITICAL = 3
 
-@dataclass 
-class DownloadTask: 
-    """Tarea de descarga con metadata completa""" 
-    url: str 
-    output_path: Path 
-    track_id: Optional[int] = None 
-    track_title: Optional[str] = None 
-    expected_size: Optional[int] = None  # Bytes esperados 
-    expected_hash: Optional[str] = None  # Hash MD5/SHA256 esperado 
-    status: DownloadStatus = DownloadStatus.PENDING 
-    priority: DownloadPriority = DownloadPriority.NORMAL 
-    attempts: int = 0 
-    max_attempts: int = 3 
-    bytes_downloaded: int = 0 
-    error_message: Optional[str] = None 
-    
-    @property 
-    def progress_percentage(self) -> float: 
-        """Porcentaje de progreso (0-100)""" 
-        if not self.expected_size or self.expected_size == 0: 
-            return 0.0 
-        return (self.bytes_downloaded / self.expected_size) * 100 
-    
-    @property 
-    def can_retry(self) -> bool: 
-        """Verifica si se puede reintentar""" 
-        return self.attempts < self.max_attempts 
-    
-    def increment_attempt(self) -> None: 
-        """Incrementa contador de intentos""" 
+
+# ====================================================================
+# IMPROVEMENT 2: Dataclass for download tracking
+# ====================================================================
+
+@dataclass
+class DownloadTask:
+    """Download task with complete metadata"""
+    url: str
+    output_path: Path
+    track_id: Optional[int] = None
+    track_title: Optional[str] = None
+    expected_size: Optional[int] = None  # Expected bytes
+    expected_hash: Optional[str] = None  # Expected MD5/SHA256 hash
+    status: DownloadStatus = DownloadStatus.PENDING
+    priority: DownloadPriority = DownloadPriority.NORMAL
+    attempts: int = 0
+    max_attempts: int = 3
+    bytes_downloaded: int = 0
+    error_message: Optional[str] = None
+
+    @property
+    def progress_percentage(self) -> float:
+        """Progress percentage (0-100)"""
+        if not self.expected_size or self.expected_size == 0:
+            return 0.0
+        return (self.bytes_downloaded / self.expected_size) * 100
+
+    @property
+    def can_retry(self) -> bool:
+        """Checks if a retry is possible"""
+        return self.attempts < self.max_attempts
+
+    def increment_attempt(self) -> None:
+        """Increments the attempt counter"""
         self.attempts += 1
 
 
-# ==================================================================== 
-# MEJORA 5: Gestor de cola de descargas 
-# ==================================================================== 
+# ====================================================================
+# IMPROVEMENT 5: Download queue manager
+# ====================================================================
 
-class DownloadQueue: 
-    """Cola de descargas con prioridades""" 
-    
-    def __init__(self): 
-        self.tasks: list[DownloadTask] = [] 
-        self.completed: list[DownloadTask] = [] 
-        self.failed: list[DownloadTask] = [] 
-    
-    def add_task(self, task: DownloadTask) -> None: 
-        """Agrega tarea a la cola""" 
-        self.tasks.append(task) 
-    
-    def add_tasks(self, tasks: list[DownloadTask]) -> None: 
-        """Agrega múltiples tareas""" 
-        self.tasks.extend(tasks) 
-    
-    def get_pending_tasks(self) -> list[DownloadTask]: 
-        """Obtiene tareas pendientes ordenadas por prioridad""" 
-        pending = [t for t in self.tasks if t.status == DownloadStatus.PENDING] 
-        return sorted(pending, key=lambda t: t.priority.value, reverse=True) 
-    
-    def mark_completed(self, task: DownloadTask) -> None: 
-        """Marca tarea como completada""" 
-        task.status = DownloadStatus.COMPLETED 
-        self.completed.append(task) 
-        if task in self.tasks: 
-            self.tasks.remove(task) 
-    
-    def mark_failed(self, task: DownloadTask) -> None: 
-        """Marca tarea como fallida""" 
-        task.status = DownloadStatus.FAILED 
-        self.failed.append(task) 
-        if task in self.tasks: 
-            self.tasks.remove(task) 
-    
-    def get_stats(self) -> dict: 
-        """Obtiene estadísticas de la cola""" 
-        return { 
-            "pending": len([t for t in self.tasks if t.status == DownloadStatus.PENDING]), 
-            "downloading": len([t for t in self.tasks if t.status == DownloadStatus.DOWNLOADING]), 
-            "completed": len(self.completed), 
-            "failed": len(self.failed), 
-            "total": len(self.tasks) + len(self.completed) + len(self.failed), 
+class DownloadQueue:
+    """Download queue with priority support"""
+
+    def __init__(self):
+        self.tasks: list[DownloadTask] = []
+        self.completed: list[DownloadTask] = []
+        self.failed: list[DownloadTask] = []
+
+    def add_task(self, task: DownloadTask) -> None:
+        """Adds a task to the queue"""
+        self.tasks.append(task)
+
+    def add_tasks(self, tasks: list[DownloadTask]) -> None:
+        """Adds multiple tasks"""
+        self.tasks.extend(tasks)
+
+    def get_pending_tasks(self) -> list[DownloadTask]:
+        """Gets pending tasks sorted by priority"""
+        pending = [t for t in self.tasks if t.status == DownloadStatus.PENDING]
+        return sorted(pending, key=lambda t: t.priority.value, reverse=True)
+
+    def mark_completed(self, task: DownloadTask) -> None:
+        """Marks a task as completed"""
+        task.status = DownloadStatus.COMPLETED
+        self.completed.append(task)
+        if task in self.tasks:
+            self.tasks.remove(task)
+
+    def mark_failed(self, task: DownloadTask) -> None:
+        """Marks a task as failed"""
+        task.status = DownloadStatus.FAILED
+        self.failed.append(task)
+        if task in self.tasks:
+            self.tasks.remove(task)
+
+    def get_stats(self) -> dict:
+        """Gets queue statistics"""
+        return {
+            "pending": len([t for t in self.tasks if t.status == DownloadStatus.PENDING]),
+            "downloading": len([t for t in self.tasks if t.status == DownloadStatus.DOWNLOADING]),
+            "completed": len(self.completed),
+            "failed": len(self.failed),
+            "total": len(self.tasks) + len(self.completed) + len(self.failed),
         }
 
 
@@ -165,18 +165,18 @@ video_qualities_color: dict[StreamVideoQuality, str] = {
 
 class ImprovedDownloader:
     """
-    Downloader mejorado con:
-    - Retry automático con backoff exponencial
-    - Verificación de integridad
-    - Gestión de rate limiting
-    - Tracking detallado de progreso
+    Improved downloader with:
+    - Automatic retry with exponential backoff
+    - Integrity verification
+    - Rate limiting management
+    - Detailed progress tracking
     """
-    
+
     def __init__(
         self,
         max_concurrent_downloads: int = 3,
-        chunk_size: int = 1024**2, # 1MB
-        timeout: int = 300, # 5 minutos
+        chunk_size: int = 1024**2,  # 1MB
+        timeout: int = 300,  # 5 minutes
         on_progress: Optional[Callable] = None,
     ):
         self.max_concurrent = max_concurrent_downloads
@@ -184,10 +184,10 @@ class ImprovedDownloader:
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self.on_progress = on_progress
 
-        # Semáforo para limitar descargas concurrentes
+        # Semaphore to limit concurrent downloads
         self.semaphore = asyncio.Semaphore(max_concurrent_downloads)
 
-        # Estadísticas
+        # Statistics
         self.stats = {
             "completed": 0,
             "failed": 0,
@@ -201,13 +201,13 @@ class ImprovedDownloader:
         session: aiohttp.ClientSession
     ) -> tuple[bool, Optional[str]]:
         """
-        Descarga un archivo con retry y verificación
+        Downloads a file with retry and verification.
 
         Returns:
             tuple[success, error_message]
         """
         async with self.semaphore:
-            # Si el archivo existe y es válido, saltar
+            # If the file exists and is valid, skip it
             if task.output_path.exists():
                 is_valid, error = await FileIntegrityChecker.verify_file_async(
                     task.output_path,
@@ -219,30 +219,30 @@ class ImprovedDownloader:
                     self.stats["skipped"] += 1
                     return True, None
                 else:
-                    # Archivo corrupto, eliminar y reintentar
+                    # Corrupt file, delete and retry
                     task.output_path.unlink()
-            
-            # Intentar descarga con reintentos
+
+            # Attempt download with retries
             while task.can_retry:
                 task.increment_attempt()
                 task.status = DownloadStatus.DOWNLOADING
-                
+
                 try:
-                    # Descarga
+                    # Download
                     success, error = await self._download_with_progress(task, session)
 
                     if not success:
                         if "429" in str(error) or "rate limit" in str(error).lower():
-                            # Rate limiting - esperar más tiempo
-                            wait_time = min(60 * task.attempts, 300) # Max 5 min
+                            # Rate limiting - wait longer
+                            wait_time = min(60 * task.attempts, 300)  # Max 5 min
                             await asyncio.sleep(wait_time)
                             continue
-                        
-                        # Otro error - esperar menos
-                        await asyncio.sleep(2 ** task.attempts) # Backoff exponencial
+
+                        # Other error - wait less
+                        await asyncio.sleep(2 ** task.attempts)  # Exponential backoff
                         continue
-                    
-                    # Verificar integridad
+
+                    # Verify integrity
                     task.status = DownloadStatus.VERIFYING
                     is_valid, error = await FileIntegrityChecker.verify_file_async(
                         task.output_path,
@@ -256,24 +256,24 @@ class ImprovedDownloader:
                         self.stats["total_bytes"] += task.bytes_downloaded
                         return True, None
                     else:
-                        # Archivo corrupto - eliminar y reintentar
+                        # Corrupt file - delete and retry
                         task.output_path.unlink(missing_ok=True)
                         task.status = DownloadStatus.CORRUPTED
-                        
+
                         if not task.can_retry:
                             break
-                        
+
                         await asyncio.sleep(2 ** task.attempts)
 
                 except Exception as e:
-                     task.error_message = str(e)
-                     
-                     if not task.can_retry:
-                         break
-                     
-                     await asyncio.sleep(2 ** task.attempts)
-            
-            # Todos los intentos fallaron
+                    task.error_message = str(e)
+
+                    if not task.can_retry:
+                        break
+
+                    await asyncio.sleep(2 ** task.attempts)
+
+            # All attempts failed
             task.status = DownloadStatus.FAILED
             self.stats["failed"] += 1
             return False, task.error_message or "Max retries exceeded"
@@ -284,31 +284,31 @@ class ImprovedDownloader:
         session: aiohttp.ClientSession
     ) -> tuple[bool, Optional[str]]:
         """
-        Descarga un archivo con tracking de progreso
+        Downloads a file with progress tracking.
 
         Returns:
             tuple[success, error_message]
         """
         try:
-            # Crear directorio si no existe
+            # Create directory if it does not exist
             task.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Descargar
+            # Download
             async with session.get(task.url, timeout=self.timeout) as response:
-                # Verificar status
+                # Check status
                 if response.status == 429:
-                     retry_after = response.headers.get("Retry-After", "60")
-                     return False, f"Rate limited - retry after {retry_after}s"
-                
+                    retry_after = response.headers.get("Retry-After", "60")
+                    return False, f"Rate limited - retry after {retry_after}s"
+
                 if response.status != 200:
                     return False, f"HTTP {response.status}"
-                
-                # Obtener tamaño
+
+                # Get size
                 total_size = int(response.headers.get('content-length', 0))
                 if total_size > 0:
                     task.expected_size = total_size
-                
-                # Escribir a archivo
+
+                # Write to file
                 task.bytes_downloaded = 0
 
                 async with aiofiles.open(task.output_path, 'wb') as f:
@@ -316,12 +316,12 @@ class ImprovedDownloader:
                         await f.write(chunk)
                         task.bytes_downloaded += len(chunk)
 
-                        # Callback de progreso
+                        # Progress callback
                         if self.on_progress:
                             self.on_progress(task)
-            
+
             return True, None
-        
+
         except asyncio.TimeoutError:
             return False, "Download timeout"
         except aiohttp.ClientError as e:
@@ -335,142 +335,142 @@ class ImprovedDownloader:
         headers: Optional[dict] = None
     ) -> dict[str, int]:
         """
-        Descarga un batch de archivos de forma concurrente
+        Downloads a batch of files concurrently.
 
         Returns:
-            Estadísticas de descarga
+            Download statistics
         """
-        # Ordenar por prioridad
+        # Sort by priority
         tasks.sort(key=lambda t: t.priority.value, reverse=True)
 
-        # Crear sesión
+        # Create session
         connector = aiohttp.TCPConnector(limit=self.max_concurrent)
         async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-             # Crear tareas
-             download_tasks = [
-                 self.download_file(task, session)
-                 for task in tasks
-             ]
+            # Create tasks
+            download_tasks = [
+                self.download_file(task, session)
+                for task in tasks
+            ]
 
-             # Ejecutar concurrentemente
-             results = await asyncio.gather(*download_tasks, return_exceptions=True)
+            # Execute concurrently
+            results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
-             # Procesar resultados
-             for task, result in zip(tasks, results):
-                 if isinstance(result, Exception):
-                     task.status = DownloadStatus.FAILED
-                     task.error_message = str(result)
-                     self.stats["failed"] += 1
-        
+            # Process results
+            for task, result in zip(tasks, results):
+                if isinstance(result, Exception):
+                    task.status = DownloadStatus.FAILED
+                    task.error_message = str(result)
+                    self.stats["failed"] += 1
+
         return self.stats
 
 
 
-# ==================================================================== 
-# MEJORA 3: Verificador de integridad de archivos mejorado 
-# ==================================================================== 
+# ====================================================================
+# IMPROVEMENT 3: Improved file integrity checker
+# ====================================================================
 
-class FileIntegrityChecker: 
-    """Verificador de integridad de archivos descargados""" 
-    
-    @staticmethod 
-    async def verify_file_async( 
-        file_path: Path, 
-        expected_size: Optional[int] = None, 
-        expected_hash: Optional[str] = None, 
-        hash_algorithm: Literal["md5", "sha256"] = "md5" 
-    ) -> tuple[bool, Optional[str]]: 
-        """ 
-        Verifica la integridad de un archivo de forma asíncrona 
-        
-        Returns: 
-            tuple[is_valid, error_message] 
-        """ 
-        if not file_path.exists(): 
-            return False, "File does not exist" 
-        
-        # Verificar tamaño 
-        actual_size = file_path.stat().st_size 
-        
-        # Archivos muy pequeños son sospechosos 
-        if actual_size < 2048:  # Menos de 2KB 
-            return False, f"File too small ({actual_size} bytes)" 
-        
-        # Verificar tamaño esperado 
-        if expected_size and abs(actual_size - expected_size) > 1024:  # Tolerancia de 1KB 
-            return False, f"Size mismatch: expected {expected_size}, got {actual_size}" 
-        
-        # Verificar magic bytes según extensión 
-        try: 
-            async with aiofiles.open(file_path, "rb") as f: 
-                header = await f.read(12) 
-                
-                if not FileIntegrityChecker._check_magic_bytes(file_path, header): 
-                    return False, "Invalid file format (magic bytes check failed)" 
-                
-                # Para archivos MP4/M4A, verificar átomos 
-                if file_path.suffix.lower() in ['.m4a', '.mp4', '.m4v']: 
-                    await f.seek(0) 
-                    first_256kb = await f.read(262144) 
-                    
-                    if b'moov' not in first_256kb: 
-                        return False, "Invalid MP4/M4A: missing 'moov' atom" 
-                
-                # Verificar hash si se proporciona 
-                if expected_hash: 
-                    actual_hash = await FileIntegrityChecker._calculate_hash_async( 
-                        file_path, 
-                        hash_algorithm 
-                    ) 
-                    
-                    if actual_hash != expected_hash.lower(): 
-                        return False, f"Hash mismatch: expected {expected_hash}, got {actual_hash}" 
-        
-        except Exception as e: 
-            return False, f"Verification error: {str(e)}" 
-        
-        return True, None 
-    
-    @staticmethod 
-    def _check_magic_bytes(file_path: Path, header: bytes) -> bool: 
-        """Verifica los magic bytes según el tipo de archivo""" 
-        ext = file_path.suffix.lower() 
-        
-        # FLAC 
-        if ext == '.flac': 
-            return header.startswith(b'fLaC') 
-        
-        # MP4/M4A 
-        elif ext in ['.m4a', '.mp4', '.m4v']: 
-            return len(header) >= 8 and header[4:8] == b'ftyp' 
-        
-        # MP3 
-        elif ext == '.mp3': 
-            # ID3v2 tag o frame sync 
-            return header.startswith(b'ID3') or (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0) 
-        
-        # AAC 
-        elif ext == '.aac': 
-            return header.startswith(b'\xFF\xF1') or header.startswith(b'\xFF\xF9') 
-        
-        # Si no conocemos el formato, asumir válido 
-        return True 
-    
-    @staticmethod 
-    async def _calculate_hash_async( 
-        file_path: Path, 
-        algorithm: Literal["md5", "sha256"] = "md5" 
-    ) -> str: 
-        """Calcula el hash de un archivo de forma asíncrona""" 
-        hash_obj = hashlib.md5() if algorithm == "md5" else hashlib.sha256() 
-        
-        async with aiofiles.open(file_path, "rb") as f: 
-            while True: 
-                chunk = await f.read(8192) 
-                if not chunk: 
-                    break 
-                hash_obj.update(chunk) 
-        
+class FileIntegrityChecker:
+    """Checks the integrity of downloaded files"""
+
+    @staticmethod
+    async def verify_file_async(
+        file_path: Path,
+        expected_size: Optional[int] = None,
+        expected_hash: Optional[str] = None,
+        hash_algorithm: Literal["md5", "sha256"] = "md5"
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Verifies the integrity of a file asynchronously.
+
+        Returns:
+            tuple[is_valid, error_message]
+        """
+        if not file_path.exists():
+            return False, "File does not exist"
+
+        # Check size
+        actual_size = file_path.stat().st_size
+
+        # Very small files are suspicious
+        if actual_size < 2048:  # Less than 2KB
+            return False, f"File too small ({actual_size} bytes)"
+
+        # Check expected size
+        if expected_size and abs(actual_size - expected_size) > 1024:  # 1KB tolerance
+            return False, f"Size mismatch: expected {expected_size}, got {actual_size}"
+
+        # Check magic bytes based on extension
+        try:
+            async with aiofiles.open(file_path, "rb") as f:
+                header = await f.read(12)
+
+                if not FileIntegrityChecker._check_magic_bytes(file_path, header):
+                    return False, "Invalid file format (magic bytes check failed)"
+
+                # For MP4/M4A files, check atoms
+                if file_path.suffix.lower() in ['.m4a', '.mp4', '.m4v']:
+                    await f.seek(0)
+                    first_256kb = await f.read(262144)
+
+                    if b'moov' not in first_256kb:
+                        return False, "Invalid MP4/M4A: missing 'moov' atom"
+
+                # Verify hash if provided
+                if expected_hash:
+                    actual_hash = await FileIntegrityChecker._calculate_hash_async(
+                        file_path,
+                        hash_algorithm
+                    )
+
+                    if actual_hash != expected_hash.lower():
+                        return False, f"Hash mismatch: expected {expected_hash}, got {actual_hash}"
+
+        except Exception as e:
+            return False, f"Verification error: {str(e)}"
+
+        return True, None
+
+    @staticmethod
+    def _check_magic_bytes(file_path: Path, header: bytes) -> bool:
+        """Checks magic bytes based on file type"""
+        ext = file_path.suffix.lower()
+
+        # FLAC
+        if ext == '.flac':
+            return header.startswith(b'fLaC')
+
+        # MP4/M4A
+        elif ext in ['.m4a', '.mp4', '.m4v']:
+            return len(header) >= 8 and header[4:8] == b'ftyp'
+
+        # MP3
+        elif ext == '.mp3':
+            # ID3v2 tag or frame sync
+            return header.startswith(b'ID3') or (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0)
+
+        # AAC
+        elif ext == '.aac':
+            return header.startswith(b'\xFF\xF1') or header.startswith(b'\xFF\xF9')
+
+        # If we don't know the format, assume it's valid
+        return True
+
+    @staticmethod
+    async def _calculate_hash_async(
+        file_path: Path,
+        algorithm: Literal["md5", "sha256"] = "md5"
+    ) -> str:
+        """Calculates the hash of a file asynchronously"""
+        hash_obj = hashlib.md5() if algorithm == "md5" else hashlib.sha256()
+
+        async with aiofiles.open(file_path, "rb") as f:
+            while True:
+                chunk = await f.read(8192)
+                if not chunk:
+                    break
+                hash_obj.update(chunk)
+
         return hash_obj.hexdigest()
 
 
@@ -533,29 +533,29 @@ class Downloader:
         """
         Downloads a file with automatic retry in case of corruption.
         Validates the file after each download.
-        
+
         Returns:
             True if download was successful and validated, False if failed after all retries
         """
         tmp_path = None
         task.status = DownloadStatus.DOWNLOADING
-        
+
         while task.can_retry:
             task.increment_attempt()
             attempt = task.attempts
-            
+
             try:
                 # Create temporary file with unique name to avoid Windows file locking collisions
                 # especially on network shares where handles linger
                 unique_suffix = f".part.{uuid.uuid4().hex[:8]}"
                 tmp_path = task.output_path.with_suffix(task.output_path.suffix + unique_suffix)
-                
+
                 # Download
                 async with aiohttp.ClientSession(headers=headers) as session:
                     async with aiofiles.open(tmp_path, "wb") as f:
                         for url in urls:
                             async with session.get(url) as resp:
-                                
+
                                 # 1. Intercept HTTP Status Errors with specific messages
                                 if resp.status == 451:
                                     raise Exception(f"HTTP 451 Unavailable For Legal Reasons (Geo-block) for {url}")
@@ -563,19 +563,19 @@ class Downloader:
                                     raise Exception(f"HTTP 403 Forbidden (Token expired or Blocked) for {url}")
                                 if resp.status != 200:
                                     raise Exception(f"HTTP {resp.status} for {url}")
-                                
+
                                 # 2. Intercept Invalid Content-Type
                                 content_type = resp.headers.get("Content-Type", "").lower()
                                 if "application/json" in content_type or "text/" in content_type or "xml" in content_type:
-                                     # Try to read the error message
-                                     try:
-                                         error_content = await resp.text()
-                                         # Truncate if too long
-                                         if len(error_content) > 200: error_content = error_content[:200] + "..."
-                                         raise Exception(f"Invalid Content-Type '{content_type}' with content: {error_content}")
-                                     except Exception as read_err:
-                                         if "Invalid Content-Type" in str(read_err): raise read_err
-                                         raise Exception(f"Invalid Content-Type '{content_type}'")
+                                    # Try to read the error message
+                                    try:
+                                        error_content = await resp.text()
+                                        # Truncate if too long
+                                        if len(error_content) > 200: error_content = error_content[:200] + "..."
+                                        raise Exception(f"Invalid Content-Type '{content_type}' with content: {error_content}")
+                                    except Exception as read_err:
+                                        if "Invalid Content-Type" in str(read_err): raise read_err
+                                        raise Exception(f"Invalid Content-Type '{content_type}'")
 
                                 async for chunk in resp.content.iter_chunked(CHUNK_SIZE):
                                     await f.write(chunk)
@@ -583,7 +583,7 @@ class Downloader:
                                     self.rich_output.download_advance(
                                         task_id, size=len(chunk)
                                     )
-                
+
                 # Move temporary file to destination with retry logic
                 # This fixes WinError 32 on network shares where file close is not instant
                 move_success = False
@@ -597,34 +597,34 @@ class Downloader:
                         if move_attempt == 4:
                             log.warning(f"Failed to move file after 5 attempts: {e}")
                             raise e
-                        
+
                         log.warning(f"File move locked (attempt {move_attempt+1}), retrying: {e}")
                         await asyncio.sleep(1.0 + move_attempt)
 
                 tmp_path = None  # No longer exists, moved
-                
+
                 # ===================================================================
                 # Critical validation: ensure the file is not corrupt
                 # ===================================================================
                 task.status = DownloadStatus.VERIFYING
-                
+
                 is_valid, error_msg = await FileIntegrityChecker.verify_file_async(
                     task.output_path,
                     expected_size=task.expected_size,
                     expected_hash=task.expected_hash
                 )
-                
+
                 if not is_valid:
                     task.status = DownloadStatus.CORRUPTED
                     log.warning(f"File validation failed for '{task.track_title}': {error_msg}")
-                    
+
                     # Attempt to repair MP4/M4A container using ffmpeg faststart remux
                     if task.output_path.suffix.lower() in [".m4a", ".mp4", ".m4v"]:
                         try:
                             repaired_path = fix_mp4_faststart(task.output_path)
                             # Verify again after repair
                             is_valid_repaired, error_msg_repaired = await FileIntegrityChecker.verify_file_async(repaired_path)
-                            
+
                             if is_valid_repaired:
                                 self.rich_output.console.print(
                                     f"[green]✓ Repaired container (moov atom) [/]{task.track_title}"
@@ -645,11 +645,11 @@ class Downloader:
                             f"[yellow]⚠️  Corrupt file detected ({error_msg}), retrying... "
                             f"({attempt}/{task.max_attempts})[/] {task.track_title}"
                         )
-                        
+
                         # Delete corrupt file
                         if task.output_path.exists():
                             task.output_path.unlink()
-                        
+
                         # Wait before retrying
                         await asyncio.sleep(2)
                         task.status = DownloadStatus.DOWNLOADING
@@ -667,7 +667,7 @@ class Downloader:
                             task.output_path.unlink()
                         task.status = DownloadStatus.FAILED
                         return False
-                
+
                 # Successful validation
                 task.status = DownloadStatus.COMPLETED
                 if attempt > 1:
@@ -675,27 +675,27 @@ class Downloader:
                     self.rich_output.console.print(
                         f"[green]✓ Retry successful![/] {task.track_title}"
                     )
-                
+
                 return True
-                
+
             except Exception as e:
                 task.error_message = str(e)
                 log.error(f"Download error for '{task.track_title}' (attempt {attempt}): {e}")
-                
+
                 # Clean up temporary file if exists
                 if tmp_path and tmp_path.exists():
                     try:
                         tmp_path.unlink()
                     except:
                         pass
-                
+
                 # Clean up destination file if partial
                 if task.output_path.exists():
                     try:
                         task.output_path.unlink()
                     except:
                         pass
-                
+
                 if task.can_retry:
                     self.rich_output.console.print(
                         f"[yellow]⚠️  Download failed, retrying... "
@@ -705,7 +705,7 @@ class Downloader:
                     task.status = DownloadStatus.DOWNLOADING
                     continue
                 else:
-                    # Todos los intentos fallaron
+                    # All attempts failed
                     task.status = DownloadStatus.FAILED
                     self.rich_output.console.print(
                         f"[red]❌ Download failed after {task.max_attempts} attempts[/] {task.track_title}"
@@ -720,17 +720,17 @@ class Downloader:
         headers: Optional[dict] = None
     ) -> dict:
         """
-        Descarga un lote de tareas usando la cola y semáforo
+        Downloads a batch of tasks using the queue and semaphore.
         """
         completed = 0
         failed = 0
         skipped = 0
         total_bytes = 0
-        
-        # Crear tareas asíncronas
+
+        # Create asynchronous tasks
         async def process_task(task: DownloadTask, i: int):
             nonlocal completed, failed, skipped, total_bytes
-            
+
             async with self.semaphore:
                 if not task.url:
                     task.status = DownloadStatus.FAILED
@@ -738,25 +738,25 @@ class Downloader:
                     failed += 1
                     return
 
-                # Si task.url es string, la convertimos a lista
+                # If task.url is a string, convert it to a list
                 urls = [task.url]
-                
-                # Configurar visualización en rich_output
+
+                # Set up display in rich_output
                 task_id = self.rich_output.download_start(
                     f"[cyan]Batch[/] {task.track_title or 'Unknown'}",
                     total=task.expected_size
                 )
-                
+
                 success = await self._download_with_retry(
                     task=task,
                     urls=urls,
                     task_id=task_id,
                     headers=headers
                 )
-                
-                # Finalizar tarea en UI
+
+                # Finish task in UI
                 self.rich_output.download_finish(task_id=task_id)
-                
+
                 if success:
                     completed += 1
                     total_bytes += task.bytes_downloaded
@@ -772,13 +772,13 @@ class Downloader:
                         item_description=f"{task.track_title}",
                         item_path=None
                     )
-                    
-        # Ejecutar todas las tareas
+
+        # Execute all tasks
         await asyncio.gather(*[
-            process_task(task, i) 
+            process_task(task, i)
             for i, task in enumerate(tasks)
         ])
-        
+
         return {
             "completed": completed,
             "failed": failed,
@@ -794,13 +794,13 @@ class Downloader:
         - Path `item_path` path of existing/downloaded item
         - bool `was_downloaded`
         """
-        
+
         artist_name = item.artist.name if getattr(item, 'artist', None) else "Unknown"
         display_title = f"{artist_name} - {item.title}"
 
         if not item.allowStreaming:
             self.rich_output.console.print(
-                f"[red]Can't stream[/] {display_title} ({item.id})"
+                f"[red]Streaming not allowed for[/] {display_title} ({item.id})"
             )
             return None, False
 
@@ -823,7 +823,7 @@ class Downloader:
         result_message = "[green]Downloaded"
 
         if self._is_file_in_cache(existing_file_path):
-            result_message = "[cyan]Overwrited"
+            result_message = "[cyan]Overwritten"
 
             if self.skip_existing:
                 self.rich_output.show_item_result(
@@ -871,7 +871,7 @@ class Downloader:
                 # Optimization: Only attempt qualities up to the track's available quality
                 quality_score = {"HI_RES_LOSSLESS": 3, "LOSSLESS": 2, "HIGH": 1, "LOW": 0}
                 max_score = quality_score.get(item.audioQuality, 3)
-                
+
                 # Check for Dolby Atmos
                 is_atmos = False
                 if item.mediaMetadata:
@@ -882,7 +882,7 @@ class Downloader:
                         tags = item.mediaMetadata.tags
                     if "DOLBY_ATMOS" in tags:
                         is_atmos = True
-                
+
                 if not is_atmos and item.audioModes and "DOLBY_ATMOS" in item.audioModes:
                     is_atmos = True
 
@@ -910,29 +910,29 @@ class Downloader:
 
                         # FIX: Fail fast on Rate Limit to avoid "Error Could not download..." spam
                         if "429" in str(e) or "Limit" in str(e):
-                             self.rich_output.console.print(f"[yellow]Skipped '{display_title}' (Rate Limit)[/]")
-                             return None, False
-                             
+                            self.rich_output.console.print(f"[yellow]Skipped '{display_title}' (Rate Limit)[/]")
+                            return None, False
+
                         continue
                     urls, _ = parse_track_stream(stream)
                     chosen_filename = get_existing_track_filename(item.audioQuality, q, file_path)
-                    
+
                     # Prepare path for Windows Long Path / UNC
                     download_path = self.download_path / chosen_filename
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
-                        
+
                     quality = track_qualities_color[stream.audioQuality]
                     if is_atmos:
                         quality = "[purple]Dolby Atmos"
                     elif stream.audioQuality in ["HI_RES_LOSSLESS", "LOSSLESS"]:
                         quality = f"{quality} {stream.bitDepth}-bit, {(stream.sampleRate or 0) / 1000:.1f} kHz"
                     should_extract_flac = stream.audioQuality == "HI_RES_LOSSLESS"
-                    
+
                     task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
-                    
+
                     download_path.parent.mkdir(exist_ok=True, parents=True)
-                    
+
                     task = DownloadTask(
                         url=urls[0] if urls else "",
                         output_path=download_path,
@@ -940,7 +940,7 @@ class Downloader:
                         track_title=display_title,
                         max_attempts=MAX_RETRIES
                     )
-                    
+
                     download_success = await self._download_with_retry(
                         task=task,
                         urls=urls,
@@ -969,7 +969,7 @@ class Downloader:
                         item_path=download_path,
                     )
                     return download_path, True
-                
+
                 self.rich_output.console.print(
                     f"[red]Error[/] Could not download '{display_title}' in any quality"
                 )
@@ -987,15 +987,15 @@ class Downloader:
                     except Exception as e:
                         log.error(f"Unexpected error for video {item.id} q={q}: {e}")
                         continue
-                        
+
                     urls, ext = parse_video_stream(stream), ".ts"
                     quality = video_qualities_color[stream.videoQuality]
-                    
+
                     # Prepare path for Windows Long Path / UNC
                     download_path = (self.download_path / filename).with_suffix(ext)
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
-                    
+
                     task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
                     
                     download_path.parent.mkdir(exist_ok=True, parents=True)
