@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .base import (
     AlbumItems,
     AlbumItemsCredits,
@@ -19,6 +20,7 @@ from .resources import (
     Track,
     TrackQuality,
     Video,
+    Explicit,
 )
 
 __all__ = [
@@ -39,5 +41,6 @@ __all__ = [
     "Search",
     "SessionResponse",
     "TrackStream",
-    "VideoStream"
+    "VideoStream",
+    "Explicit",
 ]

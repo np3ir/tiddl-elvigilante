@@ -1,3 +1,4 @@
+from __future__ import annotations
 class AuthClientError(Exception):
     def __init__(
         self,

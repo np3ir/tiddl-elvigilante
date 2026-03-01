@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Union
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -18,7 +18,7 @@ class SessionResponse(BaseModel):
         id: int
         name: str
         authorizedForOffline: bool
-        authorizedForOfflineDate: Optional[str]
+        authorizedForOfflineDate: str | None = None
 
     sessionId: str
     userId: int
@@ -35,11 +35,11 @@ class Items(BaseModel):
 
 
 class ArtistAlbumsItems(Items):
-    items: List[Album]
+    items: list[Album]
 
 
 class ArtistVideosItems(Items):
-    items: List[Video]
+    items: list[Video]
 
 
 ItemType = Literal["track", "video"]
@@ -54,7 +54,7 @@ class AlbumItems(Items):
         item: Track
         type: ItemType = "track"
 
-    items: List[Union[TrackItem, VideoItem]]
+    items: list[TrackItem | VideoItem]
 
 
 class AlbumItemsCredits(Items):
@@ -62,12 +62,12 @@ class AlbumItemsCredits(Items):
         class CreditsEntry(BaseModel):
             class Contributor(BaseModel):
                 name: str
-                id: Optional[int] = None
+                id: int | None = None
 
             type: str
-            contributors: List[Contributor]
+            contributors: list[Contributor]
 
-        credits: List[CreditsEntry]
+        credits: list[CreditsEntry]
 
     class VideoItem(ItemWithCredits):
         item: Video
@@ -77,7 +77,7 @@ class AlbumItemsCredits(Items):
         item: Track
         type: ItemType = "track"
 
-    items: List[Union[TrackItem, VideoItem]]
+    items: list[TrackItem | VideoItem]
 
 
 class PlaylistItems(Items):
@@ -89,21 +89,19 @@ class PlaylistItems(Items):
 
         item: PlaylistVideo
         type: ItemType = "video"
-        cut: None
+        cut: None = None
 
     class PlaylistTrackItem(BaseModel):
         class PlaylistTrack(Track):
             dateAdded: str
             index: int
             itemUuid: str
-            # playlist tracks albums have releasedate,
-            # but tracks alone do not lol
 
         item: PlaylistTrack
         type: ItemType = "track"
-        cut: None
+        cut: None = None
 
-    items: List[Union[PlaylistTrackItem, PlaylistVideoItem]]
+    items: list[PlaylistTrackItem | PlaylistVideoItem]
 
 
 class MixItems(Items):
@@ -111,18 +109,26 @@ class MixItems(Items):
         item: Track
         type: ItemType = "track"
 
-    items: List[MixItem]
+    items: list[MixItem]
 
 
 class Favorites(BaseModel):
-    PLAYLIST: List[str]
-    ALBUM: List[str]
-    VIDEO: List[str]
-    TRACK: List[str]
-    ARTIST: List[str]
+    PLAYLIST: list[str]
+    ALBUM: list[str]
+    VIDEO: list[str]
+    TRACK: list[str]
+    ARTIST: list[str]
 
 
 class TrackStream(BaseModel):
+    """
+    Represents audio stream metadata for a Tidal track.
+
+    IMPORTANT:
+    Tidal does NOT always return replay gain or peak amplitude fields.
+    These MUST be Optional or Pydantic will raise validation errors.
+    """
+
     trackId: int
     assetPresentation: Literal["FULL"]
     audioMode: Literal["STEREO"]
@@ -130,12 +136,16 @@ class TrackStream(BaseModel):
     manifestMimeType: Literal["application/dash+xml", "application/vnd.tidal.bts"]
     manifestHash: str
     manifest: str
-    albumReplayGain: Optional[float] = None
-    albumPeakAmplitude: Optional[float] = None
-    trackReplayGain: Optional[float] = None
-    trackPeakAmplitude: Optional[float] = None
-    bitDepth: Optional[int] = None
-    sampleRate: Optional[int] = None
+
+    # Optional – often missing
+    albumReplayGain: float | None = None
+    albumPeakAmplitude: float | None = None
+    trackReplayGain: float | None = None
+    trackPeakAmplitude: float | None = None
+
+    # Optional – depends on stream type
+    bitDepth: int | None = None
+    sampleRate: int | None = None
 
 
 class VideoStream(BaseModel):
@@ -143,31 +153,29 @@ class VideoStream(BaseModel):
     streamType: Literal["ON_DEMAND"]
     assetPresentation: Literal["FULL"]
     videoQuality: StreamVideoQuality
-    # streamingSessionId: str  # only in web?
     manifestMimeType: Literal["application/dash+xml", "application/vnd.tidal.emu"]
     manifestHash: str
     manifest: str
 
 
 class Search(BaseModel):
-
     class Artists(Items):
-        items: List[Artist]
+        items: list[Artist]
 
     class Albums(Items):
-        items: List[Album]
+        items: list[Album]
 
     class Playlists(Items):
-        items: List[Playlist]
+        items: list[Playlist]
 
     class Tracks(Items):
-        items: List[Track]
+        items: list[Track]
 
     class Videos(Items):
-        items: List[Video]
+        items: list[Video]
 
     class TopHit(BaseModel):
-        value: Union[Artist, Track, Playlist, Album]
+        value: Artist | Track | Playlist | Album
         type: Literal["ARTISTS", "TRACKS", "PLAYLISTS", "ALBUMS"]
 
     artists: Artists
@@ -175,14 +183,14 @@ class Search(BaseModel):
     playlists: Playlists
     tracks: Tracks
     videos: Videos
-    topHit: Optional[TopHit] = None
+    topHit: TopHit | None = None
 
 
 class TrackLyrics(BaseModel):
-    isRightToLeft: bool
-    lyrics: str
-    lyricsProvider: str
-    providerCommontrackId: str
-    providerLyricsId: str
-    subtitles: str
+    isRightToLeft: bool = False
+    lyrics: str | None = None
+    lyricsProvider: str | None = None
+    providerCommontrackId: str | None = None
+    providerLyricsId: str | None = None
+    subtitles: str | None = None
     trackId: int

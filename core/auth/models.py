@@ -37,6 +37,7 @@ class AuthResponse(BaseModel):
     access_token: str
     expires_in: int
     user_id: int
+    refresh_token: Optional[str] = None
 
 
 class AuthResponseWithRefresh(AuthResponse):

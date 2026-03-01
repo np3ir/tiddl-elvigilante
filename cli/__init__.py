@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 
 from tiddl.cli.const import APP_PATH

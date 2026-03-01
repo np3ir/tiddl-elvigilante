@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiddl-elvigilante"
+version = "1.0.0"
+description = "Modern Python 3.10+ compatible TIDAL downloader - Independent fork with production-grade quality"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "tiddl-elvigilante contributors"}
+]
+maintainers = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+requires-python = ">=3.10"
+keywords = ["tidal", "downloader", "music", "streaming", "python3.10", "tidal-downloader"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "requests>=2.31.0",
+    "requests-cache>=1.2.0",
+    "rich>=13.7.0",
+    "mutagen>=1.47.0",
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.2.0",
+    "tqdm>=4.66.0",
+    "pycryptodome>=3.20.0",
+    "ffmpeg-python>=0.2.0",
+    "python-dotenv>=1.0.0",
+    # CRITICAL: Pydantic v1 required - code uses .parse_obj() from v1
+    "pydantic<2.0",
+    "pymp4>=1.4.0",
+    "m3u8>=3.6.0",
+    # Python 3.10 compatibility - 3.11+ has tomllib built-in
+    'tomli>=2.0.0;python_version<"3.11"',
+    # Optional for better transliteration
+    "unidecode>=1.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+build = [
+    "pyinstaller>=6.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/tiddl-elvigilante"
+Documentation = "https://github.com/yourusername/tiddl-elvigilante#readme"
+Repository = "https://github.com/yourusername/tiddl-elvigilante"
+Issues = "https://github.com/yourusername/tiddl-elvigilante/issues"
+Changelog = "https://github.com/yourusername/tiddl-elvigilante/blob/main/CHANGELOG.md"
+"Original Project" = "https://github.com/oskvr37/tiddl"
+"About Fork" = "https://github.com/yourusername/tiddl-elvigilante/blob/main/FORK.md"
+
+[project.scripts]
+tiddl-elvigilante = "cli.app:main"
+tiddl = "cli.app:main"
+
+[tool.setuptools]
+packages = ["cli", "core"]
+
+[tool.setuptools.package-data]
+tiddl = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+target-version = "py310"
+select = ["E", "F", "W", "I"]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

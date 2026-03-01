@@ -1,0 +1,51 @@
+# Example configuration file for tiddl
+# Copy this file to %USERPROFILE%\.tiddl\config.toml or alongside the executable in the 'config' folder
+
+enable_cache = true
+debug = false
+
+[metadata]
+enable = true
+embed_lyrics = false
+save_lyrics = false
+cover = false
+album_review = false
+
+[cover]
+save = false
+size = 1280
+allowed = [] # ["track", "album", "playlist"]
+
+[cover.templates]
+track = ""
+album = ""
+playlist = ""
+
+[download]
+track_quality = "high" # "low", "high", "lossless", "hires"
+video_quality = "fhd"  # "audio", "360", "480", "720", "1080", "fhd"
+skip_existing = true
+threads_count = 2
+# download_path = "~/Music/tiddl" 
+# scan_path = "~/Music/tiddl"
+singles_filter = "none" # "none", "only", "include"
+videos_filter = "none"  # "none", "only", "allow"
+update_mtime = false
+rewrite_metadata = false
+
+[m3u]
+save = false
+allowed = [] # ["album", "playlist", "mix"]
+
+[m3u.templates]
+album = ""
+playlist = ""
+mix = ""
+
+[templates]
+default = "{album.artist}/{album.title}/{item.title}"
+track = ""
+video = ""
+album = ""
+playlist = ""
+mix = ""

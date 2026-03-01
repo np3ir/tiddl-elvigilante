@@ -1,8 +1,13 @@
 from logging import getLogger
 from pathlib import Path
-from pydantic import BaseModel, field_validator
-from tomllib import loads as parse_toml
+from pydantic import BaseModel, validator, Field
 from typing import Literal
+
+# Python 3.11+ has tomllib built-in, but 3.10 needs tomli package
+try:
+    from tomllib import loads as parse_toml
+except ImportError:
+    from tomli import loads as parse_toml
 
 from tiddl.cli.const import APP_PATH
 from tiddl.core.utils.const import TRACK_QUALITY_LITERAL, VIDEO_QUALITY_LITERAL
@@ -24,7 +29,8 @@ class Config(BaseModel):
 
     class MetadataConfig(BaseModel):
         enable: bool = True
-        lyrics: bool = False
+        lyrics: bool = Field(default=False, alias="embed_lyrics")
+        save_lyrics: bool = False
         cover: bool = False
         album_review: bool = False
 
@@ -48,7 +54,7 @@ class Config(BaseModel):
         track_quality: TRACK_QUALITY_LITERAL = "high"
         video_quality: VIDEO_QUALITY_LITERAL = "fhd"
         skip_existing: bool = True
-        threads_count: int = 4
+        threads_count: int = 2
         download_path: Path = DEFAULT_DOWNLOAD_PATH
         scan_path: Path = DEFAULT_DOWNLOAD_PATH
         singles_filter: ARTIST_SINGLES_FILTER_LITERAL = "none"
@@ -61,7 +67,7 @@ class Config(BaseModel):
             if self.scan_path == DEFAULT_DOWNLOAD_PATH and self.download_path != DEFAULT_DOWNLOAD_PATH:
                 self.scan_path = self.download_path
 
-        @field_validator("download_path", "scan_path", mode="before")
+        @validator("download_path", "scan_path", pre=True, always=True)
         def str_to_path(cls, v):
             # convert to absolute, expand ~, normalize
             return Path(v).expanduser().resolve() if isinstance(v, str) else v
@@ -109,7 +115,7 @@ def load_config_file(config_file: Path) -> Config:
         return Config()
 
     toml_dict = parse_toml(config_file.read_text())
-    config = Config.model_validate(toml_dict, strict=True)
+    config = Config.parse_obj(toml_dict)
 
     log.debug("loaded config from file")
 

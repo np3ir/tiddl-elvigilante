@@ -9,7 +9,7 @@ from tiddl.core.api.models import TrackStream, VideoStream
 
 def parse_manifest_XML(xml_content: str):
     """
-    Parses XML manifest file of the track.
+    Parses the XML manifest file of the track.
     """
 
     NS = "{urn:mpeg:dash:schema:mpd:2011}"
@@ -50,7 +50,7 @@ def parse_manifest_XML(xml_content: str):
 
 def parse_track_stream(track_stream: TrackStream) -> tuple[list[str], str]:
     """
-    Parse URLs and file extension from `track_stream`
+    Parse URLs and file extension from `track_stream`.
 
     | Quality Level   | Codec Type | Manifest MIME Type        | MIME Type  |
     | --------------- | ---------- | ------------------------- | ---------- |
@@ -68,13 +68,14 @@ def parse_track_stream(track_stream: TrackStream) -> tuple[list[str], str]:
 
     decoded_manifest = b64decode(track_stream.manifest).decode()
 
-    match track_stream.manifestMimeType:
-        case "application/vnd.tidal.bts":
-            track_manifest = TrackManifest.model_validate_json(decoded_manifest)
-            urls, codecs = track_manifest.urls, track_manifest.codecs
-
-        case "application/dash+xml":
-            urls, codecs = parse_manifest_XML(decoded_manifest)
+    if track_stream.manifestMimeType == "application/vnd.tidal.bts":
+        track_manifest = TrackManifest.parse_raw(decoded_manifest)
+        urls, codecs = track_manifest.urls, track_manifest.codecs
+    elif track_stream.manifestMimeType == "application/dash+xml":
+        urls, codecs = parse_manifest_XML(decoded_manifest)
+    else:
+        # Default case if none of the above match, though it's unlikely with current data
+        raise ValueError(f"Unsupported manifest MIME type: {track_stream.manifestMimeType}")
 
     if codecs == "flac":
         file_extension = ".flac"
@@ -83,31 +84,31 @@ def parse_track_stream(track_stream: TrackStream) -> tuple[list[str], str]:
     elif codecs.startswith("mp4"):
         file_extension = ".m4a"
     else:
-        raise ValueError(f"Unknown codecs `{codecs}` (trackId {track_stream.trackId}")
+        raise ValueError(f"Unknown codecs `{codecs}` (trackId {track_stream.trackId})")
 
     return urls, file_extension
 
 
 def parse_video_stream(video_stream: VideoStream) -> list[str]:
-    """Parse `video_stream` manifest and return video urls"""
+    """Parse `video_stream` manifest and return video URLs"""
 
     class VideoManifest(BaseModel):
         mimeType: str
         urls: list[str]
 
     decoded_manifest = b64decode(video_stream.manifest).decode()
-    manifest = VideoManifest.model_validate_json(decoded_manifest)
+    manifest = VideoManifest.parse_raw(decoded_manifest)
 
     with Session() as s:
-        # get all qualities
+        # Get all qualities
         req = s.get(manifest.urls[0])
         m3u8 = M3U8(req.text)
 
-        # get highest quality
+        # Get highest quality
         uri = m3u8.playlists[-1].uri
 
         if not uri:
-            raise ValueError("M3U8 Playlist does not have `uri`.")
+            raise ValueError("M3U8 Playlist does not have a `uri`.")
 
         req = s.get(uri)
         video = M3U8(req.text)

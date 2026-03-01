@@ -1,3 +1,4 @@
+from __future__ import annotations
 import subprocess
 from pathlib import Path
 
@@ -33,9 +34,33 @@ def extract_flac(source: Path) -> Path:
     """
 
     tmp = source.with_suffix(".tmp.flac")
+    dest = source.with_suffix(".flac")
 
     run(["ffmpeg", "-y", "-i", str(source), "-c", "copy", str(tmp)])
 
-    tmp.replace(source.with_suffix(".flac"))
+    tmp.replace(dest)
 
-    return source.with_suffix(".flac")
+    # Delete source (e.g. .m4a) only if it's different from the destination (.flac)
+    if source != dest:
+        try:
+            source.unlink()
+        except OSError:
+            pass
+
+    return dest
+
+
+def fix_mp4_faststart(source: Path) -> Path:
+    """
+    Remux MP4/M4A to move 'moov' atom to the beginning and fix fragmented containers.
+    Keeps the same extension and replaces the source on success.
+    """
+    tmp = source.with_name(source.stem + ".fixed" + source.suffix)
+
+    run(["ffmpeg", "-y", "-i", str(source), "-c", "copy", "-movflags", "+faststart", str(tmp)])
+
+    # Replace original only if tmp was created
+    if tmp.exists():
+        tmp.replace(source)
+
+    return source

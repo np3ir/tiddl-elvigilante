@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typer import Typer
 
 from .url import url_subcommand
