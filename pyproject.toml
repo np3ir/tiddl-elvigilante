@@ -3,19 +3,19 @@ requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tiddl"
+name = "tiddl-elvigilante"
 version = "1.0.0"
 description = "Modern Python 3.10+ compatible TIDAL downloader - Independent fork with production-grade quality"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "tiddl-fork contributors"}
+    {name = "tiddl-elvigilante contributors"}
 ]
 maintainers = [
     {name = "Your Name", email = "your.email@example.com"}
 ]
 requires-python = ">=3.10"
-keywords = ["tidal", "downloader", "music", "streaming", "python3.10"]
+keywords = ["tidal", "downloader", "music", "streaming", "python3.10", "tidal-downloader"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
@@ -63,15 +63,16 @@ build = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/tiddl"
-Documentation = "https://github.com/yourusername/tiddl#readme"
-Repository = "https://github.com/yourusername/tiddl"
-Issues = "https://github.com/yourusername/tiddl/issues"
-Changelog = "https://github.com/yourusername/tiddl/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/yourusername/tiddl-elvigilante"
+Documentation = "https://github.com/yourusername/tiddl-elvigilante#readme"
+Repository = "https://github.com/yourusername/tiddl-elvigilante"
+Issues = "https://github.com/yourusername/tiddl-elvigilante/issues"
+Changelog = "https://github.com/yourusername/tiddl-elvigilante/blob/main/CHANGELOG.md"
 "Original Project" = "https://github.com/oskvr37/tiddl"
-"About Fork" = "https://github.com/yourusername/tiddl/blob/main/FORK.md"
+"About Fork" = "https://github.com/yourusername/tiddl-elvigilante/blob/main/FORK.md"
 
 [project.scripts]
+tiddl-elvigilante = "cli.app:main"
 tiddl = "cli.app:main"
 
 [tool.setuptools]

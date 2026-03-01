@@ -85,3 +85,8 @@ def callback(
             "[yellow]WARNING ffmpeg is not installed, tiddl might not work properly, "
             + "[link=https://github.com/oskvr37/tiddl/blob/main/README.md#installation]read README.md[/]"
         )
+
+
+def main():
+    """Entry point for pip installation."""
+    app()
