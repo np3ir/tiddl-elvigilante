@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import typer
 import asyncio
@@ -9,6 +10,7 @@ from rich.live import Live
 
 from requests import HTTPError
 from typing_extensions import Annotated
+from typing import Union
 
 from tiddl.core.metadata import add_track_metadata, add_video_metadata, Cover
 from tiddl.core.api import ApiError
@@ -168,7 +170,7 @@ def download_callback(
     def save_m3u(
         resource_type: VALID_M3U_RESOURCE_LITERAL,
         filename: str,
-        tracks_with_path: list[tuple[Path | None, Track | Video]],
+        tracks_with_path: list[tuple[Union[Path, None], Union[Track, Video]]],
     ):
         if not CONFIG.m3u.save:
             return
@@ -188,8 +190,8 @@ def download_callback(
             tracks_with_path=tracks_with_existing_paths, path=DOWNLOAD_PATH / filename
         )
 
-    def get_item_quality(item: Track | Video):
-        def predict_item_quality() -> TRACK_QUALITY_LITERAL | VIDEO_QUALITY_LITERAL:
+    def get_item_quality(item: Union[Track, Video]):
+        def predict_item_quality() -> Union[TRACK_QUALITY_LITERAL, VIDEO_QUALITY_LITERAL]:
             if isinstance(item, Track):
                 if TRACK_QUALITY in ["low", "normal"]:
                     return TRACK_QUALITY
@@ -233,7 +235,7 @@ def download_callback(
                 date: str = "",
                 artist: str = "",
                 credits: list[AlbumItemsCredits.ItemWithCredits.CreditsEntry] = [],
-                cover_data: bytes | None = None,
+                cover_data: bytes = None,
                 album_review: str = "",
                 genre: str = "",
             ) -> None:
@@ -246,10 +248,10 @@ def download_callback(
 
         async def handle_resource(resource: TidalResource):
             async def handle_item(
-                item: Track | Video,
+                item: Union[Track, Video],
                 file_path: str,
-                track_metadata: Metadata | None = None,
-            ) -> tuple[Path | None, Track | Video]:
+                track_metadata: Union[Metadata, None] = None,
+            ) -> tuple[Union[Path, None], Union[Track, Video]]:
                 log.debug(f"{item.id=}, {file_path=}")
                 rich_output.total_increment()
 
@@ -289,21 +291,21 @@ def download_callback(
                                         fetched_lyrics_response = ctx.obj.api.get_track_lyrics(item.id)
                                         if fetched_lyrics_response:
                                             fetched_lyrics = fetched_lyrics_response.subtitles
-                                        log.debug(f"Letras encontradas para {item.title}")
+                                        log.debug(f"Lyrics found for {item.title}")
                                         break  # Success
                                     except ApiError as e:
                                         if e.status in [500, 502, 503, 504] and attempt < 2:
                                             wait_time = (attempt + 1) * 2
-                                            log.warning(f"Letras no disponibles para {item.title} ({e.status}). Reintentando en {wait_time}s...")
+                                            log.warning(f"Lyrics unavailable for {item.title} ({e.status}). Retrying in {wait_time}s...")
                                             await asyncio.sleep(wait_time)
                                         elif e.status == 404:
-                                            log.debug(f"Letras no encontradas para {item.title} (404)")
+                                            log.debug(f"Lyrics not found for {item.title} (404)")
                                             break # No point in retrying a 404
                                         else:
-                                            log.error(f"Fallo al obtener las letras para {item.title} después de múltiples intentos: {e}")
+                                            log.error(f"Failed to fetch lyrics for {item.title} after multiple attempts: {e}")
                                             break # Unhandled error, break
                                     except Exception as e:
-                                        log.error(f"Ocurrió un error inesperado al obtener las letras para {item.title}: {e}")
+                                        log.error(f"An unexpected error occurred while fetching lyrics for {item.title}: {e}")
                                         break
 
                                 if fetched_lyrics:
@@ -311,7 +313,7 @@ def download_callback(
                                         try:
                                             lrc_path.write_text(fetched_lyrics, encoding="utf-8")
                                         except Exception as e:
-                                            log.error(f"No se pudo guardar el archivo .lrc: {e}")
+                                            log.error(f"Could not save .lrc file: {e}")
                                     
                                     if CONFIG.metadata.lyrics:
                                         lyrics_subtitles = fetched_lyrics
@@ -327,7 +329,7 @@ def download_callback(
                                     item.album.cover
                                 )._get_data()
                             except Exception as e:
-                                log.warning(f"No se pudo descargar la carátula de la pista: {e}")
+                                log.warning(f"Could not download track cover: {e}")
                                 track_metadata.cover_data = b""
 
                         if REWRITE_METADATA or was_downloaded:
@@ -351,7 +353,7 @@ def download_callback(
                     try:
                         os.utime(download_path, None)
                     except Exception:
-                        log.warning(f"no se pudo actualizar mtime para {download_path}")
+                        log.warning(f"could not update mtime for {download_path}")
 
                 return download_path, item
 
@@ -359,7 +361,7 @@ def download_callback(
                 offset = 0
                 futures = []
 
-                cover: Cover | None = None
+                cover: Union[Cover, None] = None
                 save_cover = ("album" in CONFIG.cover.allowed) and CONFIG.cover.save
 
                 if album.cover and (CONFIG.metadata.cover or save_cover):
@@ -456,445 +458,444 @@ def download_callback(
             # resources should be collected from a distinct function
             # that would yield the resources.
             # then we would be able to reuse the logic in the export command
+            resource_type = resource.type
 
-            match resource.type:
+            if resource_type == "track":
+                track = ctx.obj.api.get_track(resource.id)
+                album = ctx.obj.api.get_album(track.album.id)
 
-                case "track":
-                    track = ctx.obj.api.get_track(resource.id)
-                    album = ctx.obj.api.get_album(track.album.id)
+                ctx.obj.console.print(f"\n[bold green]🎵 Downloading Track:[/] {track.title}")
+                ctx.obj.console.print(f"[dim]Track ID: {resource.id}[/]\n")
 
-                    ctx.obj.console.print(f"\n[bold green]🎵 Descargando Pista:[/] {track.title}")
-                    ctx.obj.console.print(f"[dim]ID de Pista: {resource.id}[/]\n")
-
-                    await handle_item(
+                await handle_item(
+                    item=track,
+                    file_path=format_template(
+                        template=resolve_template(TRACK_TEMPLATE, CONFIG.templates.track),
                         item=track,
-                        file_path=format_template(
-                            template=resolve_template(TRACK_TEMPLATE, CONFIG.templates.track),
-                            item=track,
-                            album=album,
-                            quality=get_item_quality(track),
-                        ),
-                        track_metadata=Metadata(
-                            date=str(album.releaseDate) if album.releaseDate else "",
-                            artist=album.artist.name if album.artist else "",
-                            genre=album.genre or "",
-                        ),
+                        album=album,
+                        quality=get_item_quality(track),
+                    ),
+                    track_metadata=Metadata(
+                        date=str(album.releaseDate) if album.releaseDate else "",
+                        artist=album.artist.name if album.artist else "",
+                        genre=album.genre or "",
+                    ),
+                )
+
+                if (
+                    CONFIG.cover.save
+                    and ("track" in CONFIG.cover.allowed)
+                    and track.album.cover
+                ):
+                    Cover(
+                        track.album.cover, size=CONFIG.cover.size
+                    ).save_to_directory(
+                        path=DOWNLOAD_PATH
+                        / format_template(
+                            CONFIG.cover.templates.track, item=track, album=album
+                        )
                     )
 
-                    if (
-                        CONFIG.cover.save
-                        and ("track" in CONFIG.cover.allowed)
-                        and track.album.cover
-                    ):
-                        Cover(
-                            track.album.cover, size=CONFIG.cover.size
-                        ).save_to_directory(
-                            path=DOWNLOAD_PATH
-                            / format_template(
-                                CONFIG.cover.templates.track, item=track, album=album
-                            )
+            elif resource_type == "video":
+                video = ctx.obj.api.get_video(resource.id)
+
+                ctx.obj.console.print(f"\n[bold blue]🎬 Downloading Video:[/] {video.title}")
+                ctx.obj.console.print(f"[dim]Video ID: {resource.id}[/]\n")
+                
+                # Fetch album info if available to populate {album.date} and other placeholders
+                album = None
+                if video.album and video.album.id:
+                    try:
+                        album = ctx.obj.api.get_album(video.album.id)
+                    except Exception as e:
+                        log.warning(f"Could not fetch album {video.album.id} for video {video.id}: {e}")
+
+                await handle_item(
+                    item=video,
+                    file_path=format_template(
+                        template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
+                        item=video,
+                        album=album,
+                        quality=get_item_quality(video),
+                    ),
+                )
+
+            elif resource_type == "mix":
+                offset = 0
+                futures = []
+                mix_id = resource.id
+                ctx.obj.console.print(f"\n[bold yellow]🎧 Downloading Mix:[/] {mix_id}")
+                ctx.obj.console.print(f"[dim]Fetching tracks...[/]\n")
+
+                while True:
+                    try:
+                        mix_items = ctx.obj.api.get_mix_items(mix_id, offset=offset)
+                    except Exception as e:
+                        log.error(f"Could not fetch mix items for {mix_id}: {e}")
+                        break
+
+                    for mix_item in mix_items.items:
+                        futures.append(
+                            asyncio.create_task(handle_item(
+                                item=mix_item.item,
+                                file_path=format_template(
+                                    template=resolve_template("", CONFIG.templates.mix),
+                                    item=mix_item.item,
+                                    mix_id=mix_id,
+                                    quality=get_item_quality(mix_item.item),
+                                ),
+                            ))
                         )
 
-                case "video":
-                    video = ctx.obj.api.get_video(resource.id)
+                    offset += mix_items.limit
+                    if offset >= mix_items.totalNumberOfItems:
+                        break
 
-                    ctx.obj.console.print(f"\n[bold blue]🎬 Descargando Video:[/] {video.title}")
-                    ctx.obj.console.print(f"[dim]ID de Video: {resource.id}[/]\n")
-                    
-                    # Fetch album info if available to populate {album.date} and other placeholders
-                    album = None
-                    if video.album and video.album.id:
-                        try:
-                            album = ctx.obj.api.get_album(video.album.id)
-                        except Exception as e:
-                            log.warning(f"No se pudo obtener el álbum {video.album.id} para el video {video.id}: {e}")
+                total_items = len(futures)
+                ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                ctx.obj.console.print(f"  • {total_items} items in the mix.")
+                ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
 
-                    await handle_item(
-                        item=video,
-                        file_path=format_template(
-                            template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
-                            item=video,
-                            album=album,
-                            quality=get_item_quality(video),
-                        ),
-                    )
+                try:
+                    results = await asyncio.gather(*futures, return_exceptions=True)
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    await asyncio.gather(*futures, return_exceptions=True)
+                    raise
 
-                case "mix":
+                tracks_with_path = []
+                failed_count = 0
+                for res in results:
+                    if isinstance(res, Exception):
+                        log.error(f"Mix track download failed: {res}")
+                        failed_count += 1
+                    else:
+                        tracks_with_path.append(res)
+
+                save_m3u(
+                    resource_type="mix",
+                    filename=format_template(
+                        CONFIG.m3u.templates.mix,
+                        mix_id=mix_id,
+                        type="mix",
+                    ),
+                    tracks_with_path=tracks_with_path,
+                )
+
+                ctx.obj.console.print(f"\n[bold green]✅ Mix download completed:[/] {mix_id}")
+                ctx.obj.console.print(f"   • Downloaded: {len(tracks_with_path)} items")
+                if failed_count > 0:
+                    ctx.obj.console.print(f"   • [red]Failed: {failed_count} items[/]")
+
+            elif resource_type == "album":
+                album = ctx.obj.api.get_album(album_id=resource.id)
+                await download_album(album)
+
+            elif resource_type == "artist":
+                # ============================================================
+                # IMPROVED ARTIST DOWNLOAD with SMART deduplication
+                # Respects: different qualities, explicit/clean, special editions
+                # ============================================================
+                
+                futures = []
+                seen_album_ids = set()  # Use album.id instead of title for proper deduplication
+                artist_stats = {
+                    'total_albums': 0,
+                    'total_videos': 0,
+                    'skipped_duplicates': 0,
+                }
+                
+                # Get artist info for better feedback
+                try:
+                    artist = ctx.obj.api.get_artist(resource.id)
+                    artist_name = artist.name
+                    ctx.obj.console.print(f"\n[bold cyan]🎤 Downloading Artist:[/] {artist_name}")
+                    ctx.obj.console.print(f"[dim]Artist ID: {resource.id}[/]\n")
+                except Exception as e:
+                    artist_name = f"Artist {resource.id}"
+                    log.warning(f"Could not get artist info: {e}")
+
+                collected_albums = []
+
+                def collect_albums(singles: bool):
                     offset = 0
-                    futures = []
-                    mix_id = resource.id
-                    ctx.obj.console.print(f"\n[bold yellow]🎧 Downloading Mix:[/] {mix_id}")
-                    ctx.obj.console.print(f"[dim]Fetching tracks...[/]\n")
+                    filter_type = "EPSANDSINGLES" if singles else "ALBUMS"
+                    display_type = "EPs & Singles" if singles else "Albums"
+                    
+                    ctx.obj.console.print(f"[dim]Fetching {display_type}...[/]")
+
+                    while True:
+                        artist_albums = None
+                        for attempt in range(3):
+                            try:
+                                artist_albums = ctx.obj.api.get_artist_albums(
+                                    artist_id=resource.id,
+                                    offset=offset,
+                                    filter=filter_type,
+                                )
+                                break
+                            except Exception as e:
+                                if attempt < 2:
+                                    wait = (attempt + 1) * 2
+                                    log.warning(f"Error fetching albums (offset {offset}): {e}. Retrying in {wait}s...")
+                                    time.sleep(wait)
+                                else:
+                                    log.error(f"Failed to fetch albums at offset {offset}: {e}")
+                                    
+                        if not artist_albums:
+                            break
+                            
+                        for album in artist_albums.items:
+                            artist_stats['total_albums'] += 1
+                            collected_albums.append(album)
+
+                        offset += artist_albums.limit
+                        if offset >= artist_albums.totalNumberOfItems:
+                            break
+
+                def get_all_videos():
+                    offset = 0
+                    
+                    ctx.obj.console.print(f"[dim]Fetching videos...[/]")
 
                     while True:
                         try:
-                            mix_items = ctx.obj.api.get_mix_items(mix_id, offset=offset)
-                        except Exception as e:
-                            log.error(f"Could not fetch mix items for {mix_id}: {e}")
-                            break
-
-                        for mix_item in mix_items.items:
-                            futures.append(
-                                asyncio.create_task(handle_item(
-                                    item=mix_item.item,
-                                    file_path=format_template(
-                                        template=resolve_template("", CONFIG.templates.mix),
-                                        item=mix_item.item,
-                                        mix_id=mix_id,
-                                        quality=get_item_quality(mix_item.item),
-                                    ),
-                                ))
+                            artist_videos = ctx.obj.api.get_artist_videos(
+                                resource.id, offset=offset
                             )
 
-                        offset += mix_items.limit
-                        if offset >= mix_items.totalNumberOfItems:
-                            break
-
-                    total_items = len(futures)
-                    ctx.obj.console.print(f"\n[green]✓[/] Found:")
-                    ctx.obj.console.print(f"  • {total_items} items in the mix.")
-                    ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
-
-                    try:
-                        results = await asyncio.gather(*futures, return_exceptions=True)
-                    except (asyncio.CancelledError, KeyboardInterrupt):
-                        for f in futures:
-                            if not f.done():
-                                f.cancel()
-                        await asyncio.gather(*futures, return_exceptions=True)
-                        raise
-
-                    tracks_with_path = []
-                    failed_count = 0
-                    for res in results:
-                        if isinstance(res, Exception):
-                            log.error(f"Mix track download failed: {res}")
-                            failed_count += 1
-                        else:
-                            tracks_with_path.append(res)
-
-                    save_m3u(
-                        resource_type="mix",
-                        filename=format_template(
-                            CONFIG.m3u.templates.mix,
-                            mix_id=mix_id,
-                            type="mix",
-                        ),
-                        tracks_with_path=tracks_with_path,
-                    )
-
-                    ctx.obj.console.print(f"\n[bold green]✅ Mix download completed:[/] {mix_id}")
-                    ctx.obj.console.print(f"   • Downloaded: {len(tracks_with_path)} items")
-                    if failed_count > 0:
-                        ctx.obj.console.print(f"   • [red]Failed: {failed_count} items[/]")
-
-                case "album":
-                    album = ctx.obj.api.get_album(album_id=resource.id)
-                    await download_album(album)
-
-                case "artist":
-                    # ============================================================
-                    # IMPROVED ARTIST DOWNLOAD with SMART deduplication
-                    # Respects: different qualities, explicit/clean, special editions
-                    # ============================================================
-                    
-                    futures = []
-                    seen_album_ids = set()  # Use album.id instead of title for proper deduplication
-                    artist_stats = {
-                        'total_albums': 0,
-                        'total_videos': 0,
-                        'skipped_duplicates': 0,
-                    }
-                    
-                    # Get artist info for better feedback
-                    try:
-                        artist = ctx.obj.api.get_artist(resource.id)
-                        artist_name = artist.name
-                        ctx.obj.console.print(f"\n[bold cyan]🎤 Descargando Artista:[/] {artist_name}")
-                        ctx.obj.console.print(f"[dim]ID de Artista: {resource.id}[/]\n")
-                    except Exception as e:
-                        artist_name = f"Artista {resource.id}"
-                        log.warning(f"No se pudo obtener la información del artista: {e}")
-
-                    collected_albums = []
-
-                    def collect_albums(singles: bool):
-                        offset = 0
-                        filter_type = "EPSANDSINGLES" if singles else "ALBUMS"
-                        display_type = "EPs & Sencillos" if singles else "Álbumes"
-                        
-                        ctx.obj.console.print(f"[dim]Obteniendo {display_type}...[/]")
-
-                        while True:
-                            artist_albums = None
-                            for attempt in range(3):
-                                try:
-                                    artist_albums = ctx.obj.api.get_artist_albums(
-                                        artist_id=resource.id,
-                                        offset=offset,
-                                        filter=filter_type,
-                                    )
-                                    break
-                                except Exception as e:
-                                    if attempt < 2:
-                                        wait = (attempt + 1) * 2
-                                        log.warning(f"Error al obtener álbumes (offset {offset}): {e}. Reintentando en {wait}s...")
-                                        time.sleep(wait)
-                                    else:
-                                        log.error(f"No se pudieron obtener los álbumes en el offset {offset}: {e}")
-                                        
-                            if not artist_albums:
-                                break
-                                
-                            for album in artist_albums.items:
-                                artist_stats['total_albums'] += 1
-                                collected_albums.append(album)
-
-                            offset += artist_albums.limit
-                            if offset >= artist_albums.totalNumberOfItems:
-                                break
-
-                    def get_all_videos():
-                        offset = 0
-                        
-                        ctx.obj.console.print(f"[dim]Obteniendo videos...[/]")
-
-                        while True:
-                            try:
-                                artist_videos = ctx.obj.api.get_artist_videos(
-                                    resource.id, offset=offset
+                            for video in artist_videos.items:
+                                artist_stats['total_videos'] += 1
+                                futures.append(
+                                    asyncio.create_task(handle_item(
+                                        item=video,
+                                        file_path=format_template(
+                                            template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
+                                            item=video,
+                                            quality=get_item_quality(video),
+                                        ),
+                                    ))
                                 )
 
-                                for video in artist_videos.items:
-                                    artist_stats['total_videos'] += 1
-                                    futures.append(
-                                        asyncio.create_task(handle_item(
-                                            item=video,
-                                            file_path=format_template(
-                                                template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
-                                                item=video,
-                                                quality=get_item_quality(video),
-                                            ),
-                                        ))
-                                    )
-
-                                if offset > artist_videos.totalNumberOfItems:
-                                    break
-
-                                offset += artist_videos.limit
-                                
-                            except Exception as e:
-                                log.error(f"Error al obtener videos en el offset {offset}: {e}")
+                            if offset > artist_videos.totalNumberOfItems:
                                 break
 
-                    # Gather albums and videos based on filters
-                    if VIDEOS_FILTER != "none":
-                        get_all_videos()
-
-                    if VIDEOS_FILTER != "only":
-                        if SINGLES_FILTER == "include":
-                            collect_albums(False)
-                            collect_albums(True)
-                        else:
-                            collect_albums(SINGLES_FILTER == "only")
-                    
-                    # SMART DEDUPLICATION & QUALITY SELECTION
-                    # Group albums by Title + Type + Version to find duplicates (e.g. same album in HiRes vs Lossless)
-                    # Keep the highest quality version.
-                    
-                    def get_album_score(alb):
-                        score = 0
-                        # Check explicit audio quality string
-                        aq = str(alb.audioQuality).upper() if alb.audioQuality else ""
-                        if "HI_RES" in aq or "HIRES" in aq: score = 3
-                        elif "LOSSLESS" in aq: score = 2
-                        elif "HIGH" in aq: score = 1
-                        
-                        # Check tags
-                        if alb.mediaMetadata and alb.mediaMetadata.tags:
-                            tags = [t.upper() for t in alb.mediaMetadata.tags]
-                            if "HIRES_LOSSLESS" in tags: score = max(score, 3)
-                            elif "LOSSLESS" in tags: score = max(score, 2)
+                            offset += artist_videos.limit
                             
-                        # Explicit preference (tie-breaker)
-                        # REMOVED: User wants to keep both versions
-                        # if alb.explicit: score += 0.5
-                            
-                        return score
+                        except Exception as e:
+                            log.error(f"Error fetching videos at offset {offset}: {e}")
+                            break
 
-                    unique_map = {}
+                # Gather albums and videos based on filters
+                if VIDEOS_FILTER != "none":
+                    get_all_videos()
+
+                if VIDEOS_FILTER != "only":
+                    if SINGLES_FILTER == "include":
+                        collect_albums(False)
+                        collect_albums(True)
+                    else:
+                        collect_albums(SINGLES_FILTER == "only")
+                
+                # SMART DEDUPLICATION & QUALITY SELECTION
+                # Group albums by Title + Type + Version to find duplicates (e.g. same album in HiRes vs Lossless)
+                # Keep the highest quality version.
+                
+                def get_album_score(alb):
+                    score = 0
+                    # Check explicit audio quality string
+                    aq = str(alb.audioQuality).upper() if alb.audioQuality else ""
+                    if "HI_RES" in aq or "HIRES" in aq: score = 3
+                    elif "LOSSLESS" in aq: score = 2
+                    elif "HIGH" in aq: score = 1
                     
-                    for album in collected_albums:
-                        # Key: Title + Type + Version (normalized) + Explicit
-                        # This treats "Album" (HiRes) and "Album" (Lossless) as the same entity
-                        # But "Album" (Explicit) and "Album" (Clean) as different.
-                        key = (
-                            album.title.strip().lower(),
-                            album.type,
-                            (album.version or "").strip().lower(),
-                            album.explicit
-                        )
+                    # Check tags
+                    if alb.mediaMetadata and alb.mediaMetadata.tags:
+                        tags = [t.upper() for t in alb.mediaMetadata.tags]
+                        if "HIRES_LOSSLESS" in tags: score = max(score, 3)
+                        elif "LOSSLESS" in tags: score = max(score, 2)
                         
-                        if key not in unique_map:
+                    # Explicit preference (tie-breaker)
+                    # REMOVED: User wants to keep both versions
+                    # if alb.explicit: score += 0.5
+                        
+                    return score
+
+                unique_map = {}
+                
+                for album in collected_albums:
+                    # Key: Title + Type + Version (normalized) + Explicit
+                    # This treats "Album" (HiRes) and "Album" (Lossless) as the same entity
+                    # But "Album" (Explicit) and "Album" (Clean) as different.
+                    key = (
+                        album.title.strip().lower(),
+                        album.type,
+                        (album.version or "").strip().lower(),
+                        album.explicit
+                    )
+                    
+                    if key not in unique_map:
+                        unique_map[key] = album
+                    else:
+                        # Compare quality
+                        current = unique_map[key]
+                        new_score = get_album_score(album)
+                        curr_score = get_album_score(current)
+                        
+                        if new_score > curr_score:
+                            # Found better quality version
+                            artist_stats['skipped_duplicates'] += 1
                             unique_map[key] = album
                         else:
-                            # Compare quality
-                            current = unique_map[key]
-                            new_score = get_album_score(album)
-                            curr_score = get_album_score(current)
-                            
-                            if new_score > curr_score:
-                                # Found better quality version
-                                artist_stats['skipped_duplicates'] += 1
-                                unique_map[key] = album
-                            else:
-                                # Current is better or equal
-                                artist_stats['skipped_duplicates'] += 1
+                            # Current is better or equal
+                            artist_stats['skipped_duplicates'] += 1
+                
+                # Queue the selected best versions
+                for album in unique_map.values():
+                    # Track seen IDs just in case (though map keys should handle it)
+                    if album.id not in seen_album_ids:
+                        seen_album_ids.add(album.id)
+                        futures.append(asyncio.create_task(download_album(album)))
+                
+                # Show what we're about to download
+                unique_albums = len(seen_album_ids)
+                total_items = unique_albums + artist_stats['total_videos']
+                
+                ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                ctx.obj.console.print(f"  • {unique_albums} albums (including all versions)")
+                if artist_stats['skipped_duplicates'] > 0:
+                    ctx.obj.console.print(f"  • [yellow]{artist_stats['skipped_duplicates']} true duplicates skipped[/]")
+                if artist_stats['total_videos'] > 0:
+                    ctx.obj.console.print(f"  • {artist_stats['total_videos']} videos")
+                ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
+                
+                # Download everything
+                try:
+                    await asyncio.gather(*futures)
                     
-                    # Queue the selected best versions
-                    for album in unique_map.values():
-                        # Track seen IDs just in case (though map keys should handle it)
-                        if album.id not in seen_album_ids:
-                            seen_album_ids.add(album.id)
-                            futures.append(asyncio.create_task(download_album(album)))
+                    # Fallback: If artist info failed initially, try to get name from downloaded albums
+                    if "Artist " in artist_name and collected_albums:
+                        for alb in collected_albums:
+                            if alb.artist and alb.artist.name:
+                                artist_name = alb.artist.name
+                                break
                     
-                    # Show what we're about to download
-                    unique_albums = len(seen_album_ids)
-                    total_items = unique_albums + artist_stats['total_videos']
-                    
-                    ctx.obj.console.print(f"\n[green]✓[/] Encontrado:")
-                    ctx.obj.console.print(f"  • {unique_albums} álbumes (incluyendo todas las versiones)")
+                    # Final stats
+                    ctx.obj.console.print(f"\n[bold green]✅ Artist download completed:[/] {artist_name}")
+                    ctx.obj.console.print(f"   • Downloaded: {total_items} items")
                     if artist_stats['skipped_duplicates'] > 0:
-                        ctx.obj.console.print(f"  • [yellow]{artist_stats['skipped_duplicates']} duplicados verdaderos omitidos[/]")
-                    if artist_stats['total_videos'] > 0:
-                        ctx.obj.console.print(f"  • {artist_stats['total_videos']} videos")
-                    ctx.obj.console.print(f"  • [bold]{total_items} elementos totales para descargar[/]\n")
+                        ctx.obj.console.print(f"   • Skipped: {artist_stats['skipped_duplicates']} true duplicates")
                     
-                    # Download everything
-                    try:
-                        await asyncio.gather(*futures)
-                        
-                        # Fallback: If artist info failed initially, try to get name from downloaded albums
-                        if "Artista " in artist_name and collected_albums:
-                            for alb in collected_albums:
-                                if alb.artist and alb.artist.name:
-                                    artist_name = alb.artist.name
-                                    break
-                        
-                        # Final stats
-                        ctx.obj.console.print(f"\n[bold green]✅ Descarga de artista completada:[/] {artist_name}")
-                        ctx.obj.console.print(f"   • Descargado: {total_items} elementos")
-                        if artist_stats['skipped_duplicates'] > 0:
-                            ctx.obj.console.print(f"   • Omitido: {artist_stats['skipped_duplicates']} duplicados verdaderos")
-                        
-                    except (asyncio.CancelledError, KeyboardInterrupt):
-                        for f in futures:
-                            if not f.done():
-                                f.cancel()
-                        await asyncio.gather(*futures, return_exceptions=True)
-                        raise
-                    except Exception as e:
-                        ctx.obj.console.print(f"\n[red]❌ Error durante la descarga del artista:[/] {e}")
-                        log.exception(f"Error al descargar el artista {resource.id}")
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    await asyncio.gather(*futures, return_exceptions=True)
+                    raise
+                except Exception as e:
+                    ctx.obj.console.print(f"\n[red]❌ Error during artist download:[/] {e}")
+                    log.exception(f"Error downloading artist {resource.id}")
 
-                case "playlist":
-                    offset = 0
-                    futures = []
-                    playlist_index = 0
-                    playlist = ctx.obj.api.get_playlist(playlist_uuid=resource.id)
+            elif resource_type == "playlist":
+                offset = 0
+                futures = []
+                playlist_index = 0
+                playlist = ctx.obj.api.get_playlist(playlist_uuid=resource.id)
 
-                    ctx.obj.console.print(f"\n[bold magenta]🎵 Descargando Playlist:[/] {playlist.title}")
-                    ctx.obj.console.print(f"[dim]ID de Playlist: {resource.id}[/]\n")
-                    ctx.obj.console.print(f"[dim]Obteniendo pistas...[/]")
+                ctx.obj.console.print(f"\n[bold magenta]🎵 Downloading Playlist:[/] {playlist.title}")
+                ctx.obj.console.print(f"[dim]Playlist ID: {resource.id}[/]\n")
+                ctx.obj.console.print(f"[dim]Fetching tracks...[/]")
 
-                    while True:
-                        playlist_items = ctx.obj.api.get_playlist_items(
-                            playlist_uuid=resource.id, offset=offset
-                        )
-
-                        for playlist_item in playlist_items.items:
-                            playlist_index += 1
-                            template = resolve_template(PLAYLIST_TEMPLATE, CONFIG.templates.playlist)
-
-                            if "{album" in template:
-                                album = ctx.obj.api.get_album(
-                                    playlist_item.item.album.id
-                                )
-                            else:
-                                album = None
-
-                            futures.append(
-                                asyncio.create_task(handle_item(
-                                    item=playlist_item.item,
-                                    file_path=format_template(
-                                        template=template,
-                                        item=playlist_item.item,
-                                        album=album,
-                                        playlist=playlist,
-                                        playlist_index=playlist_index,
-                                        quality=get_item_quality(playlist_item.item),
-                                    ),
-                                    track_metadata=Metadata(),
-                                ))
-                            )
-
-                        offset += playlist_items.limit
-                        if offset >= playlist_items.totalNumberOfItems:
-                            break
-
-                    total_items = len(futures)
-                    ctx.obj.console.print(f"\n[green]✓[/] Encontrado:")
-                    ctx.obj.console.print(f"  • {total_items} elementos en la playlist.")
-                    ctx.obj.console.print(f"  • [bold]{total_items} elementos totales para descargar[/]\n")
-
-                    try:
-                        results = await asyncio.gather(*futures, return_exceptions=True)
-                    except (asyncio.CancelledError, KeyboardInterrupt):
-                        for f in futures:
-                            if not f.done():
-                                f.cancel()
-                        await asyncio.gather(*futures, return_exceptions=True)
-                        raise
-
-                    # Filter out exceptions from results
-                    tracks_with_path = []
-                    failed_count = 0
-                    for res in results:
-                        if isinstance(res, Exception):
-                            log.error(f"Fallo en la descarga de una pista de la playlist: {res}")
-                            failed_count += 1
-                        else:
-                            tracks_with_path.append(res)
-
-                    save_m3u(
-                        resource_type="playlist",
-                        filename=format_template(
-                            CONFIG.m3u.templates.playlist,
-                            playlist=playlist,
-                            type="playlist",
-                        ),
-                        tracks_with_path=tracks_with_path,
+                while True:
+                    playlist_items = ctx.obj.api.get_playlist_items(
+                        playlist_uuid=resource.id, offset=offset
                     )
 
-                    if (
-                        CONFIG.cover.save
-                        and ("playlist" in CONFIG.cover.allowed)
-                        and playlist.squareImage
-                    ):
-                        Cover(
-                            playlist.squareImage, size=max(CONFIG.cover.size, 1080)
-                        ).save_to_directory(
-                            path=DOWNLOAD_PATH
-                            / format_template(
-                                template=CONFIG.cover.templates.playlist,
-                                playlist=playlist,
+                    for playlist_item in playlist_items.items:
+                        playlist_index += 1
+                        template = resolve_template(PLAYLIST_TEMPLATE, CONFIG.templates.playlist)
+
+                        if "{album" in template:
+                            album = ctx.obj.api.get_album(
+                                playlist_item.item.album.id
                             )
+                        else:
+                            album = None
+
+                        futures.append(
+                            asyncio.create_task(handle_item(
+                                item=playlist_item.item,
+                                file_path=format_template(
+                                    template=template,
+                                    item=playlist_item.item,
+                                    album=album,
+                                    playlist=playlist,
+                                    playlist_index=playlist_index,
+                                    quality=get_item_quality(playlist_item.item),
+                                ),
+                                track_metadata=Metadata(),
+                            ))
                         )
 
-                    ctx.obj.console.print(f"\n[bold green]✅ Descarga de playlist completada:[/] {playlist.title}")
-                    ctx.obj.console.print(f"   • Descargado: {len(tracks_with_path)} elementos")
-                    if failed_count > 0:
-                        ctx.obj.console.print(f"   • [red]Fallaron: {failed_count} elementos[/]")
+                    offset += playlist_items.limit
+                    if offset >= playlist_items.totalNumberOfItems:
+                        break
+
+                total_items = len(futures)
+                ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                ctx.obj.console.print(f"  • {total_items} items in the playlist.")
+                ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
+
+                try:
+                    results = await asyncio.gather(*futures, return_exceptions=True)
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    await asyncio.gather(*futures, return_exceptions=True)
+                    raise
+
+                # Filter out exceptions from results
+                tracks_with_path = []
+                failed_count = 0
+                for res in results:
+                    if isinstance(res, Exception):
+                        log.error(f"Playlist track download failed: {res}")
+                        failed_count += 1
+                    else:
+                        tracks_with_path.append(res)
+
+                save_m3u(
+                    resource_type="playlist",
+                    filename=format_template(
+                        CONFIG.m3u.templates.playlist,
+                        playlist=playlist,
+                        type="playlist",
+                    ),
+                    tracks_with_path=tracks_with_path,
+                )
+
+                if (
+                    CONFIG.cover.save
+                    and ("playlist" in CONFIG.cover.allowed)
+                    and playlist.squareImage
+                ):
+                    Cover(
+                        playlist.squareImage, size=max(CONFIG.cover.size, 1080)
+                    ).save_to_directory(
+                        path=DOWNLOAD_PATH
+                        / format_template(
+                            template=CONFIG.cover.templates.playlist,
+                            playlist=playlist,
+                        )
+                    )
+
+                ctx.obj.console.print(f"\n[bold green]✅ Playlist download completed:[/] {playlist.title}")
+                ctx.obj.console.print(f"   • Downloaded: {len(tracks_with_path)} items")
+                if failed_count > 0:
+                    ctx.obj.console.print(f"   • [red]Failed: {failed_count} items[/]")
 
         with Live(
             rich_output.group,
@@ -908,18 +909,18 @@ def download_callback(
                     await handle_resource(r)
                 except HTTPError as e:
                     if e.response is not None and e.response.status_code in [404, 406]:
-                         ctx.obj.console.print(f"[yellow]Omitido (Geo-bloqueo/No encontrado):[/] {r}")
+                         ctx.obj.console.print(f"[yellow]Skipped (Geo-block/Not Found):[/] {r}")
                     else:
-                         ctx.obj.console.print(f"[red]Error HTTP:[/] {e} en {r}")
+                         ctx.obj.console.print(f"[red]HTTP Error:[/] {e} at {r}")
                 except ApiError as e:
-                    ctx.obj.console.print(f"[red]Error de API:[/] {e} en {r}")
+                    ctx.obj.console.print(f"[red]API Error:[/] {e} at {r}")
                 except KeyboardInterrupt:
-                    # Silenciar la interrupción por teclado en las tareas para evitar el traceback
+                    # Silence keyboard interrupt in worker tasks to prevent traceback
                     pass
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    ctx.obj.console.print(f"[red]Error:[/] {e} en {r}")
+                    ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
 
             tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
             try:
@@ -937,9 +938,9 @@ def download_callback(
         try:
             asyncio.run(download_resources())
         except KeyboardInterrupt:
-            ctx.obj.console.print("\n[yellow]Descarga interrumpida por el usuario.[/]")
+            ctx.obj.console.print("\n[yellow]Download interrupted by user.[/]")
         except Exception as e:
-            ctx.obj.console.print(f"\n[red]Error inesperado durante la descarga: {e}[/]")
+            ctx.obj.console.print(f"\n[red]Unexpected error during download: {e}[/]")
             import traceback
             log.error(traceback.format_exc())
 

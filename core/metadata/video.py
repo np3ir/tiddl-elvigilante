@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pathlib import Path
 from logging import getLogger
 from mutagen.easymp4 import EasyMP4 as MutagenEasyMP4

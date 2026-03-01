@@ -1,3 +1,4 @@
+from __future__ import annotations
 from m3u8 import M3U8
 from requests import Session
 from pydantic import BaseModel
@@ -68,13 +69,14 @@ def parse_track_stream(track_stream: TrackStream) -> tuple[list[str], str]:
 
     decoded_manifest = b64decode(track_stream.manifest).decode()
 
-    match track_stream.manifestMimeType:
-        case "application/vnd.tidal.bts":
-            track_manifest = TrackManifest.parse_raw(decoded_manifest)
-            urls, codecs = track_manifest.urls, track_manifest.codecs
-
-        case "application/dash+xml":
-            urls, codecs = parse_manifest_XML(decoded_manifest)
+    if track_stream.manifestMimeType == "application/vnd.tidal.bts":
+        track_manifest = TrackManifest.parse_raw(decoded_manifest)
+        urls, codecs = track_manifest.urls, track_manifest.codecs
+    elif track_stream.manifestMimeType == "application/dash+xml":
+        urls, codecs = parse_manifest_XML(decoded_manifest)
+    else:
+        # Default case if none of the above match, though it's unlikely with current data
+        raise ValueError(f"Unsupported manifest MIME type: {track_stream.manifestMimeType}")
 
     if codecs == "flac":
         file_extension = ".flac"

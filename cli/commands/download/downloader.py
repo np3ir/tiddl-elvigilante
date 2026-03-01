@@ -1,10 +1,11 @@
+from __future__ import annotations
 import asyncio
 import shutil
 import hashlib
 import uuid
 from logging import getLogger
 from pathlib import Path
-from typing import Optional, Callable, Literal
+from typing import Optional, Callable, Literal, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -787,8 +788,8 @@ class Downloader:
         }
 
     async def download(
-        self, item: Track | Video, file_path: Path
-    ) -> tuple[Path | None, bool]:
+        self, item: Union[Track, Video], file_path: Path
+    ) -> tuple[Union[Path, None], bool]:
         """
         returns
         - Path `item_path` path of existing/downloaded item
@@ -998,45 +999,3 @@ class Downloader:
 
                     task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
                     
-                    download_path.parent.mkdir(exist_ok=True, parents=True)
-                    
-                    task = DownloadTask(
-                        url=urls[0] if urls else "",
-                        output_path=download_path,
-                        track_id=item.id,
-                        track_title=display_title,
-                        max_attempts=MAX_RETRIES
-                    )
-                    
-                    download_success = await self._download_with_retry(
-                        task=task,
-                        urls=urls,
-                        task_id=task_id,
-                    )
-                    if not download_success:
-                        task = self.rich_output.download_finish(task_id=task_id)
-                        self.rich_output.show_item_result(
-                            result_message="[yellow]Failed (Retrying lower quality)",
-                            item_description=task.description,
-                            item_path=None,
-                        )
-                        continue
-                    try:
-                        download_path = convert_to_mp4(download_path)
-                    except Exception as exc:
-                        log.error(f"{should_extract_flac=}, {exc=}")
-                        self.rich_output.console.print(
-                            f"[red]Error converting format:[/] {display_title} - {exc}"
-                        )
-                    task = self.rich_output.download_finish(task_id=task_id)
-                    self.rich_output.show_item_result(
-                        result_message=result_message,
-                        item_description=task.description,
-                        item_path=download_path,
-                    )
-                    return download_path, True
-                
-                self.rich_output.console.print(
-                    f"[red]Error[/] Could not download video '{display_title}' in any quality"
-                )
-                return None, False

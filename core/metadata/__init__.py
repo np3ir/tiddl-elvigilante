@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .track import add_track_metadata
 from .video import add_video_metadata
 from .cover import Cover

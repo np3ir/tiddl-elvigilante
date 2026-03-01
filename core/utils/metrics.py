@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -5,7 +6,7 @@ from datetime import datetime
 
 @dataclass
 class DownloadMetrics:
-    """Métricas de descarga"""
+    """Download metrics"""
     file_path: str
     file_size: int
     download_time: float
@@ -18,7 +19,7 @@ class DownloadMetrics:
         return json.dumps(asdict(self), indent=2)
 
 class MetricsCollector:
-    """Colector de métricas"""
+    """Metrics collector"""
     
     def __init__(self, log_file: Path):
         self.log_file = log_file
@@ -33,9 +34,9 @@ class MetricsCollector:
         retries: int = 0,
         integrity_check: bool = True
     ):
-        """Registra métricas de descarga"""
+        """Record download metrics"""
         
-        # Evitar división por cero
+        # Avoid division by zero
         if download_time > 0:
             download_speed = (file_size / (1024 * 1024)) / download_time  # MB/s
         else:
@@ -60,7 +61,7 @@ class MetricsCollector:
             pass
 
     def get_stats(self) -> dict:
-        """Obtiene estadísticas agregadas"""
+        """Get aggregated statistics"""
         if not self.log_file.exists():
             return {}
         

@@ -1,7 +1,8 @@
+from __future__ import annotations
 import json
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Type, TypeVar, Callable, Optional, Literal
+from typing import Any, Type, TypeVar, Callable, Optional, Literal, Union
 
 from pydantic import BaseModel
 from time import sleep
@@ -34,9 +35,9 @@ class TidalClientImproved:
     _token: str
     _refresh_token: Optional[str]
     _token_expiry: Optional[int]  # Unix timestamp
-    debug_path: Path | None
+    debug_path: Union[Path, None]
     session: CachedSession
-    on_token_expiry: Optional[Callable[[bool, int], tuple[str, int, str | None] | None]]
+    on_token_expiry: Optional[Callable[[bool, int], Union[tuple[str, int, Union[str, None]], None]]]
     
     # Rate Limiting: 60 requests per minute
     _last_request_time: float
@@ -47,8 +48,8 @@ class TidalClientImproved:
         token: str,
         cache_name: StrOrPath,
         omit_cache: bool = False,
-        debug_path: Path | None = None,
-        on_token_expiry: Optional[Callable[[bool, int], tuple[str, int, str | None] | None]] = None,
+        debug_path: Union[Path, None] = None,
+        on_token_expiry: Optional[Callable[[bool, int], Union[tuple[str, int, Union[str, None]], None]]] = None,
         refresh_token: Optional[str] = None,
         token_expiry: Optional[int] = None,  # Unix timestamp
     ) -> None:

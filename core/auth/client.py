@@ -1,3 +1,4 @@
+from __future__ import annotations
 import base64
 import json
 import time
@@ -14,7 +15,7 @@ from tiddl.core.auth.exceptions import AuthClientError
 
 @dataclass
 class TidalCredentials:
-    """Credenciales de TIDAL con validación"""
+    """TIDAL Credentials with validation"""
     client_id: str
     client_secret: str
     
@@ -55,10 +56,10 @@ class TidalCredentials:
 
 @dataclass
 class TidalToken:
-    """Token de TIDAL con manejo de expiración"""
+    """TIDAL Token with expiration handling"""
     access_token: str
     refresh_token: Optional[str] = None
-    expires_in: int = 604800  # 7 días por defecto
+    expires_in: int = 604800  # 7 days by default
     created_at: float | None = None  # Unix timestamp
     user_data: Optional[dict] = None
     
@@ -73,7 +74,7 @@ class TidalToken:
     
     @property
     def is_expired(self) -> bool:
-        """Verifica si el token ya expiró"""
+        """Check if token already expired"""
         return time.time() >= self.expires_at
     
     def expires_soon(self, threshold_seconds: int = 3600) -> bool:
@@ -81,13 +82,13 @@ class TidalToken:
         Verifica si el token expira pronto
         
         Args:
-            threshold_seconds: Segundos antes de expiración (default: 1 hora)
+            threshold_seconds: Seconds before expiration (default: 1 hour)
         """
         return (self.expires_at - time.time()) < threshold_seconds
     
     @property
     def time_remaining(self) -> timedelta:
-        """Tiempo restante antes de expiración"""
+        """Time remaining before expiration"""
         seconds = max(0, self.expires_at - time.time())
         return timedelta(seconds=seconds)
     
@@ -133,7 +134,7 @@ class TokenStorage:
         try:
             self.storage_path.chmod(0o600)
         except Exception:
-            # En Windows chmod tiene efecto limitado, pero no debería fallar
+            # On Windows chmod has limited effect, but should not fail
             pass
     
     def load(self) -> Optional[TidalToken]:
@@ -145,7 +146,7 @@ class TokenStorage:
             data = json.loads(self.storage_path.read_text())
             token = TidalToken.from_dict(data)
             
-            # Verificar si expiró
+            # Check if expired
             if token.is_expired:
                 return None
             
@@ -182,8 +183,8 @@ JSON: TypeAlias = dict[str, Any]
 
 class AuthClientImproved:
     """
-    Cliente de autenticación mejorado con:
-    - Gestión automática de tokens
+    Enhanced authentication client with:
+    - Automatic token management
     - Persistencia en disco
     - Auto-refresh
     - Mejor manejo de errores
@@ -295,7 +296,7 @@ class AuthClientImproved:
 
     def logout(self, access_token: Optional[str] = None) -> None:
         """
-        Cierra sesión y limpia tokens guardados
+        Close session and clean saved tokens
         
         Args:
             access_token: Token a cerrar (usa el actual si es None)
@@ -354,10 +355,10 @@ class AuthClientImproved:
         on_pending: Optional[Callable[[int, dict], None]] = None,
     ) -> TidalToken:
         """
-        Hace polling para obtener el token después de Device Flow
+        Polls to get token after Device Flow
         
         Args:
-            device_code: Código de dispositivo obtenido en start_device_auth
+            device_code: Device code obtained from start_device_auth
             interval: Segundos entre cada intento (default: 2)
             timeout: Timeout total en segundos (default: 300 = 5 min)
             on_pending: Callback llamado en cada intento pendiente
@@ -366,7 +367,7 @@ class AuthClientImproved:
             TidalToken con access_token y refresh_token
         
         Raises:
-            AuthClientError: Si falla la autenticación o timeout
+            AuthClientError: If authentication fails or timeout
         """
         start_time = time.time()
         attempt = 0
@@ -445,16 +446,16 @@ class AuthClientImproved:
         on_progress: Optional[Callable[[int, int], None]] = None
     ) -> TidalToken:
         """
-        Flujo completo de autenticación por dispositivo con mejor UX.
+        Complete device authentication flow with improved UX.
         
         Args:
-            open_browser: Si se debe abrir el navegador automáticamente
+            open_browser: Whether to open browser automatically
             on_progress: Callback opcional (tiempo_transcurrido, tiempo_total)
             
         Returns:
-            TidalToken válido
+            Valid TidalToken
         """
-        # 1. Iniciar autorización
+        # 1. Start authorization
         auth_data = self.start_device_auth()
         verification_uri = auth_data['verificationUri']
         user_code = auth_data['userCode']
@@ -467,7 +468,7 @@ class AuthClientImproved:
         print("TIDAL DEVICE AUTHORIZATION")
         print(f"{'-'*50}")
         print(f"1. Visita: {verification_uri}")
-        print(f"2. Ingresa el código: {user_code}")
+        print(f"2. Enter the code: {user_code}")
         print(f"{'-'*50}")
         
         # 3. Abrir navegador si se solicita
@@ -498,14 +499,14 @@ class AuthClientImproved:
                 timeout=expires_in,
                 on_pending=lambda attempt, _: callback(attempt * interval, expires_in)
             )
-            print("\n\n¡Autenticación exitosa! ✅")
+            print("\n\nAuthentication successful! ✅")
             return token
             
         except KeyboardInterrupt:
-            print("\n\nOperación cancelada por el usuario.")
+            print("\n\nOperation cancelled by user.")
             raise
         except Exception as e:
-            print(f"\n\nError en la autenticación: {e}")
+            print(f"\n\nAuthentication error: {e}")
             raise
 
 

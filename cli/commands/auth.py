@@ -1,3 +1,4 @@
+from __future__ import annotations
 import typer
 from datetime import datetime
 from time import time, sleep

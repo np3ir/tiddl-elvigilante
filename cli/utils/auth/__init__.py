@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .core import load_auth_data, save_auth_data
 from .models import AuthData
 

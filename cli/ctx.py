@@ -1,3 +1,4 @@
+from __future__ import annotations
 import typer
 from time import time
 from pathlib import Path

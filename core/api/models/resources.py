@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Any, Optional, List
 from enum import Enum
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field
 # ====================================================================
 
 class AudioQualityEnum(str, Enum):
-    """Enum completo de calidades de audio según documentación"""
+    """Complete audio quality enum per documentation"""
     LOW = "LOW"  # 96 kbps AAC
     HIGH = "HIGH"  # 320 kbps AAC
     LOSSLESS = "LOSSLESS"  # 1411 kbps FLAC 16bit/44.1kHz
@@ -18,7 +19,7 @@ class AudioQualityEnum(str, Enum):
 
 
 class VideoQualityEnum(str, Enum):
-    """Enum completo de calidades de video según documentación"""
+    """Complete video quality enum per documentation"""
     AUDIO_ONLY = "AUDIO_ONLY"  # 96 kbps MP4
     LOW = "LOW"  # 640x360 1116 kbps MP4
     MEDIUM = "MEDIUM"  # 720p
@@ -26,7 +27,7 @@ class VideoQualityEnum(str, Enum):
 
 
 class AlbumTypeEnum(str, Enum):
-    """Tipos de album según documentación"""
+    """Album types per documentation"""
     ALBUM = "ALBUM"
     EP = "EP"
     SINGLE = "SINGLE"
@@ -226,8 +227,8 @@ class Playlist(BaseModel):
 # ==================================================================== 
 
 class PlaylistWithETag(Playlist):
-    """Playlist con ETag para prevenir corrupción en ediciones"""
-    etag: Optional[str] = None  # Extraído del header If-None-Match
+    """Playlist with ETag to prevent corruption on edits"""
+    etag: Optional[str] = None  # Extracted from If-None-Match header
     
     class Config:
         extra = "allow"
@@ -268,7 +269,7 @@ class Artist(BaseModel):
 # ==================================================================== 
 
 class AlbumExtended(BaseModel): 
-    """Modelo completo de Album según la documentación oficial de TIDAL""" 
+    """Complete Album model per official TIDAL documentation""" 
     id: int 
     title: str 
     duration: int 
@@ -292,11 +293,11 @@ class AlbumExtended(BaseModel):
     audioQuality: Literal["LOW", "HIGH", "LOSSLESS", "HI_RES"] 
     audioModes: List[str] 
     
-    # NUEVOS CAMPOS que tu código actual no incluye: 
+    # NEW FIELDS not included in your current code: 
     artist: dict  # {"id": int, "name": str, "type": str} 
     artists: List[dict]  # Lista completa de artistas 
     
-    # Campos que faltan y son útiles para filtros: 
+    # Missing fields useful for filtering: 
     mediaMetadata: Optional[dict] = None  # Metadatos adicionales 
     
     class Config: 
@@ -327,13 +328,13 @@ class TrackExtended(BaseModel):
     audioQuality: Literal["LOW", "HIGH", "LOSSLESS", "HI_RES"] 
     audioModes: List[str] 
     
-    # CAMPOS CRUCIALES que faltan en tu implementación: 
+    # CRUCIAL FIELDS missing from your implementation: 
     artist: dict 
     artists: List[dict] 
     album: dict 
     mixes: dict  # {"TRACK_MIX": "...", "MASTER_TRACK_MIX": "..."} 
     
-    # Nuevos campos útiles: 
+    # Useful new fields: 
     dateAdded: Optional[datetime] = None  # Para favoritos 
     index: Optional[int] = None  # Para playlists 
     itemUuid: Optional[str] = None  # Para playlists 
@@ -344,7 +345,7 @@ class TrackExtended(BaseModel):
 # ==================================================================== 
 
 class TrackCredits(BaseModel): 
-    """Créditos de un track - Endpoint no implementado en tu código""" 
+    """Track credits - Endpoint not implemented in your code""" 
     type: str  # "Composer", "Producer", etc. 
     contributors: List[dict]  # [{"name": str, "id": Optional[int]}] 
 
@@ -355,7 +356,7 @@ class TrackMix(BaseModel):
 
 
 class ArtistBio(BaseModel): 
-    """Biografía del artista - Endpoint no implementado""" 
+    """Artist biography - Endpoint not implemented""" 
     source: str 
     lastUpdated: datetime 
     text: str 

@@ -1,7 +1,8 @@
+from __future__ import annotations
 import re
 import sys
 import unicodedata
-from typing import Optional, List
+from typing import Optional, List, Union
 
 # ============================================================
 # Character Conversion Map
@@ -258,7 +259,6 @@ def is_unicode_safe(ch: str) -> bool:
         return cp in (0x200C, 0x200D, 0xFEFF)  # ZWNJ, ZWJ, BOM
     return True
 
-
 def transliterate_unicode(text: str, mode: str = 'smart') -> str:
     if mode == 'preserve':
         for old, new in UNICODE_TO_ASCII_MAP.items():
@@ -297,7 +297,6 @@ def transliterate_unicode(text: str, mode: str = 'smart') -> str:
                 else:
                     result.append('_')
         return ''.join(result)
-
 
 def normalize_text(text: str) -> str:
     if not text:
@@ -342,7 +341,7 @@ def extract_readable_parts(text: str, min_length: int = 2) -> list:
     return parts
 
 
-def _generate_fallback_name(original: str = None, item_id: int = None) -> str:
+def _generate_fallback_name(original: Union[str, None] = None, item_id: Union[int, None] = None) -> str:
     if original:
         ascii_parts = extract_readable_parts(original, min_length=2)
         if ascii_parts:
@@ -412,7 +411,7 @@ def sanitize_filename(s: str, item_id: Optional[int] = None, max_len: int = 100,
         fallback_replacements = {
             "/": "-", "\\": "-",
             ":": "-", "*": "x",
-            "?": "", "\"": "'",
+            "?": "", '"': "'",
             "<": "(", ">": ")",
             "|": "-"
         }

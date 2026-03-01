@@ -1,3 +1,4 @@
+from __future__ import annotations
 class ApiError(Exception):
     def __init__(self, status: int, subStatus: str = None, userMessage: str = None, **kwargs):
         self.status = status

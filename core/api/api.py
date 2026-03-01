@@ -1,3 +1,4 @@
+from __future__ import annotations
 import time
 import random
 import logging
@@ -266,7 +267,7 @@ class TidalAPI:
     # ====================================================================
 
     def get_track_credits(self, track_id: ID) -> TrackCredits:
-        """Obtener créditos de un track"""
+        """Get track credits"""
         return self._fetch_with_retry(
             TrackCredits,
             f"tracks/{track_id}/contributors",
@@ -284,7 +285,7 @@ class TidalAPI:
         )
 
     def get_artist_bio(self, artist_id: ID) -> ArtistBio:
-        """Obtener biografía del artista"""
+        """Get artist biography"""
         return self._fetch_with_retry(
             ArtistBio,
             f"artists/{artist_id}/bio",

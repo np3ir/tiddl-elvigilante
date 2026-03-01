@@ -1,4 +1,5 @@
 
+from __future__ import annotations
 import unittest
 import unicodedata
 from tiddl.core.utils.strings import remove_zalgo, sanitize_filename, get_alpha_bucket

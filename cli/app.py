@@ -1,3 +1,4 @@
+from __future__ import annotations
 import typer
 import logging
 from rich.console import Console

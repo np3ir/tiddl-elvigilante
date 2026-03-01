@@ -1,8 +1,14 @@
+from __future__ import annotations
 from logging import getLogger
 from pathlib import Path
 from pydantic import BaseModel, validator, Field
-from tomllib import loads as parse_toml
 from typing import Literal
+
+# Python 3.11+ has tomllib built-in, but 3.10 needs tomli package
+try:
+    from tomllib import loads as parse_toml
+except ImportError:
+    from tomli import loads as parse_toml
 
 from tiddl.cli.const import APP_PATH
 from tiddl.core.utils.const import TRACK_QUALITY_LITERAL, VIDEO_QUALITY_LITERAL

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import sys
 import time
@@ -139,7 +140,7 @@ def download_with_verification(
     output_path: str,
     expected_hash: Optional[str] = None
 ) -> None:
-    """Download con verificación de hash"""
+    """Download with hash verification"""
     
     # Descargar archivo
     download(urls, output_path)
@@ -246,7 +247,7 @@ def download_with_progress(
                 with s.get(url, stream=True, timeout=20) as req:
                     req.raise_for_status()
                     
-                    # Obtener tamaño total
+                    # Get total size
                     total_size = int(req.headers.get('content-length', 0))
                     
                     # Crear barra de progreso
@@ -262,7 +263,7 @@ def download_with_progress(
                                 f.write(chunk)
                                 pbar.update(len(chunk))
     
-    # Verificar después de descargar
+    # Verify after downloading
     is_valid, error = validate_downloaded_file(output_path)
 
     # Log metrics

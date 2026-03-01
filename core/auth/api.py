@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Union
 from tiddl.core.auth.client import AuthClient
 from tiddl.core.auth.models import (
     AuthDeviceResponse,
@@ -7,7 +9,7 @@ from tiddl.core.auth.models import (
 
 
 class AuthAPI:
-    def __init__(self, client: AuthClient | None = None) -> None:
+    def __init__(self, client: Union[AuthClient, None] = None) -> None:
         self._client = client or AuthClient()
 
     def get_device_auth(self) -> AuthDeviceResponse:
