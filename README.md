@@ -13,7 +13,7 @@ Modern Python 3.10+ compatible TIDAL downloader. Download music and videos with 
 
 ### Simplest Way
 ```bash
-pip install git+https://github.com/yourusername/tiddl-elvigilante.git
+pip install git+https://github.com/Np3ir/tiddl-elvigilante
 ```
 
 Then use:
@@ -24,7 +24,7 @@ tiddl-elvigilante download "https://tidal.com/browse/album/123456"
 
 ### Or Clone
 ```bash
-git clone https://github.com/yourusername/tiddl-elvigilante.git
+git clone https://github.com/Np3ir/tiddl-elvigilante
 cd tiddl-elvigilante
 pip install -r requirements.txt
 python -m cli auth
