@@ -21,7 +21,7 @@ T = TypeVar("T", bound=BaseModel)
 
 API_URL = "https://api.tidal.com/v1"
 API_V1_URL = "https://api.tidal.com/v1"
-API_V2_URL = "https://api.tidal.com/v2"  # Para Feed y Activity API
+API_V2_URL = "https://api.tidal.com/v2"  # For Feed and Activity API
 MAX_RETRIES = 5
 RETRY_DELAY = 2
 
@@ -29,7 +29,7 @@ log = getLogger(__name__)
 
 
 class TidalClientImproved:
-    """Cliente mejorado con soporte para v1 y v2, refresh automático y rate limiting"""
+    """Improved client with support for v1 & v2, auto-refresh, and rate limiting"""
     
     _token: str
     _refresh_token: Optional[str]
@@ -66,11 +66,11 @@ class TidalClientImproved:
             always_revalidate=omit_cache
         )
         
-        # MEJORA: Agregar headers completos según documentación
+        # IMPROVEMENT: Add complete headers as per documentation
         self.session.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
-            "User-Agent": "TIDAL_ANDROID/1039 okhttp/3.14.9",  # Camuflaje
+            "User-Agent": "TIDAL_ANDROID/1039 okhttp/3.14.9",  # Camouflage
             "Connection": "keep-alive",
         }
         self._token = token
@@ -89,14 +89,14 @@ class TidalClientImproved:
         )
 
     def _check_token_expiry(self) -> bool:
-        """Verifica si el token está por expirar (< 1 hora restante)"""
+        """Checks if the token is about to expire (< 1 hour remaining)"""
         if not self._token_expiry:
-            return True  # No sabemos, asumir válido
+            return True  # We don't know, assume valid
         
         current_time = int(time.time())
         time_remaining = self._token_expiry - current_time
         
-        # Si quedan menos de 1 hora (3600 segundos), renovar
+        # If less than 1 hour (3600 seconds) remains, renew
         if time_remaining < 3600:
             log.warning(f"Token expiring soon ({time_remaining}s remaining)")
             return False
@@ -104,13 +104,13 @@ class TidalClientImproved:
         return True
     
     def _auto_refresh_token(self, force_refresh: bool = False) -> bool:
-        """Intenta renovar el token automáticamente"""
+        """Tries to renew the token automatically"""
         if not self._refresh_token or not self.on_token_expiry:
             return False
         
         try:
             # Expects (access_token, expires_at, refresh_token)
-            # Request at least 3600s validity if we are proactive refreshing (force_refresh=False)
+            # Request at least 3600s validity if we are proactively refreshing (force_refresh=False)
             # If force_refresh=True, validity check is skipped inside callback anyway.
             result = self.on_token_expiry(force_refresh=force_refresh, min_validity=3600)
             if result:
@@ -138,18 +138,18 @@ class TidalClientImproved:
         _refreshed: bool = False,
     ) -> T:
         """
-        Fetch mejorado con:
-        - Soporte para API v1 y v2
-        - Auto-refresh de token
-        - Mejor manejo de rate limiting
-        - Debug mejorado
+        Improved fetch with:
+        - Support for v1 and v2 APIs
+        - Automatic token refresh
+        - Better rate limiting handling
+        - Improved debugging
         """
         
-        # Verificar expiración del token
+        # Check token expiration
         if not self._check_token_expiry():
             self._auto_refresh_token()
         
-        # Seleccionar URL base según versión
+        # Select base URL based on version
         base_url = API_V1_URL if api_version == "v1" else API_V2_URL
         
         # Rate Limiting Enforcement
@@ -168,9 +168,9 @@ class TidalClientImproved:
             expire_after=expire_after
         )
 
-        # ============================================================ 
-        # MEJORA 5: Manejo detallado de rate limiting (429) 
-        # ============================================================ 
+        # ============================================================
+        # IMPROVEMENT 5: Detailed rate limiting handling (429)
+        # ============================================================
         if res.status_code == 429:
             retry_after = res.headers.get("Retry-After", "60")
             
@@ -198,9 +198,9 @@ class TidalClientImproved:
             
             res.raise_for_status()
 
-        # ============================================================ 
-        # MEJORA 6: Auto-refresh en 401 
-        # ============================================================ 
+        # ============================================================
+        # IMPROVEMENT 6: Auto-refresh on 401
+        # ============================================================
         if res.status_code == 401:
             try:
                 error_json = res.json()
@@ -211,7 +211,7 @@ class TidalClientImproved:
                 sub_status = None
                 user_message = ""
             
-            # Si es error de contenido (Asset not ready), NO refrescar token
+            # If it's a content error (Asset not ready), DO NOT refresh token
             if sub_status == 4005:
                 log.debug(f"Asset not ready (401/4005): {user_message}. Skipping token refresh.")
                 res.raise_for_status()
@@ -229,12 +229,12 @@ class TidalClientImproved:
                     _refreshed=True,
                 )
             
-            # Si falla el refresh, lanzar error
+            # If refresh fails, raise error
             res.raise_for_status()
 
-        # ============================================================ 
-        # MEJORA 7: Logging mejorado con más contexto 
-        # ============================================================ 
+        # ============================================================
+        # IMPROVEMENT 7: Improved logging with more context
+        # ============================================================
         cache_status = "HIT" if res.from_cache else "MISS"
         log.debug(
             f"[{api_version.upper()}] {endpoint} "
@@ -244,9 +244,9 @@ class TidalClientImproved:
             f"size={len(res.content) if res.content else 0}B"
         )
 
-        # ============================================================ 
-        # Parse JSON con mejor manejo de errores 
-        # ============================================================ 
+        # ============================================================
+        # Parse JSON with better error handling
+        # ============================================================
         try:
             data = res.json()
         except JSONDecodeError as e:
@@ -276,9 +276,9 @@ class TidalClientImproved:
                 _refreshed=_refreshed,
             )
 
-        # ============================================================ 
-        # IMPROVEMENT 8: Improved debug with organized structure 
-        # ============================================================ 
+        # ============================================================
+        # IMPROVEMENT 8: Improved debug with organized structure
+        # ============================================================
         if self.debug_path:
             # Organize by API version
             debug_dir = self.debug_path / api_version
@@ -298,9 +298,9 @@ class TidalClientImproved:
             
             file.write_text(json.dumps(debug_data, indent=2, default=str))
 
-        # ============================================================ 
-        # IMPROVEMENT 9: Logical error detection in 200 responses 
-        # ============================================================ 
+        # ============================================================
+        # IMPROVEMENT 9: Logical error detection in 200 responses
+        # ============================================================
         if res.status_code == 200 and isinstance(data, dict):
             # Detect embedded errors in successful responses
             if "error" in data:
@@ -317,9 +317,9 @@ class TidalClientImproved:
                 raise ApiError(**data)
 
         if res.status_code != 200:
-            # ============================================================ 
-            # IMPROVEMENT 10: Specific logging by error code 
-            # ============================================================ 
+            # ============================================================
+            # IMPROVEMENT 10: Specific logging by error code
+            # ============================================================
             error_context = {
                 "endpoint": endpoint,
                 "params": params,
@@ -340,44 +340,44 @@ class TidalClientImproved:
             
             raise ApiError(**data)
 
-        return model.model_validate(data)
+        return model.parse_obj(data)
 
-    # ================================================================ 
-    # MEJORA 11: Método para obtener estadísticas de uso 
-    # ================================================================ 
+    # ================================================================
+    # IMPROVEMENT 11: Method to get usage statistics
+    # ================================================================
 
     def get_cache_stats(self) -> dict[str, Any]:
-        """Obtiene estadísticas del cache"""
-        # Validar si requests_cache está habilitado y tiene backend
+        """Gets cache statistics"""
+        # Validate if requests_cache is enabled and has a backend
         if not hasattr(self.session, 'cache'):
             return {"enabled": False}
             
         try:
             return {
                 "cache_name": getattr(self.session.cache, 'db_path', 'unknown'),
-                # Usar responses.keys() o similar dependiendo del backend
-                # Nota: responses suele ser un dict-like object
+                # Use responses.keys() or similar depending on the backend
+                # Note: responses is usually a dict-like object
                 "responses_cached": len(self.session.cache.responses) if hasattr(self.session.cache, 'responses') else 0,
             }
         except Exception as e:
             log.warning(f"Could not retrieve cache stats: {e}")
             return {"error": str(e)}
 
-    # ================================================================ 
-    # MEJORA 12: Método para limpiar cache selectivamente 
-    # ================================================================ 
+    # ================================================================
+    # IMPROVEMENT 12: Method to selectively clear the cache
+    # ================================================================
 
     def clear_cache(
         self,
         endpoints: Optional[list[str]] = None,
-        older_than: Optional[int] = None  # Segundos
+        older_than: Optional[int] = None  # Seconds
     ) -> None:
         """
-        Limpia el cache de forma selectiva
+        Selectively clears the cache
         
         Args:
-            endpoints: Lista de endpoints a limpiar (None = todos)
-            older_than: Limpiar entradas más viejas que N segundos
+            endpoints: List of endpoints to clear (None = all)
+            older_than: Clear entries older than N seconds
         """
         if not hasattr(self.session, 'cache'):
             return
@@ -387,20 +387,20 @@ class TidalClientImproved:
             log.info("Cache cleared completely")
             return
         
-        # Limpieza por antigüedad
+        # Clear by age
         if older_than:
             self.session.cache.remove_old_entries(older_than)
             
-        # Limpieza por endpoints (más complejo con requests-cache, requiere iterar)
+        # Clear by endpoints (more complex with requests-cache, requires iteration)
         if endpoints:
-            # Nota: Esta es una implementación simplificada. 
-            # requests-cache usa claves hash, no URLs directas.
-            # Una limpieza precisa por URL requiere iterar todas las claves
-            # o usar delete_url si el backend lo soporta.
+            # Note: This is a simplified implementation.
+            # requests-cache uses hash keys, not direct URLs.
+            # Precise cleaning by URL requires iterating all keys
+            # or using delete_url if the backend supports it.
             try:
                 for url in endpoints:
                     self.session.cache.delete(urls=[url])
-                    # También intentar con la base URL completa si se pasó solo el endpoint
+                    # Also try with the full base URL if only the endpoint was passed
                     if not url.startswith("http"):
                          self.session.cache.delete(urls=[f"{API_V1_URL}/{url}", f"{API_V2_URL}/{url}"])
             except Exception as e:
