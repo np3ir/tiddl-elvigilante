@@ -12,12 +12,12 @@ authors = [
     {name = "tiddl-elvigilante contributors"}
 ]
 maintainers = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Np3ir", email = "np3ir@users.noreply.github.com"}
 ]
 requires-python = ">=3.10"
 keywords = ["tidal", "downloader", "music", "streaming", "python3.10", "tidal-downloader"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -63,23 +63,38 @@ build = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/tiddl-elvigilante"
-Documentation = "https://github.com/yourusername/tiddl-elvigilante#readme"
-Repository = "https://github.com/yourusername/tiddl-elvigilante"
-Issues = "https://github.com/yourusername/tiddl-elvigilante/issues"
-Changelog = "https://github.com/yourusername/tiddl-elvigilante/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Np3ir/tiddl-elvigilante"
+Documentation = "https://github.com/Np3ir/tiddl-elvigilante#readme"
+Repository = "https://github.com/Np3ir/tiddl-elvigilante"
+Issues = "https://github.com/Np3ir/tiddl-elvigilante/issues"
+Changelog = "https://github.com/Np3ir/tiddl-elvigilante/blob/main/CHANGELOG.md"
 "Original Project" = "https://github.com/oskvr37/tiddl"
-"About Fork" = "https://github.com/yourusername/tiddl-elvigilante/blob/main/FORK.md"
+"About Fork" = "https://github.com/Np3ir/tiddl-elvigilante/blob/main/FORK.md"
 
 [project.scripts]
-tiddl-elvigilante = "cli.app:main"
-tiddl = "cli.app:main"
+tiddl-elvigilante = "tiddl.cli.app:main"
+tiddl = "tiddl.cli.app:main"
 
 [tool.setuptools]
-packages = ["cli", "core"]
+package-dir = {"tiddl" = "."}
+packages = [
+    "tiddl",
+    "tiddl.cli",
+    "tiddl.cli.commands",
+    "tiddl.cli.commands.download",
+    "tiddl.cli.commands.subcommands",
+    "tiddl.cli.utils",
+    "tiddl.cli.utils.auth",
+    "tiddl.core",
+    "tiddl.core.api",
+    "tiddl.core.api.models",
+    "tiddl.core.auth",
+    "tiddl.core.metadata",
+    "tiddl.core.utils",
+]
 
 [tool.setuptools.package-data]
-tiddl = ["py.typed"]
+"tiddl" = ["py.typed"]
 
 [tool.black]
 line-length = 100

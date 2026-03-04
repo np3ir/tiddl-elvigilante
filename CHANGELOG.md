@@ -143,7 +143,7 @@ All original features preserved:
 
 ### 🔗 Links
 
-- **GitHub**: https://github.com/yourusername/tiddl
+- **GitHub**: https://github.com/Np3ir/tiddl-elvigilante
 - **Original**: https://github.com/oskvr37/tiddl
 - **TIDAL**: https://tidal.com
 

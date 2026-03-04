@@ -3,7 +3,6 @@ import time
 import random
 import logging
 import sys
-import urllib3
 import requests
 from typing import Literal, TypeAlias, Any
 from requests.adapters import HTTPAdapter
@@ -30,20 +29,19 @@ ID: TypeAlias = str | int
 # ============================================================
 # CONFIGURACIÓN DE LOGS Y RED
 # ============================================================
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger(__name__)
 
 
 class Limits:
-    ARTIST_ALBUMS = 10;
+    ARTIST_ALBUMS = 10
     ARTIST_ALBUMS_MAX = 100
-    ARTIST_VIDEOS = 10;
+    ARTIST_VIDEOS = 10
     ARTIST_VIDEOS_MAX = 100
-    ALBUM_ITEMS = 20;
+    ALBUM_ITEMS = 20
     ALBUM_ITEMS_MAX = 100
-    PLAYLIST_ITEMS = 20;
+    PLAYLIST_ITEMS = 20
     PLAYLIST_ITEMS_MAX = 100
-    MIX_ITEMS = 20;
+    MIX_ITEMS = 20
     MIX_ITEMS_MAX = 100
 
 

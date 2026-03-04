@@ -68,3 +68,6 @@ downloads/
 *.tmp
 temp/
 *.zip
+
+# Claude editor metadata
+.claude/

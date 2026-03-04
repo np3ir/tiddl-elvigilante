@@ -19,7 +19,7 @@ This application is for personal, educational, and archival purposes only. It is
 
 ### Installation (Easiest)
 ```bash
-pip install git+https://github.com/yourusername/tiddl.git
+pip install git+https://github.com/Np3ir/tiddl-elvigilante.git
 ```
 
 ### First Use
@@ -63,12 +63,12 @@ tiddl download url https://tidal.com/track/123456789
 
 ### From GitHub (Recommended)
 ```bash
-pip install git+https://github.com/yourusername/tiddl.git
+pip install git+https://github.com/Np3ir/tiddl-elvigilante.git
 ```
 
 ### Local Development
 ```bash
-git clone https://github.com/yourusername/tiddl.git
+git clone https://github.com/Np3ir/tiddl-elvigilante.git
 cd tiddl
 pip install -e .
 ```
@@ -190,7 +190,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 Quick start:
 ```bash
 # Fork and clone
-git clone https://github.com/yourusername/tiddl.git
+git clone https://github.com/Np3ir/tiddl-elvigilante.git
 cd tiddl
 
 # Create feature branch
@@ -211,7 +211,7 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 ## 🔗 Links
 
-- **This Fork:** https://github.com/yourusername/tiddl
+- **This Fork:** https://github.com/Np3ir/tiddl-elvigilante
 - **Original Project:** https://github.com/oskvr37/tiddl
 - **TIDAL:** https://tidal.com
 - **Python:** https://python.org
