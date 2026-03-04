@@ -15,6 +15,35 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.0.1] - 2026-03-04
+
+### 🐛 Fixed
+
+- **Packaging**: `pyproject.toml` now correctly maps `package-dir = {"tiddl": "."}` and
+  lists all 13 sub-packages; the previous setup caused `pip install` to silently omit
+  sub-packages, breaking imports at runtime
+- **Entry points**: corrected to `tiddl.cli.app:main` (was `cli.app:main`, broken on install)
+- **Pydantic v1 validators**: replaced `model_post_init` (Pydantic v2 API, silently ignored
+  in v1) with `@root_validator` in `DownloadConfig` and `TemplatesConfig`; this fixes
+  template inheritance from `default` and `scan_path` sync with `download_path`
+- **Global side-effect**: removed `urllib3.disable_warnings()` from module level in
+  `core/api/api.py`; it was suppressing warnings across the entire Python process
+
+### ✨ Added
+
+- `py.typed` marker file (PEP 561) enabling downstream type checking
+- `tests/test_config.py` — 13 unit tests covering `Config`, `DownloadConfig`,
+  and `TemplatesConfig` validators
+- `.claude/` added to `.gitignore`
+
+### 📝 Changed
+
+- `pyproject.toml` classifier updated to `5 - Production/Stable`
+- Repository URLs and maintainer updated to `Np3ir/tiddl-elvigilante`
+- `Limits` class in `core/api/api.py`: removed inline semicolons
+
+---
+
 ## [1.0.0] - 2026-03-01 (Production Release)
 
 ### 🎉 Initial Production Release
