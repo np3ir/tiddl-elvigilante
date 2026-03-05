@@ -229,12 +229,17 @@ def parse_date_safe(date_str: Any) -> datetime:
         return datetime.min
     if isinstance(date_str, datetime):
         return date_str
+    s = str(date_str).strip()
     try:
         # Handle simple date strings like "2023-01-01"
-        if len(str(date_str)) == 10 and '-' in str(date_str):
-             return datetime.strptime(str(date_str), "%Y-%m-%d")
-        return datetime.fromisoformat(str(date_str))
-    except ValueError:
+        if len(s) == 10 and '-' in s:
+            return datetime.strptime(s, "%Y-%m-%d")
+        # Normalize space→T for Python 3.10 fromisoformat compatibility
+        return datetime.fromisoformat(s.replace(" ", "T"))
+    except (ValueError, TypeError):
+        # Last-resort: extract year from first 4 digits
+        if len(s) >= 4 and s[:4].isdigit():
+            return datetime(int(s[:4]), 1, 1)
         return datetime.min
 
 
