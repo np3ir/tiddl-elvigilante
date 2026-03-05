@@ -138,6 +138,14 @@ default = "{album.artist}/{album.title}/{item.number}. {item.title}"
 - **Default**: false
 - Embed album review in metadata
 
+### `artist_separator`
+- **Type**: string
+- **Default**: `", "`
+- **Options**: `", "` or `"; "`
+- Separator used between artist names in file tags and folder/file names
+- Example with `", "`: `Artist1, Artist2, Artist3`
+- Example with `"; "`: `Artist1; Artist2; Artist3`
+
 ---
 
 ## 🖼️ [cover] Section
@@ -280,6 +288,7 @@ lyrics = true
 save_lyrics = true
 cover = true
 album_review = false
+artist_separator = ", " # ", " or "; "
 
 [cover]
 save = true

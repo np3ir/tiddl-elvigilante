@@ -33,6 +33,7 @@ class Config(BaseModel):
         save_lyrics: bool = False
         cover: bool = False
         album_review: bool = False
+        artist_separator: Literal[", ", "; "] = ", "
 
     metadata: MetadataConfig = MetadataConfig()
 

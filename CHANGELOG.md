@@ -15,6 +15,14 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.0] - 2026-03-04
+
+### ✨ Added
+
+- **`artist_separator` config option** (`[metadata]` section): Choose between `", "` (default) and `"; "` as the separator between artist names in file tags and file/folder names.
+
+---
+
 ## [1.0.0] - 2026-03-01 (Production Release)
 
 ### 🎉 Initial Production Release
