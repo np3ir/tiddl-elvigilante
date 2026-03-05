@@ -73,12 +73,17 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
         picture.type = 3  # front cover
         mutagen.add_picture(picture)
 
-    # Parse date if possible
+    # Parse date if possible (normalize space→T for Python 3.10 fromisoformat compat)
     if metadata.date:
         try:
-            date = datetime.fromisoformat(metadata.date)
+            date = datetime.fromisoformat(metadata.date.replace(" ", "T"))
         except Exception:
-            date = None
+            # Fallback: extract year from first 4 chars if they look like a year
+            date_str = metadata.date.strip()
+            if len(date_str) >= 4 and date_str[:4].isdigit():
+                date = datetime(int(date_str[:4]), 1, 1)
+            else:
+                date = None
     else:
         date = None
 

@@ -333,13 +333,16 @@ def download_callback(
                                 track_metadata.cover_data = b""
 
                         if REWRITE_METADATA or was_downloaded:
+                            effective_date = track_metadata.date or (
+                                str(item.releaseDate) if getattr(item, "releaseDate", None) else ""
+                            )
                             add_track_metadata(
                                 path=download_path,
                                 track=item,
                                 lyrics=lyrics_subtitles,
                                 album_artist=track_metadata.artist,
                                 cover_data=track_metadata.cover_data,
-                                date=track_metadata.date,
+                                date=effective_date,
                                 credits=track_metadata.credits,
                                 comment=track_metadata.album_review,
                                 genre=track_metadata.genre,
