@@ -29,7 +29,10 @@ class AuthResponse(BaseModel):
         def coerce_to_int(cls, v):
             if v is None:
                 return v
-            return int(float(v))
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                raise ValueError(f"Expected a numeric value for timestamp field, got {v!r}")
         appleUid: Optional[str]
         googleUid: Optional[str]
         accountLinkCreated: bool

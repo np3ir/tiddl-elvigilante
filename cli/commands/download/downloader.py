@@ -1023,9 +1023,11 @@ class Downloader:
                         )
                         continue
 
+                    conversion_ok = True
                     try:
                         download_path = convert_to_mp4(download_path)
                     except Exception as exc:
+                        conversion_ok = False
                         log.error(f"Video conversion failed: {exc}")
                         self.rich_output.console.print(
                             f"[red]Error converting video:[/] {display_title} - {exc}"
@@ -1033,9 +1035,9 @@ class Downloader:
 
                     task = self.rich_output.download_finish(task_id=task_id)
                     self.rich_output.show_item_result(
-                        result_message=result_message,
+                        result_message=result_message if conversion_ok else "[yellow]Downloaded (conversion failed)",
                         item_description=task.description,
-                        item_path=download_path,
+                        item_path=download_path if conversion_ok else None,
                     )
                     return download_path, True
 
