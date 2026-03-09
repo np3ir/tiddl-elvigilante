@@ -30,7 +30,7 @@ debug = false
 track_quality = "max"
 video_quality = "fhd"
 skip_existing = true
-threads_count = 4
+threads_count = 2
 download_path = "~/Music/tiddl"
 
 [metadata]
@@ -86,7 +86,7 @@ artist_separator = " / "
 
 ### `threads_count`
 - **Type**: integer
-- **Default**: 4
+- **Default**: 2
 - **Range**: 1-20
 - Number of concurrent downloads
 
@@ -280,7 +280,7 @@ debug = false
 track_quality = "max"
 video_quality = "fhd"
 skip_existing = true
-threads_count = 4
+threads_count = 2
 download_path = "~/Music/tiddl"
 scan_path = "~/Music/tiddl"
 singles_filter = "include"

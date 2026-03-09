@@ -19,7 +19,7 @@ This application is for personal, educational, and archival purposes only. It is
 
 ### Installation (Easiest)
 ```bash
-pip install git+https://github.com/yourusername/tiddl.git
+pip install git+https://github.com/Np3ir/tiddl-elvigilante
 ```
 
 ### First Use
@@ -63,13 +63,13 @@ tiddl download url https://tidal.com/track/123456789
 
 ### From GitHub (Recommended)
 ```bash
-pip install git+https://github.com/yourusername/tiddl.git
+pip install git+https://github.com/Np3ir/tiddl-elvigilante
 ```
 
 ### Local Development
 ```bash
-git clone https://github.com/yourusername/tiddl.git
-cd tiddl
+git clone https://github.com/Np3ir/tiddl-elvigilante.git
+cd tiddl-elvigilante
 pip install -e .
 ```
 
@@ -161,6 +161,10 @@ enable = true
 lyrics = true
 save_lyrics = true
 cover = true
+
+[templates]
+default = "{album.artist}/{album.title}/{item.number}. {item.title}"
+artist_separator = " / "
 ```
 
 ---
@@ -190,7 +194,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 Quick start:
 ```bash
 # Fork and clone
-git clone https://github.com/yourusername/tiddl.git
+git clone https://github.com/Np3ir/tiddl.git
 cd tiddl
 
 # Create feature branch
@@ -211,7 +215,7 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 ## 🔗 Links
 
-- **This Fork:** https://github.com/yourusername/tiddl
+- **This Fork:** https://github.com/Np3ir/tiddl-elvigilante
 - **Original Project:** https://github.com/oskvr37/tiddl
 - **TIDAL:** https://tidal.com
 - **Python:** https://python.org
@@ -224,8 +228,10 @@ MIT License - See [LICENSE](LICENSE) file for details.
 Fork of [oskvr37/tiddl](https://github.com/oskvr37/tiddl)
 
 This fork extends the original with:
-- ✅ Python 3.10-3.12 support (original requires 3.13+)
-- ✅ Pydantic v1 compatibility for Python 3.14
+- ✅ Python 3.10-3.14+ support (original requires 3.13+)
+- ✅ Pydantic v1 compatibility
+- ✅ Configurable `artist_separator` for filenames and metadata tags
+- ✅ Correct pip packaging (`tiddl.cli` / `tiddl.core` namespace)
 - ✅ Enhanced documentation
 - ✅ Modular architecture
 - ✅ Production-grade quality
@@ -238,6 +244,6 @@ This tool respects TIDAL's ToS and copyright laws. Users are responsible for ens
 
 ---
 
-**Version:** 1.0.0  
-**Status:** Production Ready ✅  
-**Last Updated:** March 1, 2026
+**Version:** 1.1.1
+**Status:** Production Ready ✅
+**Last Updated:** March 9, 2026

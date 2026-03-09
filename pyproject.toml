@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tiddl-elvigilante"
-version = "1.0.0"
+version = "1.1.1"
 description = "Modern Python 3.10+ compatible TIDAL downloader - Independent fork with production-grade quality"
 readme = "README.md"
 license = {text = "MIT"}
@@ -63,13 +63,13 @@ build = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/tiddl-elvigilante"
-Documentation = "https://github.com/yourusername/tiddl-elvigilante#readme"
-Repository = "https://github.com/yourusername/tiddl-elvigilante"
-Issues = "https://github.com/yourusername/tiddl-elvigilante/issues"
-Changelog = "https://github.com/yourusername/tiddl-elvigilante/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Np3ir/tiddl-elvigilante"
+Documentation = "https://github.com/Np3ir/tiddl-elvigilante#readme"
+Repository = "https://github.com/Np3ir/tiddl-elvigilante"
+Issues = "https://github.com/Np3ir/tiddl-elvigilante/issues"
+Changelog = "https://github.com/Np3ir/tiddl-elvigilante/blob/main/CHANGELOG.md"
 "Original Project" = "https://github.com/oskvr37/tiddl"
-"About Fork" = "https://github.com/yourusername/tiddl-elvigilante/blob/main/FORK.md"
+"About Fork" = "https://github.com/Np3ir/tiddl-elvigilante/blob/main/FORK.md"
 
 [project.scripts]
 tiddl-elvigilante = "tiddl.cli.app:main"

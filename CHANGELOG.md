@@ -15,6 +15,28 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.1] - 2026-03-09
+
+### 🐛 Fixed
+
+#### Packaging — `tiddl.cli` / `tiddl.core` not found after pip install
+- Moved source into `tiddl/` subdirectory so setuptools discovers the correct namespace
+- Entry points updated to `tiddl.cli.app:main`
+- `pip install git+https://github.com/Np3ir/tiddl-elvigilante` now works correctly
+
+#### Templates not applied from config.toml
+- `model_post_init` (Pydantic v2 only) was silently ignored in Pydantic v1, leaving
+  `track`, `video`, `album`, `playlist`, `mix` templates always empty
+- Replaced with `@validator` (Pydantic v1): specific templates now correctly inherit
+  from `default` when not explicitly set
+- `scan_path` now correctly syncs to `download_path` via `@validator`
+
+### 🔧 Changed
+- `DEFAULT_ARTIST_SEPARATOR` centralized as a module constant in `core/utils/format.py`
+- Parameter renamed from `sep` to `artist_separator` in `generate_template_data` for consistency
+
+---
+
 ## [1.1.0] - 2026-03-09
 
 ### ✨ Added
@@ -166,7 +188,7 @@ All original features preserved:
 
 ### 🔗 Links
 
-- **GitHub**: https://github.com/yourusername/tiddl
+- **GitHub**: https://github.com/Np3ir/tiddl-elvigilante
 - **Original**: https://github.com/oskvr37/tiddl
 - **TIDAL**: https://tidal.com
 

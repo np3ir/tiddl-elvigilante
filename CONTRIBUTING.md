@@ -20,7 +20,7 @@ Thank you for your interest in contributing! This document explains how to get i
 ```bash
 # Go to GitHub and click "Fork"
 # Then clone your fork
-git clone https://github.com/yourusername/tiddl-elvigilante.git
+git clone https://github.com/Np3ir/tiddl-elvigilante.git
 cd tiddl-elvigilante
 ```
 
