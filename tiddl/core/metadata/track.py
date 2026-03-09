@@ -170,8 +170,8 @@ def add_m4a_metadata(track_path: Path, metadata: Metadata) -> None:
             dt = datetime.fromisoformat(metadata.date)
             mp4["\xa9day"] = str(dt.year)
         except Exception:
-            # Fallback: try to grab first 4 chars if they look like a year
-            if len(metadata.date) >= 4 and metadata.date[:4].isdigit():
+            # Fallback: grab first 4 chars if they represent a valid year (1-9999)
+            if len(metadata.date) >= 4 and metadata.date[:4].isdigit() and 1 <= int(metadata.date[:4]) <= 9999:
                 mp4["\xa9day"] = metadata.date[:4]
             else:
                 mp4["\xa9day"] = metadata.date
