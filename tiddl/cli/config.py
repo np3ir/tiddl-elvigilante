@@ -63,15 +63,17 @@ class Config(BaseModel):
         update_mtime: bool = False
         rewrite_metadata: bool = False
 
-        def model_post_init(self, __context):
-            # set scan path to download path when download path is non default
-            if self.scan_path == DEFAULT_DOWNLOAD_PATH and self.download_path != DEFAULT_DOWNLOAD_PATH:
-                self.scan_path = self.download_path
-
         @validator("download_path", "scan_path", pre=True, always=True)
         def str_to_path(cls, v):
             # convert to absolute, expand ~, normalize
             return Path(v).expanduser().resolve() if isinstance(v, str) else v
+
+        @validator("scan_path", always=True)
+        def sync_scan_path(cls, v, values):
+            download_path = values.get("download_path", DEFAULT_DOWNLOAD_PATH)
+            if v == DEFAULT_DOWNLOAD_PATH and download_path != DEFAULT_DOWNLOAD_PATH:
+                return download_path
+            return v
 
     download: DownloadConfig = DownloadConfig()
 
@@ -98,13 +100,15 @@ class Config(BaseModel):
         mix: str = ""
         artist_separator: str = DEFAULT_ARTIST_SEPARATOR
 
-        def model_post_init(self, __context):
-            assert self.default != "", "Default template cannot be empty."
+        @validator("default")
+        def default_not_empty(cls, v):
+            if not v:
+                raise ValueError("Default template cannot be empty.")
+            return v
 
-            # override templates to default
-            for field in ["track", "video", "album", "playlist", "mix"]:
-                if getattr(self, field) == "":
-                    setattr(self, field, self.default)
+        @validator("track", "video", "album", "playlist", "mix", always=True)
+        def inherit_default(cls, v, values):
+            return v or values.get("default", "")
 
     templates: TemplatesConfig = TemplatesConfig()
 
