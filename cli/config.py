@@ -11,6 +11,7 @@ except ImportError:
 
 from tiddl.cli.const import APP_PATH
 from tiddl.core.utils.const import TRACK_QUALITY_LITERAL, VIDEO_QUALITY_LITERAL
+from tiddl.core.utils.format import DEFAULT_ARTIST_SEPARATOR
 
 CONFIG_FILENAME = "config.toml"
 DEFAULT_DOWNLOAD_PATH = Path.home() / "Music" / "tiddl"
@@ -95,7 +96,7 @@ class Config(BaseModel):
         album: str = ""
         playlist: str = ""
         mix: str = ""
-        artist_separator: str = " / "
+        artist_separator: str = DEFAULT_ARTIST_SEPARATOR
 
         def model_post_init(self, __context):
             assert self.default != "", "Default template cannot be empty."

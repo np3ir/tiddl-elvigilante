@@ -10,7 +10,7 @@ from mutagen.flac import FLAC as MutagenFLAC, Picture
 from mutagen.mp4 import MP4 as MutagenMP4, MP4Cover
 
 from tiddl.core.api.models import AlbumItemsCredits, Track
-from tiddl.core.utils.format import clean_track_title
+from tiddl.core.utils.format import clean_track_title, DEFAULT_ARTIST_SEPARATOR
 
 log = logging.getLogger(__name__)
 
@@ -220,7 +220,7 @@ def add_track_metadata(
     credits: list[AlbumItemsCredits.ItemWithCredits.CreditsEntry] | None = None,
     comment: str = "",
     genre: str | None = None,
-    artist_separator: str = " / ",
+    artist_separator: str = DEFAULT_ARTIST_SEPARATOR,
 ) -> None:
     """
     Add FLAC or M4A metadata based on file extension.

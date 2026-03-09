@@ -4,11 +4,12 @@ from logging import getLogger
 from mutagen.easymp4 import EasyMP4 as MutagenEasyMP4
 from tiddl.core.api.models import Video
 from tiddl.core.utils.ffmpeg import is_ffmpeg_installed, convert_to_mp4
+from tiddl.core.utils.format import DEFAULT_ARTIST_SEPARATOR
 
 log = getLogger(__name__)
 
 
-def add_video_metadata(path: Path, video: Video, artist_separator: str = " / "):
+def add_video_metadata(path: Path, video: Video, artist_separator: str = DEFAULT_ARTIST_SEPARATOR):
     """
     Adds metadata to an MP4 video file. 
     If the file is a TS file, it attempts to convert it to MP4 first using FFmpeg.
