@@ -41,6 +41,7 @@ cover = true
 
 [templates]
 default = "{album.artist}/{album.title}/{item.number}. {item.title}"
+artist_separator = " / "
 ```
 
 ---
@@ -185,6 +186,17 @@ Controls file naming and organization.
 - **Type**: string
 - Specific template for videos
 
+### `artist_separator`
+- **Type**: string
+- **Default**: `" / "`
+- Separator used when joining multiple artists in template placeholders and metadata tags
+- Examples:
+  - `" / "` → `Artist A / Artist B` (default)
+  - `", "` → `Artist A, Artist B`
+  - `" & "` → `Artist A & Artist B`
+  - `"; "` → `Artist A; Artist B`
+- Affects: `{item.artists}`, `{item.features}`, `{item.artists_with_features}`, `{album.artists}`, and the ARTIST/©ART metadata tag in FLAC/M4A/MP4 files
+
 ---
 
 ## 📝 Template Variables
@@ -292,6 +304,7 @@ video = ""
 album = ""
 playlist = ""
 default = "{album.artist}/{album.title}/{item.number}. {item.title}"
+artist_separator = " / "
 
 [m3u]
 save = false

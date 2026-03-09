@@ -15,6 +15,23 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.0.1] - 2026-03-09
+
+### ✨ Added
+
+#### Configurable Artist Separator
+- New `[templates]` config option: `artist_separator` (default: `" / "`)
+- Controls how multiple artists are joined in:
+  - File path template placeholders: `{item.artists}`, `{item.features}`, `{item.artists_with_features}`, `{album.artists}`
+  - Embedded metadata tags: ARTIST (FLAC), ©ART (M4A), artist (MP4 video)
+- Supported values: `" / "`, `", "`, `" & "`, `"; "`, or any custom string
+
+### 🐛 Fixed
+
+- **Video metadata inconsistency**: `add_video_metadata()` was using `";"` (semicolon, no space) as artist separator while tracks used `", "`. Both now use the configured `artist_separator`.
+
+---
+
 ## [1.0.0] - 2026-03-01 (Production Release)
 
 ### 🎉 Initial Production Release

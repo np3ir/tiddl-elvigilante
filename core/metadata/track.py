@@ -220,6 +220,7 @@ def add_track_metadata(
     credits: list[AlbumItemsCredits.ItemWithCredits.CreditsEntry] | None = None,
     comment: str = "",
     genre: str | None = None,
+    artist_separator: str = " / ",
 ) -> None:
     """
     Add FLAC or M4A metadata based on file extension.
@@ -229,7 +230,7 @@ def add_track_metadata(
     """
     # Build full artist string (main + featured etc.)
     artists_sorted = sorted(a.name.strip() for a in track.artists)
-    artists_str = ", ".join(artists_sorted)
+    artists_str = artist_separator.join(artists_sorted)
 
     # Original title + version from Tidal
     raw_title = f"{track.title} ({track.version})" if track.version else track.title

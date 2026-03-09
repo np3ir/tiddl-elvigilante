@@ -95,6 +95,7 @@ class Config(BaseModel):
         album: str = ""
         playlist: str = ""
         mix: str = ""
+        artist_separator: str = " / "
 
         def model_post_init(self, __context):
             assert self.default != "", "Default template cannot be empty."

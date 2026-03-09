@@ -8,7 +8,7 @@ from tiddl.core.utils.ffmpeg import is_ffmpeg_installed, convert_to_mp4
 log = getLogger(__name__)
 
 
-def add_video_metadata(path: Path, video: Video):
+def add_video_metadata(path: Path, video: Video, artist_separator: str = " / "):
     """
     Adds metadata to an MP4 video file. 
     If the file is a TS file, it attempts to convert it to MP4 first using FFmpeg.
@@ -41,7 +41,7 @@ def add_video_metadata(path: Path, video: Video):
 
     # 4. Prepare Metadata
     # Base metadata
-    artists_str = ";".join([a.name.strip() for a in video.artists]) if video.artists else ""
+    artists_str = artist_separator.join([a.name.strip() for a in video.artists]) if video.artists else ""
     
     meta_update = {
         "title": video.title,
