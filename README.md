@@ -193,9 +193,9 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 Quick start:
 ```bash
-# Fork and clone
-git clone https://github.com/Np3ir/tiddl.git
-cd tiddl
+# Fork on GitHub, then clone your fork
+git clone https://github.com/<your-username>/tiddl-elvigilante.git
+cd tiddl-elvigilante
 
 # Create feature branch
 git checkout -b feature/my-feature
