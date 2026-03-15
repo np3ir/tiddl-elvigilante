@@ -66,6 +66,7 @@ class TidalClientImproved:
         self._last_request_time = 0.0
         self._request_interval = 60.0 / safe_rpm
         self._rate_lock = threading.Lock()
+        self._rate_limit_delay: float = 0.0  # Adaptive: grows on 429, shrinks on success
         
         self.session = CachedSession(
             cache_name=cache_name,
@@ -158,6 +159,10 @@ class TidalClientImproved:
         # Select base URL based on version
         base_url = API_V1_URL if api_version == "v1" else API_V2_URL
         
+        # Adaptive delay from previous 429s
+        if self._rate_limit_delay > 0:
+            time.sleep(self._rate_limit_delay)
+
         # Rate Limiting Enforcement (thread-safe, fixed interval + jitter)
         with self._rate_lock:
             elapsed = time.time() - self._last_request_time
@@ -172,22 +177,28 @@ class TidalClientImproved:
             expire_after=expire_after
         )
 
+        # Cache hits don't consume API quota — release the slot
+        if getattr(res, 'from_cache', False):
+            with self._rate_lock:
+                self._last_request_time = time.time() - self._request_interval
+
         # ============================================================
         # IMPROVEMENT 5: Detailed rate limiting handling (429)
         # ============================================================
         if res.status_code == 429:
+            self._rate_limit_delay = min(5.0, self._rate_limit_delay + 1.0)
             retry_after = res.headers.get("Retry-After", "60")
-            
+
             try:
                 wait_time = int(retry_after)
             except ValueError:
                 wait_time = 60
-            
+
             log.warning(
                 f"Rate limit hit (429). Retry-After: {wait_time}s. "
                 f"Attempt {_attempt}/{MAX_RETRIES}"
             )
-            
+
             if _attempt < MAX_RETRIES:
                 time.sleep(wait_time)
                 return self.fetch(
@@ -344,6 +355,7 @@ class TidalClientImproved:
             
             raise ApiError(**data)
 
+        self._rate_limit_delay = max(0.0, self._rate_limit_delay - 0.1)
         return model.parse_obj(data)
 
     # ================================================================
