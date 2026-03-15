@@ -31,6 +31,7 @@ track_quality = "max"
 video_quality = "fhd"
 skip_existing = true
 threads_count = 2
+requests_per_minute = 50
 download_path = "~/Music/tiddl"
 
 [metadata]
@@ -89,6 +90,23 @@ artist_separator = " / "
 - **Default**: 2
 - **Range**: 1-20
 - Number of concurrent downloads
+
+### `requests_per_minute`
+- **Type**: integer
+- **Default**: 50
+- **Range**: 1–300
+- Maximum TIDAL API calls per minute. The client enforces a fixed-interval gate with
+  per-request jitter so downloads never trigger HTTP 429 (Too Many Requests). Lower this
+  value if you still see rate-limit errors; raise it only if you have a high-throughput
+  account. The adaptive delay mechanism adjusts automatically, so this value is the
+  ceiling, not a guaranteed throughput.
+- **Example**:
+  ```toml
+  [download]
+  requests_per_minute = 30   # conservative; good for slow connections or shared accounts
+  requests_per_minute = 50   # default; suits most accounts
+  requests_per_minute = 80   # aggressive; raise only if 429s never occur
+  ```
 
 ### `download_path`
 - **Type**: path
@@ -281,6 +299,7 @@ track_quality = "max"
 video_quality = "fhd"
 skip_existing = true
 threads_count = 2
+requests_per_minute = 50
 download_path = "~/Music/tiddl"
 scan_path = "~/Music/tiddl"
 singles_filter = "include"

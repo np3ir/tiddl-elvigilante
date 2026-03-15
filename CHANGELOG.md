@@ -15,6 +15,29 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.2] - 2026-03-15
+
+### ✨ Added
+
+#### Adaptive Rate Limiting (best-of-all-three strategy)
+- **`requests_per_minute` configurable** (`[download]` section in `config.toml`)
+  — Default `50`. The API client honours this setting from the first request, no manual
+  patching needed.
+- **`threading.Lock` fixed-interval gate** — Serialises all threads through a single
+  gate (`60 / rpm` seconds). Per-request jitter (`random.uniform(0, 0.3)`) makes the
+  traffic pattern unpredictable to the API. Eliminates burst behaviour that previously
+  triggered 429 errors at the start of large downloads.
+- **Adaptive delay** (`_rate_limit_delay`) — A float maintained per client instance.
+  Every HTTP 429 increments it by `1.0 s` (max `5.0 s`); every successful response
+  decrements it by `0.1 s` (floor `0.0 s`). Applied before the fixed-interval gate so
+  prolonged rate-limit periods slow automatically without manual tuning.
+- **Cache-hit slot release** — When `requests_cache` returns a cached response
+  (`response.from_cache == True`), the rate-limit clock is wound back by one full
+  interval so cache hits never consume API quota, keeping the effective RPM of real
+  network requests at the configured value.
+
+---
+
 ## [1.1.1] - 2026-03-09
 
 ### 🐛 Fixed
