@@ -56,6 +56,7 @@ class Config(BaseModel):
         video_quality: VIDEO_QUALITY_LITERAL = "fhd"
         skip_existing: bool = True
         threads_count: int = 2
+        requests_per_minute: int = 50
         download_path: Path = DEFAULT_DOWNLOAD_PATH
         scan_path: Path = DEFAULT_DOWNLOAD_PATH
         singles_filter: ARTIST_SINGLES_FILTER_LITERAL = "none"

@@ -7,6 +7,8 @@ from typing import Any, Type, TypeVar, Callable, Optional, Literal, Union
 from pydantic import BaseModel
 from time import sleep
 import time
+import random
+import threading
 
 # CRITICAL FIX: Import HTTPError
 from requests.exceptions import JSONDecodeError, HTTPError
@@ -52,15 +54,18 @@ class TidalClientImproved:
         on_token_expiry: Optional[Callable[[bool, int], Union[tuple[str, int, Union[str, None]], None]]] = None,
         refresh_token: Optional[str] = None,
         token_expiry: Optional[int] = None,  # Unix timestamp
+        requests_per_minute: int = 50,
     ) -> None:
         self.on_token_expiry = on_token_expiry
         self.debug_path = debug_path
         self._refresh_token = refresh_token
         self._token_expiry = token_expiry
-        
+
         # Rate Limiting Init
-        self._last_request_time = 0
-        self._request_interval = 60.0 / 50.0  # 1.2 second between requests
+        safe_rpm = requests_per_minute if requests_per_minute > 0 else 50
+        self._last_request_time = 0.0
+        self._request_interval = 60.0 / safe_rpm
+        self._rate_lock = threading.Lock()
         
         self.session = CachedSession(
             cache_name=cache_name,
@@ -153,15 +158,13 @@ class TidalClientImproved:
         # Select base URL based on version
         base_url = API_V1_URL if api_version == "v1" else API_V2_URL
         
-        # Rate Limiting Enforcement
-        current_time = time.time()
-        elapsed = current_time - self._last_request_time
-        if elapsed < self._request_interval:
-            sleep_time = self._request_interval - elapsed
-            # log.debug(f"Rate limiting: Sleeping for {sleep_time:.2f}s")
-            time.sleep(sleep_time)
-        
-        self._last_request_time = time.time()
+        # Rate Limiting Enforcement (thread-safe, fixed interval + jitter)
+        with self._rate_lock:
+            elapsed = time.time() - self._last_request_time
+            wait = self._request_interval - elapsed + random.uniform(0, 0.3)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request_time = time.time()
 
         res = self.session.get(
             f"{base_url}/{endpoint}",
