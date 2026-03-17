@@ -15,6 +15,18 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.4] - 2026-03-17
+
+### 🐛 Fixed
+
+- **Video filter bypass** — Tracks inside albums were incorrectly processed as video
+  streams even when `videos_filter = "none"`, causing a `TypeError: cannot unpack
+  non-iterable NoneType object` crash during artist downloads. `downloader.download()`
+  now always returns a valid tuple, and video items are skipped cleanly when the filter
+  is set to `"none"`.
+
+---
+
 ## [1.1.3] - 2026-03-15
 
 ### ⚡ Performance
