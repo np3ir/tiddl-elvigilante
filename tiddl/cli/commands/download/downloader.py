@@ -805,6 +805,13 @@ class Downloader:
             )
             return None, False
 
+        # Apply video/track filter before any skip_existing logic
+        if (isinstance(item, Video) and self.videos_filter == "none") or (
+            isinstance(item, Track) and self.videos_filter == "only"
+        ):
+            log.debug(f"skipping {item.id} due to {self.videos_filter=}")
+            return None, False
+
         if isinstance(item, Track):
             filename = get_existing_track_filename(
                 item.audioQuality, self.track_quality, file_path
@@ -855,15 +862,6 @@ class Downloader:
                             item_path=alt_path,
                         )
                         return alt_path, False
-
-        elif (isinstance(item, Video) and self.videos_filter == "none") or (
-            isinstance(item, Track) and self.videos_filter == "only"
-        ):
-            log.debug(f"skipping {item.id} due to {self.videos_filter=}")
-            self.rich_output.console.print(
-                f"Skipping '{display_title}' due to video filter set to '{self.videos_filter}'"
-            )
-            return None, False
 
         should_extract_flac = False
 
@@ -998,4 +996,8 @@ class Downloader:
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
 
                     task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
-                    
+
+                self.rich_output.console.print(
+                    f"[red]Error[/] Could not download video '{display_title}' in any quality"
+                )
+                return None, False
