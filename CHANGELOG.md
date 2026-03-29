@@ -15,6 +15,19 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.5] - 2026-03-29
+
+### 📖 Documentation
+
+- **Unicode-First Filenames** — Added dedicated section to README highlighting the core
+  differentiator: fullwidth Unicode equivalents (`／` `：` `？` `＂`) preserve artist and
+  album names exactly as TIDAL has them, across every filesystem. Most tools replace these
+  with underscores, destroying the original metadata.
+- **Filename comparison table** — Added `## 🔄 Filename Creation vs Other TIDAL Downloaders`
+  with side-by-side examples showing the difference at scale with tens of thousands of albums.
+
+---
+
 ## [1.1.4] - 2026-03-17
 
 ### 🐛 Fixed
