@@ -187,6 +187,35 @@ artist_separator = " / "
 
 ---
 
+## 🔄 Filename Creation vs Other TIDAL Downloaders
+
+The main difference between tiddl and other TIDAL downloaders is how filenames are created when artist or album names contain special characters.
+
+Most tools use aggressive sanitization — they replace any character that is invalid on Windows (`/ : * ? " < > |`) with an underscore or remove it entirely:
+
+```
+Bad Bunny / Kendrick Lamar  →  Bad Bunny _ Kendrick Lamar.flac   ❌ information lost
+A$AP Rocky: Peso            →  A_AP Rocky_ Peso.flac              ❌ information lost
+```
+
+tiddl substitutes those characters with **visually identical Unicode fullwidth equivalents** that are valid on every filesystem (Windows, Linux, macOS, NAS):
+
+```
+Bad Bunny ／ Kendrick Lamar  →  Bad Bunny ／ Kendrick Lamar.flac  ✅ preserved
+A$AP Rocky： Peso             →  A$AP Rocky： Peso.flac             ✅ preserved
+```
+
+| Problematic character | Other tools | tiddl |
+|---|---|---|
+| `/` slash | `_` | `／` U+FF0F FULLWIDTH SOLIDUS |
+| `:` colon | `_` | `：` U+FF1A FULLWIDTH COLON |
+| `?` question mark | `_` | `？` U+FF1F FULLWIDTH QUESTION MARK |
+| `"` quotation mark | `_` | `＂` U+FF02 FULLWIDTH QUOTATION MARK |
+
+This is controlled by the `artist_separator` config option, which defaults to `／` and applies to all collaborations (`Artist A ／ Artist B`). The result is a library where every filename is faithful to the original TIDAL metadata — especially important at scale with tens of thousands of albums.
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
