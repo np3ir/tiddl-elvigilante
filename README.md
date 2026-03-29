@@ -36,6 +36,24 @@ tiddl download url https://tidal.com/track/123456789
 
 ---
 
+## 🌍 Unicode-First Filenames
+
+Most TIDAL downloaders replace special characters in filenames with underscores:
+
+```
+Bad Bunny / Kendrick Lamar  →  Bad Bunny _ Kendrick Lamar.flac
+```
+
+tiddl uses fullwidth Unicode equivalents — characters that look identical but are valid on every filesystem:
+
+```
+Bad Bunny ／ Kendrick Lamar  →  Bad Bunny ／ Kendrick Lamar.flac
+```
+
+At scale — tens of thousands of albums — this means your library reflects the actual artist and album names exactly as TIDAL has them. Collaborations, subtitles, and special characters are preserved, not destroyed.
+
+---
+
 ## ✨ Features
 
 - 🎵 **Download Tracks, Albums, Playlists** - All TIDAL content types
