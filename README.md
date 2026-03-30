@@ -314,6 +314,6 @@ This tool respects TIDAL's ToS and copyright laws. Users are responsible for ens
 
 ---
 
-**Version:** 1.1.5
+**Version:** 1.1.6
 **Status:** Production Ready ✅
 **Last Updated:** March 29, 2026

@@ -15,6 +15,16 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.6] - 2026-03-29
+
+### 📖 Documentation
+
+- **Complete Unicode fullwidth table** — Both `## 🌍 Unicode-First Filenames` and
+  `## 🔄 Filename Creation` sections now document all 9 Windows-forbidden characters
+  with their fullwidth equivalents and Unicode code points (`／ ＼ ： ＊ ？ ＂ ＜ ＞ ｜`).
+
+---
+
 ## [1.1.5] - 2026-03-29
 
 ### 📖 Documentation
