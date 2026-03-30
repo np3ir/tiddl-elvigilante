@@ -42,13 +42,29 @@ Most TIDAL downloaders replace special characters in filenames with underscores:
 
 ```
 Bad Bunny / Kendrick Lamar  →  Bad Bunny _ Kendrick Lamar.flac
+Rosalía: MOTOMAMI          →  Rosalia_ MOTOMAMI.flac
 ```
 
-tiddl uses fullwidth Unicode equivalents — characters that look identical but are valid on every filesystem:
+tiddl substitutes every Windows-forbidden character with its **visually identical fullwidth Unicode equivalent** — valid on every filesystem (Windows, Linux, macOS, NAS):
 
 ```
 Bad Bunny ／ Kendrick Lamar  →  Bad Bunny ／ Kendrick Lamar.flac
+Rosalía： MOTOMAMI           →  Rosalía： MOTOMAMI.flac
 ```
+
+All 9 forbidden characters are covered:
+
+| Character | Other tools | tiddl |
+|---|---|---|
+| `/` slash | `_` | `／` U+FF0F |
+| `\` backslash | `_` | `＼` U+FF3C |
+| `:` colon | `_` | `：` U+FF1A |
+| `*` asterisk | `_` | `＊` U+FF0A |
+| `?` question mark | `_` | `？` U+FF1F |
+| `"` quotation mark | `_` | `＂` U+FF02 |
+| `<` less-than | `_` | `＜` U+FF1C |
+| `>` greater-than | `_` | `＞` U+FF1E |
+| `\|` pipe | `_` | `｜` U+FF5C |
 
 At scale — tens of thousands of albums — this means your library reflects the actual artist and album names exactly as TIDAL has them. Collaborations, subtitles, and special characters are preserved, not destroyed.
 
@@ -223,12 +239,19 @@ Bad Bunny ／ Kendrick Lamar  →  Bad Bunny ／ Kendrick Lamar.flac  ✅ preser
 A$AP Rocky： Peso             →  A$AP Rocky： Peso.flac             ✅ preserved
 ```
 
-| Problematic character | Other tools | tiddl |
-|---|---|---|
-| `/` slash | `_` | `／` U+FF0F FULLWIDTH SOLIDUS |
-| `:` colon | `_` | `：` U+FF1A FULLWIDTH COLON |
-| `?` question mark | `_` | `？` U+FF1F FULLWIDTH QUESTION MARK |
-| `"` quotation mark | `_` | `＂` U+FF02 FULLWIDTH QUOTATION MARK |
+All 9 Windows-forbidden characters are covered — nothing is lost:
+
+| Character | Other tools | tiddl | Unicode |
+|---|---|---|---|
+| `/` slash | `_` | `／` | U+FF0F FULLWIDTH SOLIDUS |
+| `\` backslash | `_` | `＼` | U+FF3C FULLWIDTH REVERSE SOLIDUS |
+| `:` colon | `_` | `：` | U+FF1A FULLWIDTH COLON |
+| `*` asterisk | `_` | `＊` | U+FF0A FULLWIDTH ASTERISK |
+| `?` question mark | `_` | `？` | U+FF1F FULLWIDTH QUESTION MARK |
+| `"` quotation mark | `_` | `＂` | U+FF02 FULLWIDTH QUOTATION MARK |
+| `<` less-than | `_` | `＜` | U+FF1C FULLWIDTH LESS-THAN SIGN |
+| `>` greater-than | `_` | `＞` | U+FF1E FULLWIDTH GREATER-THAN SIGN |
+| `\|` pipe | `_` | `｜` | U+FF5C FULLWIDTH VERTICAL LINE |
 
 This is controlled by the `artist_separator` config option, which defaults to `／` and applies to all collaborations (`Artist A ／ Artist B`). The result is a library where every filename is faithful to the original TIDAL metadata — especially important at scale with tens of thousands of albums.
 
