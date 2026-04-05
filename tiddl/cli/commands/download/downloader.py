@@ -15,7 +15,6 @@ from requests import HTTPError
 
 from tiddl.cli.config import VIDEOS_FILTER_LITERAL
 from tiddl.cli.utils.download import get_existing_track_filename
-from tiddl.core.utils.download import get_video_stream_data
 from tiddl.core.api import ApiError, TidalAPI
 import sys
 from tiddl.core.api.models import StreamVideoQuality, Track, TrackQuality, Video
@@ -998,29 +997,47 @@ class Downloader:
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
 
-                    task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
-
                     download_path.parent.mkdir(exist_ok=True, parents=True)
 
+                    # Parse M3U8 to get segment URLs (blocking I/O → thread)
                     try:
-                        await asyncio.to_thread(get_video_stream_data, stream, str(download_path))
+                        urls = await asyncio.to_thread(parse_video_stream, stream)
                     except Exception as e:
-                        log.warning(f"video download failed for {item.id} q={q}: {e}")
+                        log.warning(f"parse_video_stream failed for {item.id} q={q}: {e}")
+                        continue
+
+                    task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
+
+                    video_task = DownloadTask(
+                        url=urls[0] if urls else "",
+                        output_path=download_path,
+                        track_id=item.id,
+                        track_title=display_title,
+                        max_attempts=MAX_RETRIES
+                    )
+
+                    download_success = await self._download_with_retry(
+                        task=video_task,
+                        urls=urls,
+                        task_id=task_id,
+                    )
+
+                    if not download_success:
                         self.rich_output.download_finish(task_id=task_id)
                         if download_path.exists():
                             download_path.unlink()
                         continue
 
-                    # Convert .ts segments to .mp4
+                    # Convert .ts segments → .mp4
                     try:
                         download_path = convert_to_mp4(download_path)
                     except Exception as e:
                         log.error(f"convert_to_mp4 failed for {item.id}: {e}")
 
-                    task = self.rich_output.download_finish(task_id=task_id)
+                    finished_task = self.rich_output.download_finish(task_id=task_id)
                     self.rich_output.show_item_result(
                         result_message=result_message,
-                        item_description=task.description,
+                        item_description=finished_task.description,
                         item_path=download_path,
                     )
                     return download_path, True
