@@ -535,12 +535,44 @@ class Downloader:
         self.scan_path = scan_path
         self.video_download_path = video_download_path
         self.dir_cache: dict[Path, set[str]] = {}
+        # Flat index: stem → set of extensions, para lookup de alternativas sin re-escanear
+        self._stem_index: dict[str, set[str]] = {}
+
+        # Pre-carga el cache completo al inicio si skip_existing está activo
+        if skip_existing and scan_path.exists():
+            self._preload_cache(scan_path)
+        if skip_existing and video_download_path and video_download_path.exists():
+            self._preload_cache(video_download_path)
+
+    def _preload_cache(self, root: Path) -> None:
+        """Escanea recursivamente root y pre-carga dir_cache y _stem_index."""
+        try:
+            for dir_path in [root, *root.rglob('*')]:
+                if dir_path.is_dir() and dir_path not in self.dir_cache:
+                    try:
+                        files = {f.name for f in dir_path.iterdir() if f.is_file()}
+                        self.dir_cache[dir_path] = files
+                        for name in files:
+                            stem = Path(name).stem
+                            if stem not in self._stem_index:
+                                self._stem_index[stem] = set()
+                            self._stem_index[stem].add(Path(name).suffix)
+                    except (PermissionError, OSError):
+                        self.dir_cache[dir_path] = set()
+        except Exception as e:
+            log.warning(f"Error pre-cargando cache desde {root}: {e}")
 
     def _scan_directory(self, dir_path: Path) -> None:
         """Scans a directory and caches its contents."""
         if dir_path not in self.dir_cache:
             try:
-                self.dir_cache[dir_path] = {f.name for f in dir_path.iterdir() if f.is_file()}
+                files = {f.name for f in dir_path.iterdir() if f.is_file()}
+                self.dir_cache[dir_path] = files
+                for name in files:
+                    stem = Path(name).stem
+                    if stem not in self._stem_index:
+                        self._stem_index[stem] = set()
+                    self._stem_index[stem].add(Path(name).suffix)
             except FileNotFoundError:
                 self.dir_cache[dir_path] = set()
 
@@ -853,8 +885,7 @@ class Downloader:
 
         # For videos, use video_download_path as scan base when configured
         if isinstance(item, Video) and self.video_download_path:
-            safe_filename = Path(*[_win_safe(part) for part in filename.parts])
-            existing_file_path = self.video_download_path / safe_filename
+            existing_file_path = self.video_download_path / filename
         else:
             existing_file_path = self.scan_path / filename
 
@@ -877,23 +908,28 @@ class Downloader:
         elif self.skip_existing:
             qual_map = {".flac": 2, ".m4a": 1, ".mp4": 1}
             target_score = qual_map.get(filename.suffix, 0)
+            stem = existing_file_path.stem
+
+            # Usar stem_index para evitar re-escanear el mismo directorio 3 veces
+            existing_exts = self._stem_index.get(stem)
+            if existing_exts is None:
+                # stem no indexado aún — garantizar que el dir esté escaneado
+                self._scan_directory(existing_file_path.parent)
+                existing_exts = self._stem_index.get(stem, set())
 
             for ext in [".flac", ".m4a", ".mp4"]:
-                if ext == filename.suffix:
+                if ext == filename.suffix or ext not in existing_exts:
                     continue
 
-                alt_path = existing_file_path.with_suffix(ext)
-                if self._is_file_in_cache(alt_path):
-                    found_score = qual_map.get(ext, 0)
-
-                    # Only skip if the existing file is equal or better quality
-                    if found_score >= target_score:
-                        self.rich_output.show_item_result(
-                            result_message="[yellow]Exists (Alt)",
-                            item_description=f"[{vibrant_color}]{display_title}",
-                            item_path=alt_path,
-                        )
-                        return alt_path, False
+                found_score = qual_map.get(ext, 0)
+                if found_score >= target_score:
+                    alt_path = existing_file_path.with_suffix(ext)
+                    self.rich_output.show_item_result(
+                        result_message="[yellow]Exists (Alt)",
+                        item_description=f"[{vibrant_color}]{display_title}",
+                        item_path=alt_path,
+                    )
+                    return alt_path, False
 
         should_extract_flac = False
 
@@ -1026,9 +1062,6 @@ class Downloader:
 
                     # Prepare .ts path for Windows Long Path / UNC
                     video_base = self.video_download_path or self.download_path
-                    # Sanitize filename for Windows CIFS shares (no Unicode support via Linux mount)
-                    if self.video_download_path:
-                        filename = Path(*[_win_safe(part) for part in filename.parts])
                     download_path = (video_base / filename).with_suffix(".ts")
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
