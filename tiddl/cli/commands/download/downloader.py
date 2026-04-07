@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import hashlib
+import unicodedata
 import uuid
 from logging import getLogger
 from pathlib import Path
@@ -369,6 +370,29 @@ class ImprovedDownloader:
 
 # ====================================================================
 # IMPROVEMENT 3: Improved file integrity checker
+def _win_safe(name: str) -> str:
+    """Convierte un nombre de path a ASCII seguro para shares CIFS/Windows.
+    - Reemplaza fullwidth slash ／ y pipe ｜ por ' - '
+    - Normaliza acentos: á→a, é→e, ñ→n, etc.
+    - Elimina caracteres no-ASCII restantes
+    - Limpia espacios múltiples
+    """
+    # ／ fullwidth slash → separador legible
+    name = name.replace('\uff0f', ' - ')
+    # ｜ fullwidth pipe → separador
+    name = name.replace('\uff5c', ' - ')
+    # Normalizar acentos via NFKD
+    name = unicodedata.normalize('NFKD', name)
+    name = ''.join(c for c in name if not unicodedata.combining(c))
+    # Eliminar cualquier char no-ASCII restante
+    name = name.encode('ascii', errors='replace').decode('ascii')
+    name = name.replace('?', '_')
+    # Limpiar espacios múltiples
+    import re as _re
+    name = _re.sub(r' {2,}', ' ', name).strip()
+    return name
+
+
 # ====================================================================
 
 class FileIntegrityChecker:
@@ -485,6 +509,7 @@ class Downloader:
     skip_existing: bool
     download_path: Path
     scan_path: Path
+    video_download_path: Optional[Path]
 
     def __init__(
         self,
@@ -497,6 +522,7 @@ class Downloader:
         skip_existing: bool,
         download_path: Path,
         scan_path: Path,
+        video_download_path: Optional[Path] = None,
     ) -> None:
         self.api = tidal_api
         self.rich_output = rich_output
@@ -507,6 +533,7 @@ class Downloader:
         self.skip_existing = skip_existing
         self.download_path = download_path
         self.scan_path = scan_path
+        self.video_download_path = video_download_path
         self.dir_cache: dict[Path, set[str]] = {}
 
     def _scan_directory(self, dir_path: Path) -> None:
@@ -824,7 +851,12 @@ class Downloader:
 
         vibrant_color = vibrant_color or "gray"
 
-        existing_file_path = self.scan_path / filename
+        # For videos, use video_download_path as scan base when configured
+        if isinstance(item, Video) and self.video_download_path:
+            safe_filename = Path(*[_win_safe(part) for part in filename.parts])
+            existing_file_path = self.video_download_path / safe_filename
+        else:
+            existing_file_path = self.scan_path / filename
 
         log.debug(f"{file_path=}, {filename=}, {existing_file_path=}")
 
@@ -993,7 +1025,11 @@ class Downloader:
                     quality = video_qualities_color[stream.videoQuality]
 
                     # Prepare .ts path for Windows Long Path / UNC
-                    download_path = (self.download_path / filename).with_suffix(".ts")
+                    video_base = self.video_download_path or self.download_path
+                    # Sanitize filename for Windows CIFS shares (no Unicode support via Linux mount)
+                    if self.video_download_path:
+                        filename = Path(*[_win_safe(part) for part in filename.parts])
+                    download_path = (video_base / filename).with_suffix(".ts")
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
 

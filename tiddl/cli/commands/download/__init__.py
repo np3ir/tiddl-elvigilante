@@ -10,7 +10,7 @@ from rich.live import Live
 
 from requests import HTTPError
 from typing_extensions import Annotated
-from typing import Union
+from typing import Union, Optional
 
 from tiddl.core.metadata import add_track_metadata, add_video_metadata, Cover
 from tiddl.core.api import ApiError
@@ -98,6 +98,14 @@ def download_callback(
             help="Directory to search for your existing downloads.",
         ),
     ] = CONFIG.download.scan_path,
+    VIDEO_DOWNLOAD_PATH: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--video-path",
+            "-vp",
+            help="Base directory path for video downloads. Overrides --path for videos.",
+        ),
+    ] = CONFIG.download.video_download_path,
     TEMPLATE: Annotated[
         str,
         typer.Option(
@@ -227,6 +235,7 @@ def download_callback(
             skip_existing=not SKIP_EXISTING,
             download_path=DOWNLOAD_PATH,
             scan_path=SCAN_PATH,
+            video_download_path=VIDEO_DOWNLOAD_PATH,
         )
 
         class Metadata:

@@ -1,7 +1,7 @@
 from logging import getLogger
 from pathlib import Path
 from pydantic import BaseModel, validator, Field
-from typing import Literal
+from typing import Literal, Optional
 
 # Python 3.11+ has tomllib built-in, but 3.10 needs tomli package
 try:
@@ -59,14 +59,17 @@ class Config(BaseModel):
         requests_per_minute: int = 50
         download_path: Path = DEFAULT_DOWNLOAD_PATH
         scan_path: Path = DEFAULT_DOWNLOAD_PATH
+        video_download_path: Optional[Path] = None
         singles_filter: ARTIST_SINGLES_FILTER_LITERAL = "none"
         videos_filter: VIDEOS_FILTER_LITERAL = "none"
         update_mtime: bool = False
         rewrite_metadata: bool = False
 
-        @validator("download_path", "scan_path", pre=True, always=True)
+        @validator("download_path", "scan_path", "video_download_path", pre=True, always=True)
         def str_to_path(cls, v):
             # convert to absolute, expand ~, normalize
+            if v is None:
+                return None
             return Path(v).expanduser().resolve() if isinstance(v, str) else v
 
         @validator("scan_path", always=True)
