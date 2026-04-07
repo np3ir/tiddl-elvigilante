@@ -1,8 +1,21 @@
 from __future__ import annotations
+import sys
 import typer
 import logging
 from rich.console import Console
 from rich.logging import RichHandler
+
+# Force UTF-8 output on Windows so Rich's Braille spinners and Unicode
+# characters in file paths don't crash with cp1252 UnicodeEncodeError.
+# reconfigure() is the safe way; falls back silently if not available
+# (e.g. when stdout is already a binary pipe or non-reconfigurable stream).
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 from typing_extensions import Annotated
 
 from tiddl.cli.config import APP_PATH, CONFIG
