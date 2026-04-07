@@ -553,11 +553,23 @@ class Downloader:
                 self.dir_cache[dir_path] = set()
 
     def _is_file_in_cache(self, file_path: Path) -> bool:
-        """Checks if a file exists in the cached directory listing."""
+        """Checks if a file exists, using cache when available.
+
+        If the directory has already been fully scanned (e.g. for alt-extension
+        lookup), we use the in-memory cache for O(1) access.  Otherwise we do
+        a single stat call (file_path.exists()) which is dramatically faster
+        than scanning a whole directory — especially over a network share.
+        """
         dir_path = file_path.parent
-        if dir_path not in self.dir_cache:
-            self._scan_directory(dir_path)
-        return file_path.name in self.dir_cache.get(dir_path, set())
+        if dir_path in self.dir_cache:
+            # Directory was already fully scanned — use the in-memory set.
+            return file_path.name in self.dir_cache[dir_path]
+        # Directory not yet scanned — a single stat is much cheaper than a
+        # full iterdir() over SMB/NFS (iterdir can take seconds on big dirs).
+        try:
+            return file_path.exists()
+        except OSError:
+            return False
 
     async def _download_with_retry(
         self,
