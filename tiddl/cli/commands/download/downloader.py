@@ -4,6 +4,7 @@ import shutil
 import hashlib
 import unicodedata
 import uuid
+import sqlite3
 from logging import getLogger
 from pathlib import Path
 from typing import Optional, Callable, Literal, Union
@@ -542,6 +543,76 @@ class Downloader:
         # preventing duplicate scans of the same directory.
         self._dir_locks: dict[Path, asyncio.Lock] = {}
         self._dir_locks_meta: asyncio.Lock = asyncio.Lock()  # guards _dir_locks dict
+        # SQLite DB for O(1) skip-existing lookup without any filesystem I/O.
+        # Track IDs are stored after a successful download; on subsequent runs
+        # we do a DB lookup first (instant), then a single stat() to confirm
+        # the file still exists on disk. No false positives.
+        self._db: sqlite3.Connection = self._init_db()
+
+    # ------------------------------------------------------------------
+    # SQLite track-DB: O(1) skip-existing without filesystem I/O
+    # ------------------------------------------------------------------
+
+    def _init_db(self) -> sqlite3.Connection:
+        """Open (or create) the SQLite DB that tracks downloaded track IDs."""
+        from tiddl.cli.const import APP_PATH
+        db_path = APP_PATH / "downloaded_tracks.db"
+        try:
+            conn = sqlite3.connect(str(db_path), check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")  # safe for concurrent writes
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS downloaded_tracks (
+                    track_id  INTEGER PRIMARY KEY,
+                    path      TEXT    NOT NULL,
+                    quality   TEXT,
+                    ts        TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            ''')
+            conn.commit()
+            log.debug(f"Track DB opened at {db_path}")
+        except Exception as e:
+            log.warning(f"Could not open track DB ({e}), DB cache disabled")
+            conn = None  # type: ignore
+        return conn
+
+    def _db_lookup(self, track_id: int) -> Optional[Path]:
+        """Return the stored path for a track_id, or None if not in DB."""
+        if not self._db:
+            return None
+        try:
+            row = self._db.execute(
+                "SELECT path FROM downloaded_tracks WHERE track_id = ?",
+                (track_id,)
+            ).fetchone()
+            return Path(row[0]) if row else None
+        except Exception:
+            return None
+
+    def _db_insert(self, track_id: int, path: Path, quality: str) -> None:
+        """Record a successfully downloaded track in the DB."""
+        if not self._db:
+            return
+        try:
+            self._db.execute(
+                "INSERT OR REPLACE INTO downloaded_tracks (track_id, path, quality) VALUES (?, ?, ?)",
+                (track_id, str(path), quality)
+            )
+            self._db.commit()
+        except Exception as e:
+            log.debug(f"DB insert failed for track {track_id}: {e}")
+
+    def _db_remove(self, track_id: int) -> None:
+        """Remove a track from the DB (e.g. file was deleted from disk)."""
+        if not self._db:
+            return
+        try:
+            self._db.execute(
+                "DELETE FROM downloaded_tracks WHERE track_id = ?",
+                (track_id,)
+            )
+            self._db.commit()
+        except Exception:
+            pass
 
     async def _scan_directory(self, dir_path: Path) -> None:
         """Scans a directory and caches its contents.
@@ -901,6 +972,29 @@ class Downloader:
 
         result_message = "[green]Downloaded"
 
+        # --- Fast path: SQLite DB lookup (O(1), no network I/O) ---
+        if self.skip_existing and isinstance(item, Track):
+            db_path = self._db_lookup(item.id)
+            if db_path is not None:
+                # DB says we downloaded this track.  Do a single stat() to
+                # confirm the file still exists (guards against manual deletes).
+                try:
+                    file_still_exists = await asyncio.to_thread(db_path.exists)
+                except OSError:
+                    file_still_exists = False
+                if file_still_exists:
+                    self.rich_output.show_item_result(
+                        result_message="[yellow]Exists",
+                        item_description=f"[{vibrant_color}]{display_title}",
+                        item_path=db_path,
+                    )
+                    return db_path, False
+                else:
+                    # File is gone — remove stale DB entry and continue to download
+                    self._db_remove(item.id)
+                    log.debug(f"Track {item.id} was in DB but file missing, re-downloading")
+
+        # --- Fallback: directory scan cache ---
         if await self._is_file_in_cache(existing_file_path):
             result_message = "[cyan]Overwritten"
 
@@ -1043,6 +1137,8 @@ class Downloader:
                         item_description=task.description,
                         item_path=download_path,
                     )
+                    # Record in DB so next run skips the filesystem scan entirely
+                    self._db_insert(item.id, download_path, str(item.audioQuality))
                     return download_path, True
 
                 self.rich_output.console.print(
@@ -1117,6 +1213,8 @@ class Downloader:
                         item_description=finished_task.description,
                         item_path=download_path,
                     )
+                    # Record video in DB as well
+                    self._db_insert(item.id, download_path, "VIDEO")
                     return download_path, True
 
                 self.rich_output.console.print(
