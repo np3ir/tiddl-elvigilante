@@ -277,7 +277,7 @@ def download_callback(
                     CONFIG.metadata.enable
                     and download_path
                     # rewrite metadata when track was skipped due to already existing
-                    and (REWRITE_METADATA or was_downloaded or CONFIG.metadata.save_lyrics)
+                    and (REWRITE_METADATA or was_downloaded)
                 ):
                     if isinstance(item, Track):
                         lyrics_subtitles = ""
@@ -287,10 +287,11 @@ def download_callback(
                             lrc_exists = lrc_path.exists()
                             
                             # Only fetch if we are downloading, rewriting, OR (saving lyrics AND lyrics don't exist)
+                            # Never fetch lyrics for skipped (existing) tracks unless explicitly rewriting
                             should_fetch_lyrics = (
-                                was_downloaded 
-                                or REWRITE_METADATA 
-                                or (CONFIG.metadata.save_lyrics and not lrc_exists)
+                                was_downloaded
+                                or REWRITE_METADATA
+                                or (CONFIG.metadata.save_lyrics and not lrc_exists and was_downloaded)
                             )
 
                             if should_fetch_lyrics:

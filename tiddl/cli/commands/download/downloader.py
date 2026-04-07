@@ -538,30 +538,6 @@ class Downloader:
         # Flat index: stem → set of extensions, para lookup de alternativas sin re-escanear
         self._stem_index: dict[str, set[str]] = {}
 
-        # Pre-carga el cache completo al inicio si skip_existing está activo
-        if skip_existing and scan_path.exists():
-            self._preload_cache(scan_path)
-        if skip_existing and video_download_path and video_download_path.exists():
-            self._preload_cache(video_download_path)
-
-    def _preload_cache(self, root: Path) -> None:
-        """Escanea recursivamente root y pre-carga dir_cache y _stem_index."""
-        try:
-            for dir_path in [root, *root.rglob('*')]:
-                if dir_path.is_dir() and dir_path not in self.dir_cache:
-                    try:
-                        files = {f.name for f in dir_path.iterdir() if f.is_file()}
-                        self.dir_cache[dir_path] = files
-                        for name in files:
-                            stem = Path(name).stem
-                            if stem not in self._stem_index:
-                                self._stem_index[stem] = set()
-                            self._stem_index[stem].add(Path(name).suffix)
-                    except (PermissionError, OSError):
-                        self.dir_cache[dir_path] = set()
-        except Exception as e:
-            log.warning(f"Error pre-cargando cache desde {root}: {e}")
-
     def _scan_directory(self, dir_path: Path) -> None:
         """Scans a directory and caches its contents."""
         if dir_path not in self.dir_cache:
