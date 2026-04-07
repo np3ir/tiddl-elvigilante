@@ -10,6 +10,7 @@ from typing import Optional, Callable, Literal, Union
 from dataclasses import dataclass
 from enum import Enum
 
+import os
 import aiofiles
 import aiohttp
 from requests import HTTPError
@@ -537,39 +538,58 @@ class Downloader:
         self.dir_cache: dict[Path, set[str]] = {}
         # Flat index: stem → set of extensions, para lookup de alternativas sin re-escanear
         self._stem_index: dict[str, set[str]] = {}
+        # Per-directory locks: allows scanning different dirs in parallel while
+        # preventing duplicate scans of the same directory.
+        self._dir_locks: dict[Path, asyncio.Lock] = {}
+        self._dir_locks_meta: asyncio.Lock = asyncio.Lock()  # guards _dir_locks dict
 
-    def _scan_directory(self, dir_path: Path) -> None:
-        """Scans a directory and caches its contents."""
-        if dir_path not in self.dir_cache:
+    async def _scan_directory(self, dir_path: Path) -> None:
+        """Scans a directory and caches its contents.
+
+        Uses per-directory locks so that:
+        - Different directories can be scanned concurrently (parallel SMB round-trips)
+        - The same directory is only scanned once (double-check locking pattern)
+        - The iterdir() is offloaded to a thread so the event loop stays free
+        """
+        if dir_path in self.dir_cache:
+            return
+        # Get (or create) the lock for this specific directory
+        async with self._dir_locks_meta:
+            if dir_path not in self._dir_locks:
+                self._dir_locks[dir_path] = asyncio.Lock()
+            dir_lock = self._dir_locks[dir_path]
+        async with dir_lock:
+            # Double-check: another coroutine may have scanned while we waited
+            if dir_path in self.dir_cache:
+                return
             try:
-                files = {f.name for f in dir_path.iterdir() if f.is_file()}
+                # os.listdir() returns names only — no per-entry stat() calls.
+                # iterdir() + is_file() would add one SMB round-trip per file,
+                # which is catastrophic on network shares.
+                names = await asyncio.to_thread(os.listdir, dir_path)
+                files = set(names)
                 self.dir_cache[dir_path] = files
                 for name in files:
                     stem = Path(name).stem
                     if stem not in self._stem_index:
                         self._stem_index[stem] = set()
                     self._stem_index[stem].add(Path(name).suffix)
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 self.dir_cache[dir_path] = set()
 
-    def _is_file_in_cache(self, file_path: Path) -> bool:
-        """Checks if a file exists, using cache when available.
+    async def _is_file_in_cache(self, file_path: Path) -> bool:
+        """Checks if a file exists, using async dir scan + in-memory cache.
 
-        If the directory has already been fully scanned (e.g. for alt-extension
-        lookup), we use the in-memory cache for O(1) access.  Otherwise we do
-        a single stat call (file_path.exists()) which is dramatically faster
-        than scanning a whole directory — especially over a network share.
+        Strategy: always scan the parent directory on first access (one iterdir
+        per directory instead of one stat per file).  For playlists/albums where
+        N tracks share the same directory, this is N× faster than N individual
+        stat calls, because SMB round-trips are amortised into a single request.
+        Subsequent lookups for the same directory are pure in-memory O(1).
         """
         dir_path = file_path.parent
-        if dir_path in self.dir_cache:
-            # Directory was already fully scanned — use the in-memory set.
-            return file_path.name in self.dir_cache[dir_path]
-        # Directory not yet scanned — a single stat is much cheaper than a
-        # full iterdir() over SMB/NFS (iterdir can take seconds on big dirs).
-        try:
-            return file_path.exists()
-        except OSError:
-            return False
+        if dir_path not in self.dir_cache:
+            await self._scan_directory(dir_path)
+        return file_path.name in self.dir_cache.get(dir_path, set())
 
     async def _download_with_retry(
         self,
@@ -881,7 +901,7 @@ class Downloader:
 
         result_message = "[green]Downloaded"
 
-        if self._is_file_in_cache(existing_file_path):
+        if await self._is_file_in_cache(existing_file_path):
             result_message = "[cyan]Overwritten"
 
             if self.skip_existing:
@@ -901,8 +921,8 @@ class Downloader:
             # Usar stem_index para evitar re-escanear el mismo directorio 3 veces
             existing_exts = self._stem_index.get(stem)
             if existing_exts is None:
-                # stem no indexado aún — garantizar que el dir esté escaneado
-                self._scan_directory(existing_file_path.parent)
+                # stem no indexado aún — garantizar que el dir esté escaneado (async)
+                await self._scan_directory(existing_file_path.parent)
                 existing_exts = self._stem_index.get(stem, set())
 
             for ext in [".flac", ".m4a", ".mp4"]:

@@ -55,7 +55,9 @@ def callback(
     [link=https://buymeacoffee.com/oskvr][yellow]buy me a coffee[/link] \u2764
     """
     
-    console = Console()
+    # force_terminal=True: use ANSI renderer instead of the legacy Windows
+    # renderer which uses cp1252 and crashes on Unicode chars (e.g. ／ U+FF0F).
+    console = Console(force_terminal=True)
     
     # Configure logging with RichHandler to ensure messages appear above progress bars
     log_level = logging.DEBUG if DEBUG else logging.INFO

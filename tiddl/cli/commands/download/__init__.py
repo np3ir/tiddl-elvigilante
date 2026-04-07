@@ -478,7 +478,7 @@ def download_callback(
                 track = ctx.obj.api.get_track(resource.id)
                 album = ctx.obj.api.get_album(track.album.id)
 
-                ctx.obj.console.print(f"\n[bold green]🎵 Downloading Track:[/] {track.title}")
+                ctx.obj.console.print(f"\n[bold green]Downloading Track:[/] {track.title}")
                 ctx.obj.console.print(f"[dim]Track ID: {resource.id}[/]\n")
 
                 await handle_item(
@@ -515,7 +515,7 @@ def download_callback(
             elif resource_type == "video":
                 video = ctx.obj.api.get_video(resource.id)
 
-                ctx.obj.console.print(f"\n[bold blue]🎬 Downloading Video:[/] {video.title}")
+                ctx.obj.console.print(f"\n[bold blue]Downloading Video:[/] {video.title}")
                 ctx.obj.console.print(f"[dim]Video ID: {resource.id}[/]\n")
                 
                 # Fetch album info if available to populate {album.date} and other placeholders
@@ -570,7 +570,7 @@ def download_callback(
                         break
 
                 total_items = len(futures)
-                ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                ctx.obj.console.print(f"\nFound:")
                 ctx.obj.console.print(f"  • {total_items} items in the mix.")
                 ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
 
@@ -630,7 +630,7 @@ def download_callback(
                 try:
                     artist = ctx.obj.api.get_artist(resource.id)
                     artist_name = artist.name
-                    ctx.obj.console.print(f"\n[bold cyan]🎤 Downloading Artist:[/] {artist_name}")
+                    ctx.obj.console.print(f"\n[bold cyan]Downloading Artist:[/] {artist_name}")
                     ctx.obj.console.print(f"[dim]Artist ID: {resource.id}[/]\n")
                 except Exception as e:
                     artist_name = f"Artist {resource.id}"
@@ -783,7 +783,7 @@ def download_callback(
                 unique_albums = len(seen_album_ids)
                 total_items = unique_albums + artist_stats['total_videos']
                 
-                ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                ctx.obj.console.print(f"\nFound:")
                 ctx.obj.console.print(f"  • {unique_albums} albums (including all versions)")
                 if artist_stats['skipped_duplicates'] > 0:
                     ctx.obj.console.print(f"  • [yellow]{artist_stats['skipped_duplicates']} true duplicates skipped[/]")
@@ -824,7 +824,7 @@ def download_callback(
                 playlist_index = 0
                 playlist = ctx.obj.api.get_playlist(playlist_uuid=resource.id)
 
-                ctx.obj.console.print(f"\n[bold magenta]🎵 Downloading Playlist:[/] {playlist.title}")
+                ctx.obj.console.print(f"\n[bold magenta]Downloading Playlist:[/] {playlist.title}")
                 ctx.obj.console.print(f"[dim]Playlist ID: {resource.id}[/]\n")
                 ctx.obj.console.print(f"[dim]Fetching tracks...[/]")
 
@@ -865,7 +865,7 @@ def download_callback(
                         break
 
                 total_items = len(futures)
-                ctx.obj.console.print(f"\n[green]✓[/] Found:")
+                ctx.obj.console.print(f"\nFound:")
                 ctx.obj.console.print(f"  • {total_items} items in the playlist.")
                 ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
 
