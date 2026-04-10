@@ -380,6 +380,7 @@ def download_callback(
             async def download_album(album: Album):
                 offset = 0
                 futures = []
+                all_album_items = []  # collect all pages first for batch prefetch
 
                 cover: Union[Cover, None] = None
                 save_cover = ("album" in CONFIG.cover.allowed) and CONFIG.cover.save
@@ -402,6 +403,7 @@ def download_callback(
                     except Exception as e:
                         log.error(e)
 
+                # --- Page collection (all pages, no tasks yet) ---
                 while True:
                     album_items = None
                     for attempt in range(3):
@@ -422,34 +424,79 @@ def download_callback(
                     if not album_items:
                         break
 
-                    for album_item in album_items.items:
-                        futures.append(
-                            asyncio.create_task(handle_item(
-                                item=album_item.item,
-                                file_path=format_template(
-                                    template=resolve_template(ALBUM_TEMPLATE, CONFIG.templates.album),
-                                    item=album_item.item,
-                                    album=album,
-                                    quality=get_item_quality(album_item.item),
-                                    artist_separator=CONFIG.templates.artist_separator,
-                                ),
-                                track_metadata=Metadata(
-                                    cover_data=cover.data if cover else b"",
-                                    date=str(album.releaseDate) if album.releaseDate else "",
-                                    artist=album.artist.name if album.artist else "",
-                                    credits=album_item.credits,
-                                    album_review=album_review,
-                                    genre=album.genre or "",
-                                ),
-                            ))
-                        )
+                    all_album_items.extend(album_items.items)
 
                     offset += album_items.limit
                     if offset >= album_items.totalNumberOfItems:
                         break
 
+                # --- Batch DB prefetch: one SQL query for all tracks in this album ---
+                # Instead of one SELECT per track inside each task, we do a single
+                # SELECT ... IN (...) for all track IDs, then check file existence
+                # concurrently. Tracks confirmed on disk are skipped without creating
+                # a coroutine. Stale DB entries (file deleted) are cleaned up here too.
+                confirmed: dict = {}  # {track_id: Path} — tracks verified on disk
+                if downloader.skip_existing:
+                    track_ids = [
+                        ai.item.id
+                        for ai in all_album_items
+                        if isinstance(ai.item, Track)
+                    ]
+                    db_hits = downloader._db_batch_lookup(track_ids)
+
+                    if db_hits:
+                        # Check all found paths concurrently (one asyncio round instead of N)
+                        hit_items = list(db_hits.items())  # [(track_id, path), ...]
+                        exists_results = await asyncio.gather(
+                            *[asyncio.to_thread(p.exists) for _, p in hit_items],
+                            return_exceptions=True,
+                        )
+                        for (track_id, path), exists in zip(hit_items, exists_results):
+                            if isinstance(exists, Exception) or not exists:
+                                downloader._db_remove(track_id)
+                                log.debug(f"Track {track_id} was in DB but file missing, will re-download")
+                            else:
+                                confirmed[track_id] = path
+
+                # --- Build tasks — confirmed tracks are skipped, rest download normally ---
+                # confirmed-skipped tuples are pre-populated so save_m3u stays complete
+                skipped_with_path: list[tuple] = []
+                for album_item in all_album_items:
+                    item = album_item.item
+                    if isinstance(item, Track) and item.id in confirmed:
+                        confirmed_path = confirmed[item.id]
+                        downloader.rich_output.show_item_result(
+                            result_message="[yellow]Exists",
+                            item_description=f"[bold]{item.title}",
+                            item_path=confirmed_path,
+                        )
+                        skipped_with_path.append((confirmed_path, item))
+                        continue
+
+                    futures.append(
+                        asyncio.create_task(handle_item(
+                            item=item,
+                            file_path=format_template(
+                                template=resolve_template(ALBUM_TEMPLATE, CONFIG.templates.album),
+                                item=item,
+                                album=album,
+                                quality=get_item_quality(item),
+                                artist_separator=CONFIG.templates.artist_separator,
+                            ),
+                            track_metadata=Metadata(
+                                cover_data=cover.data if cover else b"",
+                                date=str(album.releaseDate) if album.releaseDate else "",
+                                artist=album.artist.name if album.artist else "",
+                                credits=album_item.credits,
+                                album_review=album_review,
+                                genre=album.genre or "",
+                            ),
+                        ))
+                    )
+
                 try:
-                    tracks_with_path = await asyncio.gather(*futures)
+                    downloaded_with_path = await asyncio.gather(*futures)
+                    tracks_with_path = skipped_with_path + list(downloaded_with_path)
                 except (asyncio.CancelledError, KeyboardInterrupt):
                     for f in futures:
                         if not f.done():

@@ -614,6 +614,28 @@ class Downloader:
         except Exception:
             pass
 
+    def _db_batch_lookup(self, track_ids: list) -> dict:
+        """Batch lookup multiple track IDs in one SQL query.
+
+        Replaces N individual _db_lookup() calls with a single
+        SELECT ... WHERE track_id IN (...) — one round-trip to SQLite
+        regardless of album size.
+
+        Returns {track_id: Path} for every track found in the DB.
+        Tracks not in the DB are simply absent from the result.
+        """
+        if not self._db or not track_ids:
+            return {}
+        try:
+            placeholders = ",".join("?" * len(track_ids))
+            rows = self._db.execute(
+                f"SELECT track_id, path FROM downloaded_tracks WHERE track_id IN ({placeholders})",
+                track_ids,
+            ).fetchall()
+            return {row[0]: Path(row[1]) for row in rows}
+        except Exception:
+            return {}
+
     async def _scan_directory(self, dir_path: Path) -> None:
         """Scans a directory and caches its contents.
 
