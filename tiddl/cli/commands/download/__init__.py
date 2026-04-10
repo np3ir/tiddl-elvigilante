@@ -343,21 +343,27 @@ def download_callback(
                                 track_metadata.cover_data = b""
 
                         if REWRITE_METADATA or was_downloaded:
-                            try:
-                                add_track_metadata(
-                                    path=download_path,
-                                    track=item,
-                                    lyrics=lyrics_subtitles,
-                                    album_artist=track_metadata.artist,
-                                    cover_data=track_metadata.cover_data,
-                                    date=track_metadata.date,
-                                    credits=track_metadata.credits,
-                                    comment=track_metadata.album_review,
-                                    genre=track_metadata.genre,
-                                    artist_separator=CONFIG.templates.artist_separator,
-                                )
-                            except (PermissionError, OSError) as e:
-                                log.warning(f"Could not write metadata (file locked or permission denied): {download_path} — {e}")
+                            for _attempt in range(3):
+                                try:
+                                    add_track_metadata(
+                                        path=download_path,
+                                        track=item,
+                                        lyrics=lyrics_subtitles,
+                                        album_artist=track_metadata.artist,
+                                        cover_data=track_metadata.cover_data,
+                                        date=track_metadata.date,
+                                        credits=track_metadata.credits,
+                                        comment=track_metadata.album_review,
+                                        genre=track_metadata.genre,
+                                        artist_separator=CONFIG.templates.artist_separator,
+                                    )
+                                    break
+                                except (PermissionError, OSError) as e:
+                                    if _attempt < 2:
+                                        log.warning(f"Metadata write blocked (attempt {_attempt + 1}/3), retrying in 2s: {download_path}")
+                                        await asyncio.sleep(2)
+                                    else:
+                                        log.warning(f"Could not write metadata after 3 attempts, skipping: {download_path} — {e}")
 
                     elif isinstance(item, Video):
                         if REWRITE_METADATA or was_downloaded:
