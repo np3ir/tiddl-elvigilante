@@ -5,6 +5,8 @@ from datetime import datetime
 import re
 import logging
 import unicodedata
+import shutil
+import tempfile
 
 from mutagen.flac import FLAC as MutagenFLAC, Picture
 from mutagen.mp4 import MP4 as MutagenMP4, MP4Cover
@@ -125,7 +127,31 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
         except Exception as e:
             log.debug(f"Skipping invalid credit tag '{entry.type}': {e}")
 
-    mutagen.save()
+    try:
+        mutagen.save()
+    except (OSError, Exception) as e:
+        # On Windows SMB shares, mutagen's resize_bytes() can fail with
+        # [Errno 22] Invalid argument because seek()+read() doesn't work
+        # reliably over SMB. Fallback: write metadata to a local temp file
+        # then replace the original.
+        log.debug(f"Direct FLAC save failed ({e}), retrying via temp file...")
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".flac")
+        tmp = Path(tmp_path)
+        try:
+            import os
+            os.close(tmp_fd)
+            shutil.copy2(track_path, tmp)
+            tmp_mutagen = MutagenFLAC(tmp)
+            tmp_mutagen.update(mutagen)
+            tmp_mutagen.save()
+            shutil.move(str(tmp), str(track_path))
+            log.debug(f"FLAC metadata saved via temp file for {track_path.name}")
+        except Exception as e2:
+            log.warning(f"Could not write FLAC metadata for {track_path.name}: {e2}")
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 # =====================
