@@ -284,7 +284,7 @@ class TidalAPI:
         """
         try:
             from .client import API_V1_URL
-            res = self.session.get(
+            res = self.client.session.get(
                 f"{API_V1_URL}/tracks/{track_id}/contributors",
                 params={"countryCode": self.country_code},
                 expire_after=3600,
@@ -292,10 +292,7 @@ class TidalAPI:
             if res.status_code != 200:
                 return []
             items = res.json().get("items", [])
-            return [
-                item["name"] for item in items
-                if item.get("role") == "Featured Artist" and item.get("name")
-            ]
+            return [i["name"] for i in items if i.get("role") == "Featured Artist" and i.get("name")]
         except Exception as e:
             log.debug(f"Could not fetch contributors for track {track_id}: {e}")
             return []
