@@ -34,6 +34,26 @@ from tiddl.cli.commands.subcommands import register_subcommands
 from .downloader import Downloader
 from .output import RichOutput
 
+
+def enrich_track_artists(item: Track, api) -> None:
+    """Agrega Featured Artists faltantes del endpoint /contributors.
+
+    Tidal a veces elimina featured artists del array artists[] principal
+    pero los mantiene en /contributors. Mutamos la lista in-place para que
+    tanto format_template (filename) como add_track_metadata (tags) los incluyan.
+    """
+    if not isinstance(item, Track):
+        return
+    try:
+        existing = {a.name.lower() for a in item.artists}
+        featured = api.get_featured_from_contributors(item.id)
+        for name in featured:
+            if name.lower() not in existing:
+                item.artists.append(Track.Artist(id=0, name=name, type="FEATURED"))
+                existing.add(name.lower())
+    except Exception:
+        pass
+
 download_command = typer.Typer(name="download")
 register_subcommands(download_command)
 
@@ -463,6 +483,7 @@ def download_callback(
                 skipped_with_path: list[tuple] = []
                 for album_item in all_album_items:
                     item = album_item.item
+                    enrich_track_artists(item, ctx.obj.api)
                     if isinstance(item, Track) and item.id in confirmed:
                         confirmed_path = confirmed[item.id]
                         downloader.rich_output.show_item_result(
@@ -533,6 +554,7 @@ def download_callback(
             if resource_type == "track":
                 track = ctx.obj.api.get_track(resource.id)
                 album = ctx.obj.api.get_album(track.album.id)
+                enrich_track_artists(track, ctx.obj.api)
 
                 ctx.obj.console.print(f"\n[bold green]Downloading Track:[/] {track.title}")
                 ctx.obj.console.print(f"[dim]Track ID: {resource.id}[/]\n")
@@ -608,6 +630,7 @@ def download_callback(
                         break
 
                     for mix_item in mix_items.items:
+                        enrich_track_artists(mix_item.item, ctx.obj.api)
                         futures.append(
                             asyncio.create_task(handle_item(
                                 item=mix_item.item,
@@ -891,6 +914,7 @@ def download_callback(
 
                     for playlist_item in playlist_items.items:
                         playlist_index += 1
+                        enrich_track_artists(playlist_item.item, ctx.obj.api)
                         template = resolve_template(PLAYLIST_TEMPLATE, CONFIG.templates.playlist)
 
                         if "{album" in template:

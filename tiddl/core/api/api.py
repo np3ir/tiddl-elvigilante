@@ -275,6 +275,31 @@ class TidalAPI:
             expire_after=3600
         )
 
+    def get_featured_from_contributors(self, track_id: ID) -> list[str]:
+        """Return names of Featured Artists from the /contributors endpoint.
+
+        Tidal sometimes removes featured artists from the main artists array
+        but keeps them in the /contributors endpoint. This method fetches
+        that endpoint and returns only the Featured Artist names.
+        """
+        try:
+            from .client import API_V1_URL
+            res = self.session.get(
+                f"{API_V1_URL}/tracks/{track_id}/contributors",
+                params={"countryCode": self.country_code},
+                expire_after=3600,
+            )
+            if res.status_code != 200:
+                return []
+            items = res.json().get("items", [])
+            return [
+                item["name"] for item in items
+                if item.get("role") == "Featured Artist" and item.get("name")
+            ]
+        except Exception as e:
+            log.debug(f"Could not fetch contributors for track {track_id}: {e}")
+            return []
+
     def get_track_mix(self, track_id: ID) -> TrackMix:
         """Obtener mix relacionado al track"""
         return self._fetch_with_retry(
