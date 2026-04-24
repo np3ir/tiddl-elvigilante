@@ -1110,6 +1110,11 @@ class Downloader:
                     urls, _ = parse_track_stream(stream)
                     # Use stream.audioQuality (actual delivery) not q (requested quality).
                     # TIDAL can downgrade silently; using q would save M4A content as .flac.
+                    if stream.audioQuality != q:
+                        self.rich_output.console.print(
+                            f"[yellow]⚠ TIDAL degraded quality for '{display_title}': "
+                            f"requested {q} → got {stream.audioQuality}[/]"
+                        )
                     chosen_filename = get_existing_track_filename(item.audioQuality, stream.audioQuality, file_path)
 
                     # Prepare path for Windows Long Path / UNC
