@@ -1100,6 +1100,7 @@ class Downloader:
 
                         # Catch all exceptions (ApiError, HTTPError, etc.) to allow fallback or skip
                         log.warning(f"Quality '{q}' failed for {item.id}: {e}")
+                        self.rich_output.console.print(f"[yellow]⚠ Quality {q} failed: {e}[/]")
 
                         # FIX: Fail fast on Rate Limit to avoid "Error Could not download..." spam
                         if "429" in str(e) or "Limit" in str(e):

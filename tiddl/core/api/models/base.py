@@ -131,7 +131,7 @@ class TrackStream(BaseModel):
 
     trackId: int
     assetPresentation: Literal["FULL"]
-    audioMode: Literal["STEREO"]
+    audioMode: str  # STEREO, DOLBY_ATMOS, SONY_360RA, etc.
     audioQuality: TrackQuality
     manifestMimeType: Literal["application/dash+xml", "application/vnd.tidal.bts"]
     manifestHash: str
