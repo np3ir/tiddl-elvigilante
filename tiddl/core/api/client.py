@@ -77,8 +77,6 @@ class TidalClientImproved:
         self.session.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
-            "User-Agent": "TIDAL_ANDROID/1039 okhttp/3.14.9",  # Camouflage
-            "Connection": "keep-alive",
         }
         self._token = token
     

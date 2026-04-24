@@ -58,14 +58,9 @@ class TidalAPI:
         self.country_code = country_code
         self._rate_limit_delay = 0.0
 
-        # TUNING DE RENDIMIENTO + CAMUFLAJE ANDROID
         if hasattr(self.client, 'session'):
             adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=3)
             self.client.session.mount('https://', adapter)
-            self.client.session.headers.update({
-                'User-Agent': 'TIDAL_ANDROID/1039 okhttp/3.14.9',
-                'Connection': 'keep-alive'
-            })
 
     def _fetch_with_retry(self, *args: Any, **kwargs: Any):
         # Adaptive Throttling
