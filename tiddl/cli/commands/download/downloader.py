@@ -1108,7 +1108,9 @@ class Downloader:
 
                         continue
                     urls, _ = parse_track_stream(stream)
-                    chosen_filename = get_existing_track_filename(item.audioQuality, q, file_path)
+                    # Use stream.audioQuality (actual delivery) not q (requested quality).
+                    # TIDAL can downgrade silently; using q would save M4A content as .flac.
+                    chosen_filename = get_existing_track_filename(item.audioQuality, stream.audioQuality, file_path)
 
                     # Prepare path for Windows Long Path / UNC
                     download_path = self.download_path / chosen_filename
