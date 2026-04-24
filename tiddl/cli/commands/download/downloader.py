@@ -465,7 +465,9 @@ class FileIntegrityChecker:
 
         # FLAC
         if ext == '.flac':
-            return header.startswith(b'fLaC')
+            # TIDAL delivers HI_RES_LOSSLESS as an M4A container; extract_flac()
+            # converts it after this check, so accept both signatures.
+            return header.startswith(b'fLaC') or (len(header) >= 8 and header[4:8] == b'ftyp')
 
         # MP4/M4A
         elif ext in ['.m4a', '.mp4', '.m4v']:
