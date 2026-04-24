@@ -241,10 +241,14 @@ class TidalAPI:
 
     def get_track_stream(self, track_id: ID = None, id: ID = None, quality: TrackQuality = "LOSSLESS"):
         real_id = track_id or id
-        return self._fetch_with_retry(TrackStream, f"tracks/{real_id}/playbackinfopostpaywall",
-                                      {"countryCode": self.country_code, "audioquality": quality,
-                                       "playbackmode": "STREAM", "assetpresentation": "FULL"},
-                                      expire_after=DO_NOT_CACHE)
+        params = {"countryCode": self.country_code, "audioquality": quality,
+                  "playbackmode": "STREAM", "assetpresentation": "FULL"}
+        try:
+            return self._fetch_with_retry(TrackStream, f"tracks/{real_id}/playbackinfopostpaywall/v4",
+                                          params, expire_after=DO_NOT_CACHE)
+        except Exception:
+            return self._fetch_with_retry(TrackStream, f"tracks/{real_id}/playbackinfopostpaywall",
+                                          params, expire_after=DO_NOT_CACHE)
 
     def get_video(self, video_id: ID = None, id: ID = None):
         real_id = video_id or id

@@ -163,7 +163,7 @@ class TokenStorage:
 
 def get_auth_credentials() -> tuple[str, str]:
     # Default credentials (base64 encoded)
-    DEFAULT_B64 = "ZlgySnhkbW50WldLMGl4VDsxTm45QWZEQWp4cmdKRkpiS05XTGVBeUtHVkdtSU51WFBQTEhWWEF2eEFnPQ=="
+    DEFAULT_B64 = "NE4zbjZRMXg5NUxMNUs3cDtvS09YZkpXMzcxY1g2eGFaMFB5aGdHTkJkTkxsQlpkNEFLS1lvdWdNamlrPQ=="
     
     try:
         # Try to load from environment variable first
@@ -203,7 +203,7 @@ class AuthClientImproved:
             except ValueError:
                 # Fallback a credenciales hardcoded
                 credentials = TidalCredentials.from_base64(
-                    "ZlgySnhkbW50WldLMGl4VDsxTm45QWZEQWp4cmdKRkpiS05XTGVBeUtHVkdtSU51WFBQTEhWWEF2eEFnPQ=="
+                    "NE4zbjZRMXg5NUxMNUs3cDtvS09YZkpXMzcxY1g2eGFaMFB5aGdHTkJkTkxsQlpkNEFLS1lvdWdNamlrPQ=="
                 )
         
         self.auth_url = AUTH_URL
