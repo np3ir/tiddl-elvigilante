@@ -506,7 +506,7 @@ def download_callback(
                             ),
                             track_metadata=Metadata(
                                 cover_data=cover.data if cover else b"",
-                                date=str(album.streamStartDate or album.releaseDate or "")[:10],
+                                date=str(album.releaseDate) if album.releaseDate else "",
                                 artist=album.artist.name if album.artist else "",
                                 credits=album_item.credits,
                                 album_review=album_review,
