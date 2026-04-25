@@ -77,14 +77,13 @@ def parse_track_stream(track_stream: TrackStream) -> tuple[list[str], str]:
         # Default case if none of the above match, though it's unlikely with current data
         raise ValueError(f"Unsupported manifest MIME type: {track_stream.manifestMimeType}")
 
-    if codecs == "flac":
+    if codecs == "flac" and track_stream.audioQuality != "HI_RES_LOSSLESS":
         file_extension = ".flac"
-        if track_stream.audioQuality == "HI_RES_LOSSLESS":
-            file_extension = ".m4a"
-    elif codecs.startswith("mp4"):
-        file_extension = ".m4a"
+    elif codecs in ("mqa",):
+        file_extension = ".flac"
     else:
-        raise ValueError(f"Unknown codecs `{codecs}` (trackId {track_stream.trackId})")
+        # mp4a.*, eac3 (Dolby Atmos), ac4 (Dolby AC-4), mha1 (360RA), alac, HI_RES_LOSSLESS flac
+        file_extension = ".m4a"
 
     return urls, file_extension
 
