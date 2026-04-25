@@ -45,7 +45,8 @@ class Metadata:
     disc_number: str
     copyright: str | None
     album_artist: str
-    artists: str
+    artists: str          # separator-joined, used for filenames
+    artists_list: list[str] = field(default_factory=list)  # per-entry, used for tags
     album_title: str
     date: str
     isrc: str
@@ -95,7 +96,7 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
             "DISCNUMBER": metadata.disc_number,
             "ALBUM": metadata.album_title,
             "ALBUMARTIST": metadata.album_artist,
-            "ARTIST": metadata.artists,
+            "ARTIST": metadata.artists_list or [metadata.artists],
             "DATE": str(date.year) if date else "",
             "COPYRIGHT": metadata.copyright or "",
             "ISRC": metadata.isrc,
@@ -187,7 +188,7 @@ def add_m4a_metadata(track_path: Path, metadata: Metadata) -> None:
     mp4["\xa9nam"] = metadata.title                    # Title
     mp4["\xa9alb"] = metadata.album_title              # Album
     mp4["aART"] = metadata.album_artist                # Album artist
-    mp4["\xa9ART"] = metadata.artists                  # Track artists
+    mp4["\xa9ART"] = metadata.artists_list or [metadata.artists]  # Track artists (multi-value)
     
     # Date / Year (extract year only)
     if metadata.date:
@@ -254,14 +255,16 @@ def add_track_metadata(
     Title is cleaned to remove 'feat.' parts, while the full artist list
     (main + featured) is stored in the ARTIST/©ART field.
     """
-    # Build full artist string (main + featured etc.)
+    # Build artist list — sorted for consistency
     artists_sorted = sorted(a.name.strip() for a in track.artists)
+    # Separator-joined string → used for filenames and folder names
     artists_str = artist_separator.join(artists_sorted)
+    # Individual list → written as repeated tags in FLAC/M4A (spec-correct)
+    artists_list = artists_sorted
 
     # Original title + version from Tidal
     raw_title = f"{track.title} ({track.version})" if track.version else track.title
-    all_artists = [a.name.strip() for a in track.artists]
-    all_artists_str = ", ".join(all_artists) or artists_str
+    all_artists_str = ", ".join(artists_sorted) or artists_str
     clean_title = clean_track_title(raw_title, all_artists_str)
 
     metadata = Metadata(
@@ -271,6 +274,7 @@ def add_track_metadata(
         copyright=track.copyright,
         album_artist=album_artist,
         artists=artists_str,
+        artists_list=artists_list,
         album_title=track.album.title,
         date=date,
         isrc=track.isrc,
