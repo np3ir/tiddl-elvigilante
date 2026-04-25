@@ -6,6 +6,7 @@ from rich.console import Console
 
 from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData
 from tiddl.core.auth import AuthAPI, AuthClientError
+from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS
 
 from typing_extensions import Annotated
 
@@ -18,14 +19,21 @@ auth_command = typer.Typer(
 
 # TODO add context and load auth data from ctx
 @auth_command.command(help="Login with your Tidal account.")
-def login():
+def login(
+    TV: Annotated[
+        bool,
+        typer.Option("--tv", help="Use TV device flow (alternative client, works when default is blocked)."),
+    ] = False,
+):
     loaded_auth_data = load_auth_data()
 
     if loaded_auth_data.token:
         console.print("[cyan bold]Already logged in.")
         raise typer.Exit()
 
-    auth_api = AuthAPI()
+    from tiddl.core.auth.client import AuthClient
+    credentials = TV_CREDENTIALS if TV else None
+    auth_api = AuthAPI(client=AuthClient(credentials=credentials))
     device_auth = auth_api.get_device_auth()
 
     uri = f"https://{device_auth.verificationUriComplete}"
@@ -49,6 +57,7 @@ def login():
                     expires_at=auth.expires_in + int(time()),
                     user_id=str(auth.user_id),
                     country_code=auth.user.countryCode,
+                    client_id=credentials.client_id if credentials else None,
                 )
                 save_auth_data(auth_data)
                 status.console.print("[bold green]Logged in!")
@@ -117,7 +126,7 @@ def refresh(
         )
         return
 
-    auth_api = AuthAPI()
+    auth_api = AuthAPI(client=get_auth_client_for(loaded_auth_data.client_id))
     auth_data = auth_api.refresh_token(loaded_auth_data.refresh_token)
 
     loaded_auth_data.token = auth_data.access_token

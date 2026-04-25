@@ -8,6 +8,7 @@ from rich.console import Console
 from tiddl.core.api import TidalClientImproved, TidalAPI
 from tiddl.cli.config import APP_PATH, CONFIG
 from tiddl.core.auth import AuthAPI
+from tiddl.core.auth.client import get_auth_client_for
 from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data
 from tiddl.cli.utils.resource import TidalResource
 
@@ -15,7 +16,6 @@ from tiddl.cli.utils.resource import TidalResource
 class ContextObject:
     console: Console
     resources: list[TidalResource]
-    auth_api: AuthAPI
     _api: TidalAPI | None
     api_omit_cache: bool
     debug_path: Path | None
@@ -25,7 +25,6 @@ class ContextObject:
     ) -> None:
         self.console = console
         self.resources = []
-        self.auth_api = AuthAPI()
         self._api = None
         self.api_omit_cache = api_omit_cache
         self.debug_path = debug_path
@@ -43,6 +42,8 @@ class ContextObject:
 
         refresh_token = auth_data.refresh_token
         assert refresh_token, "Refresh Token is missing. Use `tiddl auth login`"
+
+        auth_api = AuthAPI(client=get_auth_client_for(auth_data.client_id))
 
         from filelock import FileLock
         refresh_lock = FileLock(APP_PATH / "auth_refresh.lock")
@@ -68,7 +69,7 @@ class ContextObject:
                      return None
                      
                 try:
-                    auth_response = self.auth_api.refresh_token(current_refresh_token)
+                    auth_response = auth_api.refresh_token(current_refresh_token)
                     
                     latest_auth.token = auth_response.access_token
                     latest_auth.expires_at = auth_response.expires_in + int(time())

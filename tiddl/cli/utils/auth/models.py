@@ -8,3 +8,4 @@ class AuthData(BaseModel):
     expires_at: int = 0
     user_id: str | None = None
     country_code: str | None = None
+    client_id: str | None = None  # stored to use correct credentials on refresh

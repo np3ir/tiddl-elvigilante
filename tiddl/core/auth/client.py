@@ -164,19 +164,32 @@ class TokenStorage:
 def get_auth_credentials() -> tuple[str, str]:
     # Default credentials (base64 encoded)
     DEFAULT_B64 = "ZlgySnhkbW50WldLMGl4VDsxTm45QWZEQWp4cmdKRkpiS05XTGVBeUtHVkdtSU51WFBQTEhWWEF2eEFnPQ=="
-    
+
     try:
         # Try to load from environment variable first
         creds = TidalCredentials.from_env()
     except ValueError:
         # Fallback to default credentials
         creds = TidalCredentials.from_base64(DEFAULT_B64)
-        
+
     return creds.to_tuple()
 
 
 AUTH_URL = "https://auth.tidal.com/v1/oauth2"
 CLIENT_ID, CLIENT_SECRET = get_auth_credentials()
+
+# TV device flow credentials (same client used by OrpheusDL TV session)
+TV_CREDENTIALS = TidalCredentials(
+    client_id="4N3n6Q1x95LL5K7p",
+    client_secret="oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik=",
+)
+
+
+def get_auth_client_for(client_id: str | None) -> "AuthClient":
+    """Returns the right AuthClient based on the client_id stored in auth.json."""
+    if client_id and client_id == TV_CREDENTIALS.client_id:
+        return AuthClient(credentials=TV_CREDENTIALS)
+    return AuthClient()
 
 JSON: TypeAlias = dict[str, Any]
 
@@ -512,10 +525,14 @@ class AuthClientImproved:
 
 class AuthClient:
 
-    def __init__(self) -> None:
+    def __init__(self, credentials: TidalCredentials | None = None) -> None:
         self.auth_url = AUTH_URL
-        self.client_id = CLIENT_ID
-        self.client_secret = CLIENT_SECRET
+        if credentials is not None:
+            self.client_id = credentials.client_id
+            self.client_secret = credentials.client_secret
+        else:
+            self.client_id = CLIENT_ID
+            self.client_secret = CLIENT_SECRET
 
     def get_device_auth(self) -> JSON:
         res = request(
