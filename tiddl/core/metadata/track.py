@@ -45,11 +45,11 @@ class Metadata:
     disc_number: str
     copyright: str | None
     album_artist: str
-    artists: str          # separator-joined, used for filenames
-    artists_list: list[str] = field(default_factory=list)  # per-entry, used for tags
+    artists: str
     album_title: str
     date: str
     isrc: str
+    artists_list: list[str] = field(default_factory=list)
     bpm: str | None = None
     lyrics: str | None = None
     credits: list[AlbumItemsCredits.ItemWithCredits.CreditsEntry] = field(
