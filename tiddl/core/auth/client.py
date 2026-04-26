@@ -571,11 +571,10 @@ class AuthClient:
             f"{self.auth_url}/token",
             data={
                 "client_id": self.client_id,
+                "client_secret": self.client_secret,
                 "refresh_token": refresh_token,
                 "grant_type": "refresh_token",
-                "scope": "r_usr+w_usr+w_sub",
             },
-            auth=(self.client_id, self.client_secret),
         )
 
         res.raise_for_status()

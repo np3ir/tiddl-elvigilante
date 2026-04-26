@@ -67,6 +67,7 @@ class TidalClientImproved:
         self._request_interval = 60.0 / safe_rpm
         self._rate_lock = threading.Lock()
         self._rate_limit_delay: float = 0.0  # Adaptive: grows on 429, shrinks on success
+        self._refresh_blocked: bool = False  # Set when refresh returns a permanent 4xx
         
         self.session = CachedSession(
             cache_name=cache_name,
@@ -95,29 +96,25 @@ class TidalClientImproved:
         )
 
     def _check_token_expiry(self) -> bool:
-        """Checks if the token is about to expire (< 1 hour remaining)"""
+        """Returns False if the token has actually expired (0s remaining)."""
         if not self._token_expiry:
-            return True  # We don't know, assume valid
-        
-        current_time = int(time.time())
-        time_remaining = self._token_expiry - current_time
-        
-        # If less than 1 hour (3600 seconds) remains, renew
-        if time_remaining < 3600:
-            log.warning(f"Token expiring soon ({time_remaining}s remaining)")
+            return True
+        return int(time.time()) < self._token_expiry
+
+    def _should_proactive_refresh(self) -> bool:
+        """Returns True if < 1h remains AND refresh is not permanently blocked."""
+        if self._refresh_blocked or not self._token_expiry:
             return False
-        
-        return True
-    
+        return (self._token_expiry - int(time.time())) < 3600
+
     def _auto_refresh_token(self, force_refresh: bool = False) -> bool:
-        """Tries to renew the token automatically"""
+        """Tries to renew the token automatically."""
+        if self._refresh_blocked and not force_refresh:
+            return False
         if not self._refresh_token or not self.on_token_expiry:
             return False
-        
+
         try:
-            # Expects (access_token, expires_at, refresh_token)
-            # Request at least 3600s validity if we are proactively refreshing (force_refresh=False)
-            # If force_refresh=True, validity check is skipped inside callback anyway.
             result = self.on_token_expiry(force_refresh=force_refresh, min_validity=3600)
             if result:
                 new_token, new_expiry, new_refresh_token = result
@@ -125,12 +122,21 @@ class TidalClientImproved:
                 self._token_expiry = new_expiry
                 if new_refresh_token:
                     self._refresh_token = new_refresh_token
-                
+                self._refresh_blocked = False
                 log.info(f"Token refreshed successfully. Expires at: {new_expiry}")
                 return True
+        except HTTPError as e:
+            if e.response is not None and 400 <= e.response.status_code < 500:
+                self._refresh_blocked = True
+                log.warning(
+                    "Token refresh blocked by TIDAL (account flagged). "
+                    "Current token will be used until it expires, then run: tiddl auth login --tv"
+                )
+            else:
+                log.error(f"Failed to refresh token: {e}")
         except Exception as e:
             log.error(f"Failed to refresh token: {e}")
-        
+
         return False
     
     def fetch(
@@ -151,8 +157,8 @@ class TidalClientImproved:
         - Improved debugging
         """
         
-        # Check token expiration
-        if not self._check_token_expiry():
+        # Proactive refresh if < 1h remaining and not permanently blocked
+        if self._should_proactive_refresh():
             self._auto_refresh_token()
         
         # Select base URL based on version
