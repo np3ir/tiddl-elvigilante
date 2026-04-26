@@ -4,6 +4,8 @@ from datetime import datetime
 from time import time, sleep
 from rich.console import Console
 
+from requests.exceptions import HTTPError
+
 from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData
 from tiddl.core.auth import AuthAPI, AuthClientError
 from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS
@@ -126,12 +128,18 @@ def refresh(
         )
         return
 
-    auth_api = AuthAPI(client=get_auth_client_for(loaded_auth_data.client_id))
-    auth_data = auth_api.refresh_token(loaded_auth_data.refresh_token)
-
-    loaded_auth_data.token = auth_data.access_token
-    loaded_auth_data.expires_at = auth_data.expires_in + int(time())
-
-    save_auth_data(loaded_auth_data)
-
-    console.print("[bold green]Auth token has been refreshed!")
+    try:
+        auth_api = AuthAPI(client=get_auth_client_for(loaded_auth_data.client_id))
+        auth_data = auth_api.refresh_token(loaded_auth_data.refresh_token)
+        loaded_auth_data.token = auth_data.access_token
+        loaded_auth_data.expires_at = auth_data.expires_in + int(time())
+        save_auth_data(loaded_auth_data)
+        console.print("[bold green]Auth token has been refreshed!")
+    except HTTPError as e:
+        if e.response is not None and 400 <= e.response.status_code < 500:
+            console.print(
+                "[yellow]Token refresh blocked by TIDAL — continuing with current token. "
+                "Run [bold]tiddl auth login --tv[/bold] when it expires."
+            )
+        else:
+            raise
