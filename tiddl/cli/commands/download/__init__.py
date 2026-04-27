@@ -184,6 +184,24 @@ def download_callback(
             help="Videos handling: 'none' to exclude, 'allow' to include, 'only' to download videos only.",
         ),
     ] = CONFIG.download.videos_filter,
+    ARTIST_CONCURRENCY: Annotated[
+        int,
+        typer.Option(
+            "--concurrency",
+            "-c",
+            help="Max albums downloading in parallel for artist downloads. 0 = unlimited.",
+            min=0,
+        ),
+    ] = 0,
+    ARTIST_DELAY: Annotated[
+        float,
+        typer.Option(
+            "--delay",
+            "-d",
+            help="Max random delay in seconds before each album starts (artist downloads only). Staggers API requests.",
+            min=0.0,
+        ),
+    ] = 0.0,
 ):
     """
     Download Tidal resources.
@@ -697,7 +715,18 @@ def download_callback(
                 # IMPROVED ARTIST DOWNLOAD with SMART deduplication
                 # Respects: different qualities, explicit/clean, special editions
                 # ============================================================
-                
+
+                _sem = asyncio.Semaphore(ARTIST_CONCURRENCY) if ARTIST_CONCURRENCY > 0 else None
+
+                async def download_album_throttled(album):
+                    if ARTIST_DELAY > 0:
+                        await asyncio.sleep(random.uniform(0, ARTIST_DELAY))
+                    if _sem:
+                        async with _sem:
+                            await download_album(album)
+                    else:
+                        await download_album(album)
+
                 futures = []
                 seen_album_ids = set()  # Use album.id instead of title for proper deduplication
                 artist_stats = {
@@ -858,7 +887,7 @@ def download_callback(
                 for album in albums_to_download:
                     if album.id not in seen_album_ids:
                         seen_album_ids.add(album.id)
-                        futures.append(asyncio.create_task(download_album(album)))
+                        futures.append(asyncio.create_task(download_album_throttled(album)))
                 
                 # Show what we're about to download
                 unique_albums = len(seen_album_ids)
