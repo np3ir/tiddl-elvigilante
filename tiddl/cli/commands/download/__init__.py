@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import random
 import typer
 import asyncio
 import time
@@ -851,9 +852,10 @@ def download_callback(
                             # Current is better or equal
                             artist_stats['skipped_duplicates'] += 1
                 
-                # Queue the selected best versions
-                for album in unique_map.values():
-                    # Track seen IDs just in case (though map keys should handle it)
+                # Queue the selected best versions in random order
+                albums_to_download = list(unique_map.values())
+                random.shuffle(albums_to_download)
+                for album in albums_to_download:
                     if album.id not in seen_album_ids:
                         seen_album_ids.add(album.id)
                         futures.append(asyncio.create_task(download_album(album)))
