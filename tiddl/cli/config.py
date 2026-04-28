@@ -64,6 +64,8 @@ class Config(BaseModel):
         videos_filter: VIDEOS_FILTER_LITERAL = "none"
         update_mtime: bool = False
         rewrite_metadata: bool = False
+        artist_concurrency: int = 0
+        artist_delay: float = 0.0
 
         @validator("download_path", "scan_path", "video_download_path", pre=True, always=True)
         def str_to_path(cls, v):

@@ -192,7 +192,7 @@ def download_callback(
             help="Max albums downloading in parallel for artist downloads. 0 = unlimited.",
             min=0,
         ),
-    ] = 0,
+    ] = CONFIG.download.artist_concurrency,
     ARTIST_DELAY: Annotated[
         float,
         typer.Option(
@@ -201,7 +201,7 @@ def download_callback(
             help="Max random delay in seconds before each album starts (artist downloads only). Staggers API requests.",
             min=0.0,
         ),
-    ] = 0.0,
+    ] = CONFIG.download.artist_delay,
 ):
     """
     Download Tidal resources.
