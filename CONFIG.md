@@ -128,6 +128,24 @@ artist_separator = " / "
 - **Default**: none
 - How to handle music videos
 
+### `artist_concurrency`
+- **Type**: integer
+- **Default**: 0 (unlimited)
+- **Recommended**: 3
+- Max number of albums downloading in parallel when downloading a full artist. 0 means no limit. Lower values reduce API pressure and lower the chance of triggering abuse detection.
+
+### `artist_delay`
+- **Type**: float (seconds)
+- **Default**: 0.0
+- **Recommended**: 30.0
+- Max random delay before each album starts downloading (artist downloads only). Each album waits a random time between 0 and this value before starting. Staggers API requests to avoid sustained hammering.
+- **Example**:
+  ```toml
+  [download]
+  artist_concurrency = 3    # at most 3 albums at once
+  artist_delay = 30.0       # each album starts after a random 0–30s pause
+  ```
+
 ---
 
 ## 📝 [metadata] Section
@@ -306,6 +324,8 @@ singles_filter = "include"
 videos_filter = "allow"
 update_mtime = false
 rewrite_metadata = true
+artist_concurrency = 3
+artist_delay = 30.0
 
 [metadata]
 enable = true
