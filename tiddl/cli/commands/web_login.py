@@ -57,7 +57,10 @@ async def _capture_via_cdp() -> AuthData | None:
     """
     Capture token from existing Chrome via CDP.
     Chrome must be running with --remote-debugging-port=9222.
-    Uses the real Chrome session — zero bot detection risk.
+
+    Creates a new Playwright-controlled page inside the existing Chrome context
+    so request events fire correctly. The page uses Chrome's real session
+    (cookies/profile) — zero bot detection risk.
     """
     try:
         from playwright.async_api import async_playwright
@@ -76,37 +79,34 @@ async def _capture_via_cdp() -> AuthData | None:
 
             context = contexts[0]
 
+            # Open a NEW page — Playwright controls it so request events fire
+            page = await context.new_page()
+
             def on_request(request):
                 if "api.tidal.com" in request.url and not captured:
                     auth = request.headers.get("authorization", "")
                     if auth.startswith("Bearer "):
                         captured["token"] = auth[7:]
 
-            context.on("request", on_request)
+            page.on("request", on_request)
 
-            # Find existing tidal page or open one
-            tidal_page = next(
-                (pg for pg in context.pages if "tidal.com" in pg.url), None
-            )
-            if not tidal_page:
-                tidal_page = await context.new_page()
-                await tidal_page.goto("https://listen.tidal.com/")
-            else:
-                # Trigger an API call on the existing page
-                try:
-                    await tidal_page.evaluate(
-                        "() => fetch('https://api.tidal.com/v1/sessions', "
-                        "{credentials: 'include'})"
-                    )
-                except Exception:
-                    pass
+            await page.goto("https://listen.tidal.com/")
 
-            for _ in range(20):
+            # Trigger API call explicitly after load
+            for i in range(25):
                 if captured:
                     break
+                if i == 4:
+                    try:
+                        await page.evaluate(
+                            "() => fetch('https://api.tidal.com/v1/sessions', "
+                            "{credentials: 'include'})"
+                        )
+                    except Exception:
+                        pass
                 await asyncio.sleep(1)
 
-            # Disconnect without closing Chrome
+            await page.close()
             await browser.close()
 
     except Exception as e:
@@ -248,12 +248,18 @@ def web_login():
         if auth_data:
             _save_and_print(auth_data)
             return
-        console.print("[yellow]CDP no capturó token. Abriendo Chromium...[/]\n")
+        console.print(
+            "[yellow]CDP conectó pero no capturó token.[/]\n"
+            "[dim]Si es la primera vez, inicia sesión en tidal.com en la ventana de Chrome\n"
+            "que abrió 'tiddl auth launch-chrome' y vuelve a correr este comando.[/]\n"
+        )
 
     else:
-        console.print("[dim]Chrome no está en modo debug. Para usar tu Chrome existente:[/]")
-        console.print("[dim]  tiddl auth launch-chrome[/]\n")
-        console.print("[cyan]Abriendo Chromium...[/]\n")
+        console.print("[dim]Chrome no está en modo debug. Para evitar detección futura:[/]")
+        console.print("[dim]  tiddl auth launch-chrome   → abre Chrome debug[/]")
+        console.print("[dim]  Inicia sesión en tidal.com en esa ventana[/]")
+        console.print("[dim]  tiddl auth web-login       → captura sin bot detection[/]\n")
+        console.print("[cyan]Abriendo Chromium (fallback)...[/]\n")
 
     # Fallback: Playwright Chromium
     auth_data = asyncio.run(_capture_via_playwright(silent=False))
