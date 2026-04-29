@@ -425,6 +425,9 @@ def download_callback(
                                         await asyncio.sleep(2)
                                     else:
                                         log.warning(f"Could not write metadata after 3 attempts, skipping: {download_path} — {e}")
+                                except Exception as e:
+                                    log.warning(f"Metadata write failed for {download_path}, skipping: {e}")
+                                    break
 
                     elif isinstance(item, Video):
                         if REWRITE_METADATA or was_downloaded:

@@ -289,7 +289,20 @@ def add_track_metadata(
     ext = path.suffix.lower()
 
     if ext == ".flac":
-        add_flac_metadata(path, metadata)
+        try:
+            add_flac_metadata(path, metadata)
+        except Exception as e:
+            # File has .flac extension but is actually an M4A container
+            # (HI_RES_LOSSLESS arrives as M4A — extract_flac may have failed)
+            from mutagen.flac import FLACNoHeaderError
+            if not isinstance(e, FLACNoHeaderError):
+                raise
+            from tiddl.core.utils.ffmpeg import fix_mp4_faststart
+            try:
+                fixed = fix_mp4_faststart(path)
+                add_m4a_metadata(fixed, metadata)
+            except Exception as inner:
+                log.warning(f"Could not write metadata to {path} (FLAC/M4A fallback failed): {inner}")
     elif ext == ".m4a":
         add_m4a_metadata(path, metadata)
     else:
