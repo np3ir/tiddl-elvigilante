@@ -9,7 +9,7 @@ from requests.exceptions import HTTPError
 from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData
 from tiddl.core.auth import AuthAPI, AuthClientError
 from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS
-from tiddl.cli.commands.web_login import web_login as _web_login
+from tiddl.cli.commands.web_login import web_login as _web_login, launch_chrome as _launch_chrome
 
 from typing_extensions import Annotated
 
@@ -19,7 +19,8 @@ auth_command = typer.Typer(
     name="auth", help="Manage Tidal authentication.", no_args_is_help=True
 )
 
-auth_command.command(name="web-login", help="Login via browser — captura token automáticamente de tidal.com.")(_web_login)
+auth_command.command(name="web-login", help="Captura token desde Chrome (CDP) o Chromium.")(_web_login)
+auth_command.command(name="launch-chrome", help="Lanza Chrome con remote debugging para web-login.")(_launch_chrome)
 
 
 # TODO add context and load auth data from ctx
