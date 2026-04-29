@@ -55,8 +55,8 @@ class Config(BaseModel):
         track_quality: TRACK_QUALITY_LITERAL = "high"
         video_quality: VIDEO_QUALITY_LITERAL = "fhd"
         skip_existing: bool = True
-        threads_count: int = 4
-        requests_per_minute: int = 50
+        threads_count: int = 1
+        requests_per_minute: int = 20
         download_path: Path = DEFAULT_DOWNLOAD_PATH
         scan_path: Path = DEFAULT_DOWNLOAD_PATH
         video_download_path: Optional[Path] = None
@@ -64,8 +64,9 @@ class Config(BaseModel):
         videos_filter: VIDEOS_FILTER_LITERAL = "none"
         update_mtime: bool = False
         rewrite_metadata: bool = False
-        artist_concurrency: int = 0
-        artist_delay: float = 0.0
+        artist_concurrency: int = 1
+        artist_delay: float = 8.0
+        track_delay: float = 3.0
 
         @validator("download_path", "scan_path", "video_download_path", pre=True, always=True)
         def str_to_path(cls, v):

@@ -202,6 +202,15 @@ def download_callback(
             min=0.0,
         ),
     ] = CONFIG.download.artist_delay,
+    TRACK_DELAY: Annotated[
+        float,
+        typer.Option(
+            "--track-delay",
+            "-td",
+            help="Max random delay in seconds before each track download. Makes behavior less bot-like.",
+            min=0.0,
+        ),
+    ] = CONFIG.download.track_delay,
 ):
     """
     Download Tidal resources.
@@ -262,6 +271,8 @@ def download_callback(
         return predict_item_quality().upper()
 
     async def download_resources():
+        from tiddl.cli.commands.web_login import auto_refresh_if_needed
+        await auto_refresh_if_needed(threshold_minutes=30)
         rich_output = RichOutput(ctx.obj.console)
 
         downloader = Downloader(
@@ -299,6 +310,8 @@ def download_callback(
                 item: Union[Track, Video],
                 file_path: str,
                 track_metadata: Union[Metadata, None] = None,
+                source_type: str = "ALBUM",
+                source_id: Optional[str] = None,
             ) -> tuple[Union[Path, None], Union[Track, Video]]:
                 log.debug(f"{item.id=}, {file_path=}")
                 rich_output.total_increment()
@@ -306,8 +319,17 @@ def download_callback(
                 if not track_metadata:
                     track_metadata = Metadata()
 
+                if TRACK_DELAY > 0:
+                    # 85% del tiempo: pausa corta (comportamiento normal)
+                    # 15% del tiempo: pausa larga (simula distracción/scroll)
+                    if random.random() < 0.15:
+                        await asyncio.sleep(random.uniform(TRACK_DELAY * 2, TRACK_DELAY * 6))
+                    else:
+                        await asyncio.sleep(random.uniform(0.5, max(0.5, TRACK_DELAY)))
+
                 download_path, was_downloaded = await downloader.download(
-                    item=item, file_path=Path(file_path)
+                    item=item, file_path=Path(file_path),
+                    source_type=source_type, source_id=source_id,
                 )
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
@@ -468,6 +490,7 @@ def download_callback(
                     offset += album_items.limit
                     if offset >= album_items.totalNumberOfItems:
                         break
+                    await asyncio.sleep(random.uniform(1, 3))
 
                 # --- Batch DB prefetch: one SQL query for all tracks in this album ---
                 # Instead of one SELECT per track inside each task, we do a single
@@ -531,6 +554,8 @@ def download_callback(
                                 album_review=album_review,
                                 genre=album.genre or "",
                             ),
+                            source_type="ALBUM",
+                            source_id=str(album.id),
                         ))
                     )
 
@@ -592,6 +617,8 @@ def download_callback(
                         artist=album.artist.name if album.artist else "",
                         genre=album.genre or "",
                     ),
+                    source_type="ALBUM",
+                    source_id=str(album.id),
                 )
 
                 if (
@@ -632,6 +659,8 @@ def download_callback(
                         quality=get_item_quality(video),
                         artist_separator=CONFIG.templates.artist_separator,
                     ),
+                    source_type="VIDEO",
+                    source_id=str(video.id),
                 )
 
             elif resource_type == "mix":
@@ -660,12 +689,15 @@ def download_callback(
                                     quality=get_item_quality(mix_item.item),
                                     artist_separator=CONFIG.templates.artist_separator,
                                 ),
+                                source_type="MIX",
+                                source_id=mix_id,
                             ))
                         )
 
                     offset += mix_items.limit
                     if offset >= mix_items.totalNumberOfItems:
                         break
+                    await asyncio.sleep(random.uniform(1, 3))
 
                 total_items = len(futures)
                 ctx.obj.console.print(f"\nFound:")
@@ -719,6 +751,8 @@ def download_callback(
                 _sem = asyncio.Semaphore(ARTIST_CONCURRENCY) if ARTIST_CONCURRENCY > 0 else None
 
                 async def download_album_throttled(album):
+                    from tiddl.cli.commands.web_login import auto_refresh_if_needed
+                    await auto_refresh_if_needed(threshold_minutes=30)
                     if ARTIST_DELAY > 0:
                         await asyncio.sleep(random.uniform(0, ARTIST_DELAY))
                     if _sem:
@@ -782,6 +816,7 @@ def download_callback(
                         offset += artist_albums.limit
                         if offset >= artist_albums.totalNumberOfItems:
                             break
+                        time.sleep(random.uniform(1, 3))
 
                 def get_all_videos():
                     offset = 0
@@ -805,6 +840,8 @@ def download_callback(
                                             quality=get_item_quality(video),
                                             artist_separator=CONFIG.templates.artist_separator,
                                         ),
+                                        source_type="VIDEO",
+                                        source_id=str(resource.id),
                                     ))
                                 )
 
@@ -812,6 +849,7 @@ def download_callback(
                                 break
 
                             offset += artist_videos.limit
+                            time.sleep(random.uniform(1, 3))
                             
                         except Exception as e:
                             log.error(f"Error fetching videos at offset {offset}: {e}")
@@ -820,10 +858,12 @@ def download_callback(
                 # Gather albums and videos based on filters
                 if VIDEOS_FILTER != "none":
                     get_all_videos()
+                    time.sleep(random.uniform(2, 5))
 
                 if VIDEOS_FILTER != "only":
                     if SINGLES_FILTER == "include":
                         collect_albums(False)
+                        time.sleep(random.uniform(1, 3))
                         collect_albums(True)
                     else:
                         collect_albums(SINGLES_FILTER == "only")
@@ -968,12 +1008,15 @@ def download_callback(
                                     artist_separator=CONFIG.templates.artist_separator,
                                 ),
                                 track_metadata=Metadata(),
+                                source_type="PLAYLIST",
+                                source_id=resource.id,
                             ))
                         )
 
                     offset += playlist_items.limit
                     if offset >= playlist_items.totalNumberOfItems:
                         break
+                    await asyncio.sleep(random.uniform(1, 3))
 
                 total_items = len(futures)
                 ctx.obj.console.print(f"\nFound:")

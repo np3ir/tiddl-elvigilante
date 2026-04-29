@@ -41,7 +41,6 @@ class ContextObject:
         assert auth_data.country_code, "Country Code is missing. Use `tiddl auth login`"
 
         refresh_token = auth_data.refresh_token
-        assert refresh_token, "Refresh Token is missing. Use `tiddl auth login`"
 
         auth_api = AuthAPI(client=get_auth_client_for(auth_data.client_id))
 

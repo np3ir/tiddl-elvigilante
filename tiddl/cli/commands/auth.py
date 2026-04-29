@@ -9,6 +9,7 @@ from requests.exceptions import HTTPError
 from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData
 from tiddl.core.auth import AuthAPI, AuthClientError
 from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS
+from tiddl.cli.commands.web_login import web_login as _web_login
 
 from typing_extensions import Annotated
 
@@ -17,6 +18,8 @@ console = Console()
 auth_command = typer.Typer(
     name="auth", help="Manage Tidal authentication.", no_args_is_help=True
 )
+
+auth_command.command(name="web-login", help="Login via browser — captura token automáticamente de tidal.com.")(_web_login)
 
 
 # TODO add context and load auth data from ctx
@@ -86,8 +89,11 @@ def logout():
     loaded_auth_data = load_auth_data()
 
     if loaded_auth_data.token:
-        auth_api = AuthAPI()
-        auth_api.logout_token(loaded_auth_data.token)
+        try:
+            auth_api = AuthAPI()
+            auth_api.logout_token(loaded_auth_data.token)
+        except Exception:
+            pass  # Token already expired or invalid on TIDAL's side — clear locally anyway
 
     save_auth_data(AuthData())
 
@@ -114,9 +120,23 @@ def refresh(
 ):
     loaded_auth_data = load_auth_data()
 
-    if loaded_auth_data.refresh_token is None:
+    if loaded_auth_data.token is None:
         console.print("[bold red]Not logged in.")
         raise typer.Exit()
+
+    # Web-imported token: no refresh_token available, just check expiry
+    if loaded_auth_data.refresh_token is None:
+        if time() < loaded_auth_data.expires_at:
+            expiry_time = datetime.fromtimestamp(loaded_auth_data.expires_at)
+            remaining = expiry_time - datetime.now()
+            hours, remainder = divmod(remaining.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            console.print(
+                f"[green]Auth token expires in {remaining.days}d {hours}h {minutes}m [dim](web token, no refresh)[/]"
+            )
+        else:
+            console.print("[yellow]Web token expired. Extract a new one from tidal.com DevTools.")
+        return
 
     if time() < (loaded_auth_data.expires_at - EARLY_EXPIRE_TIME) and not FORCE:
         expiry_time = datetime.fromtimestamp(loaded_auth_data.expires_at)

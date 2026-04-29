@@ -30,6 +30,7 @@ from tiddl.core.utils.const import (
     video_qualities,
 )
 from tiddl.core.utils.ffmpeg import convert_to_mp4, extract_flac, fix_mp4_faststart
+from tiddl.core.api.playback import report_playback
 
 from .output import RichOutput
 
@@ -950,7 +951,8 @@ class Downloader:
         }
 
     async def download(
-        self, item: Union[Track, Video], file_path: Path
+        self, item: Union[Track, Video], file_path: Path,
+        source_type: str = "ALBUM", source_id: Optional[str] = None,
     ) -> tuple[Union[Path, None], bool]:
         """
         returns
@@ -1171,6 +1173,18 @@ class Downloader:
                     )
                     # Record in DB so next run skips the filesystem scan entirely
                     self._db_insert(item.id, download_path, str(item.audioQuality))
+
+                    # Report playback event — makes activity look like web player streaming
+                    asyncio.create_task(report_playback(
+                        session=aiohttp.ClientSession(headers=dict(self.api.client.session.headers)),
+                        track_id=item.id,
+                        duration=getattr(item, "duration", 240),
+                        audio_quality=stream.audioQuality,
+                        country_code=self.api.country_code,
+                        source_type=source_type,
+                        source_id=source_id or (str(item.album.id) if getattr(item, "album", None) else None),
+                    ))
+
                     return download_path, True
 
                 self.rich_output.console.print(
@@ -1247,6 +1261,17 @@ class Downloader:
                     )
                     # Record video in DB as well
                     self._db_insert(item.id, download_path, "VIDEO")
+
+                    asyncio.create_task(report_playback(
+                        session=aiohttp.ClientSession(headers=dict(self.api.client.session.headers)),
+                        track_id=item.id,
+                        duration=getattr(item, "duration", 180),
+                        audio_quality=stream.videoQuality,
+                        country_code=self.api.country_code,
+                        source_type=source_type,
+                        source_id=source_id or str(item.id),
+                    ))
+
                     return download_path, True
 
                 self.rich_output.console.print(
