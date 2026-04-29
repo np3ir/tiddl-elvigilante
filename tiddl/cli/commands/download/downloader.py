@@ -1176,7 +1176,7 @@ class Downloader:
 
                     # Report playback event — makes activity look like web player streaming
                     asyncio.create_task(report_playback(
-                        session=aiohttp.ClientSession(headers=dict(self.api.client.session.headers)),
+                        headers=dict(self.api.client.session.headers),
                         track_id=item.id,
                         duration=getattr(item, "duration", 240),
                         audio_quality=stream.audioQuality,
@@ -1263,7 +1263,7 @@ class Downloader:
                     self._db_insert(item.id, download_path, "VIDEO")
 
                     asyncio.create_task(report_playback(
-                        session=aiohttp.ClientSession(headers=dict(self.api.client.session.headers)),
+                        headers=dict(self.api.client.session.headers),
                         track_id=item.id,
                         duration=getattr(item, "duration", 180),
                         audio_quality=stream.videoQuality,
