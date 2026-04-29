@@ -144,6 +144,46 @@ tiddl download fav --track-quality max --threads-count 8
 
 ---
 
+### 2.3 Search TIDAL: `tiddl download search`
+
+Search TIDAL for tracks, albums, and artists.
+
+```bash
+tiddl download search <query>
+```
+
+**What it does:**
+- Searches TIDAL for the given query
+- Displays the Top Hit prominently with a ready-to-use download command
+- Shows tables of matching tracks, albums, and artists with their IDs
+- Works even when the Bearer token is unavailable (uses x-tidal-token fallback)
+
+**Options:**
+```bash
+# Limit results per category (default: 10, max: 50)
+tiddl download search "Pink Floyd" --limit 5
+tiddl download search "Dark Side of the Moon" -l 20
+```
+
+**Example output:**
+```
+Top Hit: [tracks] Money (ID: 12345678)
+  tiddl download url tracks/12345678
+
+Tracks
+ ID           Title            Artist        Album                  Quality
+ 12345678     Money            Pink Floyd    The Dark Side...       LOSSLESS
+
+Download: tiddl download url track/{ID}
+```
+
+**Workflow:**
+1. Search for content: `tiddl download search "artist or album"`
+2. Copy the ID from results
+3. Download: `tiddl download url track/12345678`
+
+---
+
 ## 3. `tiddl info` - Information
 
 Get details about content without downloading.
@@ -190,7 +230,8 @@ tiddl download
 │   ├── https://tidal.com/album/...
 │   ├── https://tidal.com/playlist/...
 │   └── https://tidal.com/artist/...
-└── fav          # Download favorites
+├── fav          # Download favorites
+└── search       # Search TIDAL catalog
 ```
 
 ---

@@ -116,6 +116,24 @@ DESIGN_CONSTRAINTS.md - Design principles
 - ✅ Regression tests
 - ✅ CI/CD ready
 
+### 7. **Search Command with Top Hit Display**
+```bash
+tiddl download search "Pink Floyd" --limit 5
+```
+- Searches tracks, albums, and artists in one command
+- Prominently displays the Top Hit with a ready-to-use download command
+- Result IDs are shown in tables for direct use with `tiddl download url`
+
+### 8. **x-tidal-token Fallback for Public Endpoints**
+- When a Bearer token returns 401 on non-playback endpoints (search, metadata), the client automatically retries using the `x-tidal-token` header with the client_id
+- Resilient when the access token expires between the proactive refresh window and actual expiry
+- Playback endpoints (stream, logout, token) are excluded from this fallback
+
+### 9. **streamReady Pre-check Before Download Attempts**
+- Before attempting to fetch stream URLs, checks the `streamReady` boolean on Track objects
+- Avoids wasting API quota and retry cycles on tracks that are not yet available for streaming
+- Produces a clear yellow warning instead of cryptic API errors
+
 ---
 
 ## 📊 Feature Comparison
@@ -131,6 +149,9 @@ DESIGN_CONSTRAINTS.md - Design principles
 | **TIDAL Downloads** | ✅ YES | ✅ YES |
 | **Metadata** | ✅ YES | ✅ YES |
 | **Unicode Support** | ✅ YES | ✅ YES |
+| **Search Command** | ❌ NO | ✅ YES |
+| **x-tidal-token Fallback** | ❌ NO | ✅ YES |
+| **streamReady Pre-check** | ❌ NO | ✅ YES |
 | **Architecture** | Flat | Modular |
 | **Documentation** | Basic | Comprehensive |
 | **Type Hints** | Partial | Complete |

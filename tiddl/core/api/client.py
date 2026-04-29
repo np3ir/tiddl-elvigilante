@@ -18,6 +18,8 @@ from requests_cache import (
     NEVER_EXPIRE,
 )
 
+import requests as _requests
+
 from .exceptions import ApiError
 
 T = TypeVar("T", bound=BaseModel)
@@ -27,6 +29,9 @@ API_V1_URL = "https://api.tidal.com/v1"
 API_V2_URL = "https://api.tidal.com/v2"  # For Feed and Activity API
 MAX_RETRIES = 5
 RETRY_DELAY = 2
+
+# Public read-only endpoints can use x-tidal-token instead of Bearer auth
+_PLAYBACK_ENDPOINTS = ("playbackinfo", "playback", "logout", "token", "events")
 
 log = getLogger(__name__)
 
@@ -90,7 +95,11 @@ class TidalClientImproved:
             "Sec-Fetch-Site": "same-site",
         }
         self._token = token
-    
+
+        # Store client_id for x-tidal-token fallback on public endpoints
+        from tiddl.core.auth.client import CLIENT_ID as _DEFAULT_CLIENT_ID
+        self._client_id = _DEFAULT_CLIENT_ID
+
     @property
     def token(self):
         return self._token
@@ -257,8 +266,29 @@ class TidalClientImproved:
                     _attempt=_attempt, # Keep attempt count or reset? Resetting is safer if we trust refresh logic.
                     _refreshed=True,
                 )
-            
-            # If refresh fails, raise error
+
+            # x-tidal-token fallback: retry public endpoints without Bearer auth
+            if not any(p in endpoint for p in _PLAYBACK_ENDPOINTS):
+                log.debug(f"401 on public endpoint {endpoint}, retrying with x-tidal-token")
+                fallback_headers = {
+                    k: v for k, v in self.session.headers.items()
+                    if k.lower() != "authorization"
+                }
+                fallback_headers["x-tidal-token"] = self._client_id
+                try:
+                    fb_res = _requests.get(
+                        f"{base_url}/{endpoint}",
+                        params=params,
+                        headers=fallback_headers,
+                    )
+                    if fb_res.status_code == 200:
+                        data = fb_res.json()
+                        self._rate_limit_delay = max(0.0, self._rate_limit_delay - 0.1)
+                        return model.parse_obj(data)
+                except Exception as fb_e:
+                    log.debug(f"x-tidal-token fallback also failed: {fb_e}")
+
+            # If refresh and fallback both fail, raise error
             res.raise_for_status()
 
         # ============================================================

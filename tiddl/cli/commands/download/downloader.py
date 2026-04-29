@@ -969,6 +969,12 @@ class Downloader:
             )
             return None, False
 
+        if isinstance(item, Track) and not getattr(item, "streamReady", True):
+            self.rich_output.console.print(
+                f"[yellow]Track not yet available for streaming (streamReady=False):[/] {display_title}"
+            )
+            return None, False
+
         # Apply video/track filter before any skip_existing logic
         if (isinstance(item, Video) and self.videos_filter == "none") or (
             isinstance(item, Track) and self.videos_filter == "only"
