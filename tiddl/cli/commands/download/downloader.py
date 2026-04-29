@@ -1248,10 +1248,20 @@ class Downloader:
                         continue
 
                     # Convert .ts segments → .mp4
+                    ts_path = download_path
                     try:
                         download_path = convert_to_mp4(download_path)
                     except Exception as e:
                         log.error(f"convert_to_mp4 failed for {item.id}: {e}")
+                        self.rich_output.download_finish(task_id=task_id)
+                        self.rich_output.show_item_result(
+                            result_message="[red]Failed (mp4 conversion)",
+                            item_description=display_title,
+                            item_path=None,
+                        )
+                        if ts_path.exists():
+                            ts_path.unlink(missing_ok=True)
+                        continue
 
                     finished_task = self.rich_output.download_finish(task_id=task_id)
                     self.rich_output.show_item_result(
