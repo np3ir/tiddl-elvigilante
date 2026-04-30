@@ -27,7 +27,7 @@ console = Console()
 log = logging.getLogger(__name__)
 
 SESSION_DIR = APP_PATH / "browser_session"
-CDP_URL = "http://localhost:9222"
+CDP_URL = "http://127.0.0.1:9222"
 
 
 def _decode_jwt_payload(token: str) -> dict:
@@ -55,12 +55,11 @@ def _is_chrome_debugging_available() -> bool:
 
 async def _capture_via_cdp() -> AuthData | None:
     """
-    Capture token from existing Chrome via CDP.
+    Capture token from existing Chrome via CDP Network events.
     Chrome must be running with --remote-debugging-port=9222.
 
-    Creates a new Playwright-controlled page inside the existing Chrome context
-    so request events fire correctly. The page uses Chrome's real session
-    (cookies/profile) — zero bot detection risk.
+    Uses CDP Network.requestWillBeSent to intercept Authorization headers
+    from the real Chrome session — no new browser, no bot detection.
     """
     try:
         from playwright.async_api import async_playwright
@@ -78,35 +77,45 @@ async def _capture_via_cdp() -> AuthData | None:
                 return None
 
             context = contexts[0]
+            page = next(
+                (pg for pg in context.pages if "tidal.com" in pg.url),
+                None,
+            )
+            if not page:
+                page = await context.new_page()
 
-            # Open a NEW page — Playwright controls it so request events fire
-            page = await context.new_page()
+            # CDP Network domain — intercepts real browser requests
+            cdp = await context.new_cdp_session(page)
+            await cdp.send("Network.enable")
 
-            def on_request(request):
-                if "api.tidal.com" in request.url and not captured:
-                    auth = request.headers.get("authorization", "")
+            def on_network_request(event):
+                url = event.get("request", {}).get("url", "")
+                headers = event.get("request", {}).get("headers", {})
+                if "api.tidal.com" in url and not captured:
+                    auth = (headers.get("authorization") or
+                            headers.get("Authorization", ""))
                     if auth.startswith("Bearer "):
                         captured["token"] = auth[7:]
 
-            page.on("request", on_request)
+            cdp.on("Network.requestWillBeSent", on_network_request)
 
+            # Navigate to web app — fires API requests on load
             await page.goto("https://listen.tidal.com/")
 
-            # Trigger API call explicitly after load
-            for i in range(25):
+            for i in range(20):
                 if captured:
                     break
-                if i == 4:
+                if i == 5:
                     try:
                         await page.evaluate(
-                            "() => fetch('https://api.tidal.com/v1/sessions', "
-                            "{credentials: 'include'})"
+                            "() => fetch('https://api.tidal.com/v1/sessions',"
+                            " {credentials: 'include'})"
                         )
                     except Exception:
                         pass
                 await asyncio.sleep(1)
 
-            await page.close()
+            await cdp.detach()
             await browser.close()
 
     except Exception as e:
