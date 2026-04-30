@@ -208,12 +208,18 @@ def _build_auth_data(token: str) -> AuthData | None:
     )
 
 
+_refresh_lock = asyncio.Lock()
+_last_refresh_attempt: float = 0.0
+
+
 async def auto_refresh_if_needed(threshold_minutes: int = 30) -> bool:
     """
     Called automatically before downloads.
     Refreshes the token silently if it expires within threshold_minutes.
     Tries CDP first, then Playwright fallback.
+    Uses a lock so concurrent album tasks don't all try to refresh simultaneously.
     """
+    global _last_refresh_attempt
     from tiddl.cli.utils.auth.core import load_auth_data
 
     auth = load_auth_data()
@@ -224,27 +230,51 @@ async def auto_refresh_if_needed(threshold_minutes: int = 30) -> bool:
     if minutes_left > threshold_minutes:
         return False
 
-    log.info(f"Token expira en {minutes_left:.0f}min — auto-refresh...")
-    console.print(f"[yellow]Token expira en {minutes_left:.0f} min — refrescando...[/]")
+    # Throttle: don't attempt more than once every 60s
+    if time.time() - _last_refresh_attempt < 60:
+        return False
 
-    auth_data = None
+    if _refresh_lock.locked():
+        # Another coroutine is already refreshing — wait for it, then return
+        async with _refresh_lock:
+            pass
+        return False
 
-    if _is_chrome_debugging_available():
-        log.debug("Auto-refresh via CDP...")
-        auth_data = await _capture_via_cdp()
+    async with _refresh_lock:
+        # Re-check after acquiring lock (another task may have refreshed)
+        auth = load_auth_data()
+        minutes_left = (auth.expires_at - time.time()) / 60
+        if minutes_left > threshold_minutes:
+            return False
 
-    if not auth_data and _session_exists():
-        log.debug("CDP failed or unavailable, trying Playwright...")
-        auth_data = await _capture_via_playwright(silent=True)
+        _last_refresh_attempt = time.time()
+        log.info(f"Token expira en {minutes_left:.0f}min — auto-refresh...")
+        console.print(f"[yellow]Token expira en {minutes_left:.0f} min — refrescando...[/]")
 
-    if auth_data:
-        save_auth_data(auth_data)
-        exp_dt = time.strftime("%H:%M", time.localtime(auth_data.expires_at))
-        console.print(f"[green]Token renovado (expira {exp_dt})[/]")
-        return True
+        auth_data = None
 
-    console.print("[red]Auto-refresh falló — corre 'tiddl auth web-login' manualmente.[/]")
-    return False
+        try:
+            if _is_chrome_debugging_available():
+                log.debug("Auto-refresh via CDP...")
+                auth_data = await _capture_via_cdp()
+        except Exception as e:
+            log.debug(f"CDP refresh failed: {e}")
+
+        if not auth_data and _session_exists():
+            log.debug("CDP failed or unavailable, trying Playwright...")
+            try:
+                auth_data = await _capture_via_playwright(silent=True)
+            except Exception as e:
+                log.debug(f"Playwright refresh failed: {e}")
+
+        if auth_data:
+            save_auth_data(auth_data)
+            exp_dt = time.strftime("%H:%M", time.localtime(auth_data.expires_at))
+            console.print(f"[green]Token renovado (expira {exp_dt})[/]")
+            return True
+
+        log.warning("Auto-refresh falló — continuando con token expirado.")
+        return False
 
 
 def web_login():

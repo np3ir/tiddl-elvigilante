@@ -798,7 +798,10 @@ def download_callback(
 
                 async def download_album_throttled(album):
                     from tiddl.cli.commands.web_login import auto_refresh_if_needed
-                    await auto_refresh_if_needed(threshold_minutes=30)
+                    try:
+                        await auto_refresh_if_needed(threshold_minutes=30)
+                    except Exception as _re:
+                        log.debug(f"auto_refresh_if_needed failed (non-fatal): {_re}")
                     if ARTIST_DELAY > 0:
                         await asyncio.sleep(random.uniform(0, ARTIST_DELAY))
                     if _sem:
