@@ -976,12 +976,12 @@ def download_callback(
                 for album in albums_to_download:
                     if album.id not in seen_album_ids:
                         seen_album_ids.add(album.id)
-                        futures.append(asyncio.create_task(download_album_throttled(album)))
-                
+                        futures.append(album)  # store album, not task
+
                 # Show what we're about to download
                 unique_albums = len(seen_album_ids)
                 total_items = unique_albums + artist_stats['total_videos']
-                
+
                 ctx.obj.console.print(f"\nFound:")
                 ctx.obj.console.print(f"  • {unique_albums} albums (including all versions)")
                 if artist_stats['skipped_duplicates'] > 0:
@@ -989,10 +989,16 @@ def download_callback(
                 if artist_stats['total_videos'] > 0:
                     ctx.obj.console.print(f"  • {artist_stats['total_videos']} videos")
                 ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
-                
+
                 # Download everything
+                # When concurrency=1 process sequentially — avoids 250+ pending tasks on Ctrl+C
                 try:
-                    await asyncio.gather(*futures)
+                    if ARTIST_CONCURRENCY == 1:
+                        for album in futures:
+                            await download_album_throttled(album)
+                    else:
+                        tasks = [asyncio.create_task(download_album_throttled(a)) for a in futures]
+                        await asyncio.gather(*tasks)
                     
                     # Fallback: If artist info failed initially, try to get name from downloaded albums
                     if "Artist " in artist_name and collected_albums:
@@ -1008,10 +1014,11 @@ def download_callback(
                         ctx.obj.console.print(f"   • Skipped: {artist_stats['skipped_duplicates']} true duplicates")
                     
                 except (asyncio.CancelledError, KeyboardInterrupt):
-                    for f in futures:
-                        if not f.done():
-                            f.cancel()
-                    await asyncio.gather(*futures, return_exceptions=True)
+                    if ARTIST_CONCURRENCY != 1:
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
                     raise
                 except Exception as e:
                     ctx.obj.console.print(f"\n[red]❌ Error during artist download:[/] {e}")
@@ -1161,6 +1168,10 @@ def download_callback(
         rich_output.show_stats()
 
     def run():
+        import warnings, sys
+        # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
+        if sys.platform == "win32":
+            warnings.filterwarnings("ignore", category=ResourceWarning)
         try:
             asyncio.run(download_resources())
         except KeyboardInterrupt:
