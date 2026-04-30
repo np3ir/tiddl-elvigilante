@@ -25,11 +25,14 @@ playlist = ""
 track_quality = "high" # "low", "high", "lossless", "hires"
 video_quality = "fhd"  # "audio", "360", "480", "720", "1080", "fhd"
 skip_existing = true
-threads_count = 2            # Descargas concurrentes (1=serial/silencioso, 2=balanceado, 4+=agresivo)
-requests_per_minute = 30     # Llamadas API por minuto (30=humano, 50=normal, 80+=agresivo)
-track_delay = 2.0            # Pausa máxima aleatoria (seg) entre pistas. Se elige random(0.5, track_delay)
+threads_count = 1            # Descargas concurrentes (1=serial/silencioso, 2=balanceado, 4+=agresivo)
+requests_per_minute = 20     # Llamadas API por minuto (20=humano, 50=normal, 80+=agresivo)
+track_delay = 3.0            # Pausa máxima aleatoria (seg) entre pistas. 15% chance de 2x-6x (distracción)
 artist_concurrency = 1       # Álbumes en paralelo al bajar un artista (1=serial)
-artist_delay = 5.0           # Pausa máxima aleatoria (seg) antes de cada álbum del artista
+artist_delay = 8.0           # Pausa máxima aleatoria (seg) antes de cada álbum del artista
+max_tracks_per_session = 0   # Máximo de tracks por sesión (0 = sin límite)
+download_start_hour = 8      # Hora inicio permitida (0-23). 0 = sin restricción horaria
+download_end_hour = 23       # Hora fin permitida (0-23)
 # download_path = "~/Music/tiddl"
 # scan_path = "~/Music/tiddl"
 singles_filter = "none" # "none", "only", "include"

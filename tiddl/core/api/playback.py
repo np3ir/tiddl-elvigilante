@@ -6,6 +6,7 @@ matching the pattern a real browser session would produce.
 """
 from __future__ import annotations
 import uuid
+import random
 import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -36,6 +37,11 @@ async def report_playback(
     """
     import aiohttp
     try:
+        # Wait a human-like portion of track duration before reporting completion.
+        # A real listener takes ~30-60% of the song before it "finishes" in the log.
+        listen_delay = min(duration * random.uniform(0.3, 0.6), 25.0)
+        await asyncio.sleep(listen_delay)
+
         connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
         now = datetime.now(timezone.utc)
         start = now - timedelta(seconds=duration)

@@ -271,9 +271,26 @@ def download_callback(
         return predict_item_quality().upper()
 
     async def download_resources():
+        import datetime as _dt
         from tiddl.cli.commands.web_login import auto_refresh_if_needed
         await auto_refresh_if_needed(threshold_minutes=30)
+
+        # Horario humano: rechaza descargas fuera del rango configurado
+        start_h = CONFIG.download.download_start_hour
+        end_h   = CONFIG.download.download_end_hour
+        if start_h != 0 or end_h != 0:
+            current_h = _dt.datetime.now().hour
+            in_window = (start_h <= current_h < end_h) if start_h < end_h else (current_h >= start_h or current_h < end_h)
+            if not in_window:
+                ctx.obj.console.print(
+                    f"[yellow]Fuera del horario permitido ({start_h}:00–{end_h}:00). "
+                    f"Hora actual: {current_h}:00[/]"
+                )
+                return
+
         rich_output = RichOutput(ctx.obj.console)
+        _session_track_count = [0]
+        _session_limit = CONFIG.download.max_tracks_per_session
 
         downloader = Downloader(
             tidal_api=ctx.obj.api,
@@ -315,6 +332,15 @@ def download_callback(
             ) -> tuple[Union[Path, None], Union[Track, Video]]:
                 log.debug(f"{item.id=}, {file_path=}")
                 rich_output.total_increment()
+
+                # Límite de tracks por sesión
+                if _session_limit > 0 and _session_track_count[0] >= _session_limit:
+                    ctx.obj.console.print(
+                        f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
+                        f"Reinicia para continuar.[/]"
+                    )
+                    return Path(""), item
+                _session_track_count[0] += 1
 
                 if not track_metadata:
                     track_metadata = Metadata()
@@ -441,10 +467,27 @@ def download_callback(
 
                 return download_path, item
 
+            async def _simulate_browse(album: Album):
+                """Simulate natural browsing before downloading an album."""
+                try:
+                    # Fetch artist info (like clicking on an artist page)
+                    if album.artist:
+                        await asyncio.to_thread(ctx.obj.api.get_artist, artist_id=album.artist.id)
+                        await asyncio.sleep(random.uniform(1.5, 4.0))
+                    # Occasionally fetch top tracks (40% chance)
+                    if album.artist and random.random() < 0.4:
+                        await asyncio.to_thread(ctx.obj.api.get_artist_toptracks, album.artist.id)
+                        await asyncio.sleep(random.uniform(1.0, 3.0))
+                except Exception:
+                    pass
+
             async def download_album(album: Album):
                 offset = 0
                 futures = []
                 all_album_items = []  # collect all pages first for batch prefetch
+
+                # Simulate browsing before downloading
+                await _simulate_browse(album)
 
                 cover: Union[Cover, None] = None
                 save_cover = ("album" in CONFIG.cover.allowed) and CONFIG.cover.save
