@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 SESSION_DIR = APP_PATH / "browser_session"
 CDP_URL = "http://127.0.0.1:9222"
+WATCHDOG_PID_FILE = APP_PATH / "watchdog.pid"
 
 
 def _decode_jwt_payload(token: str) -> dict:
@@ -37,6 +38,50 @@ def _decode_jwt_payload(token: str) -> dict:
         return json.loads(base64.b64decode(payload).decode())
     except Exception:
         return {}
+
+
+def ensure_watchdog_running() -> bool:
+    """Start chrome_watchdog.pyw silently if not already running. No-op if script missing."""
+    import os, subprocess, sys
+    from pathlib import Path
+
+    watchdog_script = Path(os.environ.get("USERPROFILE", Path.home())) / ".tiddl" / "chrome_watchdog.pyw"
+    if not watchdog_script.exists():
+        return False
+
+    if WATCHDOG_PID_FILE.exists():
+        try:
+            pid = int(WATCHDOG_PID_FILE.read_text().strip())
+            result = subprocess.run(
+                ["tasklist",
+                 "/FI", f"PID eq {pid}",
+                 "/FI", "IMAGENAME eq pythonw.exe",
+                 "/NH", "/FO", "CSV"],
+                capture_output=True, text=True,
+            )
+            # Use quoted PID for exact match (avoids "389" matching "38928")
+            if f'"{pid}"' in result.stdout:
+                return True
+        except Exception:
+            pass
+
+    pythonw = Path(sys.executable).parent / "pythonw.exe"
+    if not pythonw.exists():
+        pythonw = Path("pythonw.exe")
+
+    try:
+        proc = subprocess.Popen(
+            [str(pythonw), str(watchdog_script)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+        )
+        WATCHDOG_PID_FILE.write_text(str(proc.pid))
+        log.info(f"Chrome watchdog iniciado (PID {proc.pid})")
+        return True
+    except Exception as e:
+        log.debug(f"No se pudo iniciar watchdog: {e}")
+        return False
 
 
 def _session_exists() -> bool:
@@ -255,6 +300,7 @@ async def auto_refresh_if_needed(threshold_minutes: int = 30) -> bool:
 
         try:
             if _is_chrome_debugging_available():
+                ensure_watchdog_running()
                 log.debug("Auto-refresh via CDP...")
                 auth_data = await _capture_via_cdp()
         except Exception as e:
@@ -352,3 +398,5 @@ def launch_chrome():
     console.print("[bold]  tiddl auth web-login[/]")
 
     subprocess.Popen(cmd)
+    if ensure_watchdog_running():
+        console.print("[dim]Watchdog iniciado — Chrome se relanzará automáticamente si se cierra.[/]")
