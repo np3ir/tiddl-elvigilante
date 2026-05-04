@@ -160,6 +160,31 @@ async def _capture_via_cdp() -> AuthData | None:
                         pass
                 await asyncio.sleep(1)
 
+            # If captured token is nearly expired (<60 min), force reload
+            # so TIDAL's web player re-initializes and may issue a fresh token
+            if captured:
+                token_data = _decode_jwt_payload(captured["token"])
+                minutes_left = (token_data.get("exp", 0) - time.time()) / 60 if token_data else 999
+                if minutes_left < 60:
+                    log.info(f"CDP: token tiene {minutes_left:.0f}min — forzando reload para token fresco")
+                    captured.clear()
+                    try:
+                        await page.reload(wait_until="networkidle", timeout=15000)
+                    except Exception:
+                        await page.reload(timeout=15000)
+                    for i in range(30):
+                        if captured:
+                            break
+                        if i == 5:
+                            try:
+                                await page.evaluate(
+                                    "() => fetch('https://api.tidal.com/v1/sessions',"
+                                    " {credentials: 'include'})"
+                                )
+                            except Exception:
+                                pass
+                        await asyncio.sleep(1)
+
             await cdp.detach()
             await browser.close()
 
