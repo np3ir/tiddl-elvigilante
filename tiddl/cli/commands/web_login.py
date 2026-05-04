@@ -160,45 +160,6 @@ async def _capture_via_cdp() -> AuthData | None:
                         pass
                 await asyncio.sleep(1)
 
-            # If captured token is nearly expired (<60 min), clear TIDAL's
-            # encrypted auth storage so it re-authenticates via session cookie
-            # and issues a fresh token (~4h)
-            if captured:
-                token_data = _decode_jwt_payload(captured["token"])
-                minutes_left = (token_data.get("exp", 0) - time.time()) / 60 if token_data else 999
-                if minutes_left < 60:
-                    log.info(f"CDP: token tiene {minutes_left:.0f}min — limpiando AuthDB para forzar re-auth")
-                    captured.clear()
-                    try:
-                        await page.evaluate("""
-                            () => {
-                                const keys = Object.keys(localStorage)
-                                    .filter(k => k.startsWith('AuthDB'));
-                                keys.forEach(k => localStorage.removeItem(k));
-                            }
-                        """)
-                    except Exception:
-                        pass
-                    try:
-                        await page.reload(wait_until="networkidle", timeout=20000)
-                    except Exception:
-                        await page.reload(timeout=20000)
-                    for i in range(30):
-                        if captured:
-                            break
-                        if i == 5:
-                            try:
-                                await page.evaluate(
-                                    "() => fetch('https://api.tidal.com/v1/sessions',"
-                                    " {credentials: 'include'})"
-                                )
-                            except Exception:
-                                pass
-                        await asyncio.sleep(1)
-                    if captured:
-                        refreshed = _decode_jwt_payload(captured["token"])
-                        new_mins = (refreshed.get("exp", 0) - time.time()) / 60 if refreshed else 0
-                        log.info(f"CDP: re-auth completada — token nuevo con {new_mins:.0f}min")
 
             await cdp.detach()
             await browser.close()
