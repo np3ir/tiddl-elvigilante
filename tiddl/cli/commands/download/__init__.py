@@ -275,19 +275,6 @@ def download_callback(
         from tiddl.cli.commands.web_login import auto_refresh_if_needed
         await auto_refresh_if_needed(threshold_minutes=30)
 
-        # Horario humano: rechaza descargas fuera del rango configurado
-        start_h = CONFIG.download.download_start_hour
-        end_h   = CONFIG.download.download_end_hour
-        if start_h != 0 or end_h != 0:
-            current_h = _dt.datetime.now().hour
-            in_window = (start_h <= current_h < end_h) if start_h < end_h else (current_h >= start_h or current_h < end_h)
-            if not in_window:
-                ctx.obj.console.print(
-                    f"[yellow]Fuera del horario permitido ({start_h}:00–{end_h}:00). "
-                    f"Hora actual: {current_h}:00[/]"
-                )
-                return
-
         rich_output = RichOutput(ctx.obj.console)
         _session_track_count = [0]
         _session_limit = CONFIG.download.max_tracks_per_session
@@ -574,13 +561,23 @@ def download_callback(
                     enrich_track_artists(item, ctx.obj.api)
                     if isinstance(item, Track) and item.id in confirmed:
                         confirmed_path = confirmed[item.id]
-                        downloader.rich_output.show_item_result(
-                            result_message="[yellow]Exists",
-                            item_description=f"[bold]{item.title}",
-                            item_path=confirmed_path,
-                        )
-                        skipped_with_path.append((confirmed_path, item))
-                        continue
+                        expected_path = Path(format_template(
+                            template=resolve_template(ALBUM_TEMPLATE, CONFIG.templates.album),
+                            item=item,
+                            album=album,
+                            quality=get_item_quality(item),
+                            artist_separator=CONFIG.templates.artist_separator,
+                        ))
+                        # Only skip if the file is already in the correct album folder.
+                        # If it was downloaded elsewhere (e.g. a playlist), fall through to download.
+                        if confirmed_path.parent.resolve() == expected_path.parent.resolve():
+                            downloader.rich_output.show_item_result(
+                                result_message="[yellow]Exists",
+                                item_description=f"[bold]{item.title}",
+                                item_path=confirmed_path,
+                            )
+                            skipped_with_path.append((confirmed_path, item))
+                            continue
 
                     futures.append(
                         asyncio.create_task(handle_item(

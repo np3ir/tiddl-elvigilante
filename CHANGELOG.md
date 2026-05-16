@@ -15,6 +15,23 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [Unreleased] — 2026-05-15
+
+### 🐛 Fixed
+
+- **Skip-existing now checks destination folder** (`cli/commands/download/__init__.py`,
+  `cli/commands/download/downloader.py`)
+  — A track previously downloaded to a playlist folder was being skipped when downloading
+  its album, leaving the album folder incomplete. Skip now only triggers when the existing
+  file is already in the correct destination folder (album/artist path match).
+
+- **Download time window removed** (`cli/commands/download/__init__.py`, `cli/config.py`)
+  — The `download_start_hour` / `download_end_hour` restriction was silently blocking
+  downloads outside an 8:00–23:00 window. Both defaults changed to `0` (no restriction).
+  The feature remains configurable in `config.toml` for users who want it.
+
+---
+
 ## [1.1.6] - 2026-03-29
 
 ### 📖 Documentation

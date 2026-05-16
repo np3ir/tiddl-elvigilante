@@ -1015,12 +1015,16 @@ class Downloader:
                 except OSError:
                     file_still_exists = False
                 if file_still_exists:
-                    self.rich_output.show_item_result(
-                        result_message="[yellow]Exists",
-                        item_description=f"[{vibrant_color}]{display_title}",
-                        item_path=db_path,
-                    )
-                    return db_path, False
+                    # Only skip if the file is already in the intended destination folder.
+                    # If it was downloaded elsewhere (e.g. a playlist), still download
+                    # it to the correct location (e.g. the album folder).
+                    if db_path.parent.resolve() == file_path.parent.resolve():
+                        self.rich_output.show_item_result(
+                            result_message="[yellow]Exists",
+                            item_description=f"[{vibrant_color}]{display_title}",
+                            item_path=db_path,
+                        )
+                        return db_path, False
                 else:
                     # File is gone — remove stale DB entry and continue to download
                     self._db_remove(item.id)
