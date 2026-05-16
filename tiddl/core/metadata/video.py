@@ -41,26 +41,27 @@ def add_video_metadata(path: Path, video: Video, artist_separator: str = DEFAULT
         return
 
     # 4. Prepare Metadata
-    # Base metadata
-    artists_str = artist_separator.join([a.name.strip() for a in video.artists]) if video.artists else ""
-    
+    _raw   = video.artists or []
+    _main  = sorted([a.name for a in _raw if getattr(a, 'type', None) == "MAIN"     and a.name])
+    _feat  = sorted([a.name for a in _raw if getattr(a, 'type', None) == "FEATURED" and a.name])
+    artists_list = (_main + _feat) or [a.name for a in _raw if a.name] or ["Unknown Artist"]
+
     meta_update = {
-        "title": video.title,
-        "artist": artists_str,
+        "title":  video.title,
+        "artist": artists_list,
     }
 
     # Optional metadata: Only add if value exists
     if video.artist:
         meta_update["albumartist"] = video.artist.name
-    
+
     if video.album and video.album.title:
         meta_update["album"] = video.album.title
 
-    # Prefer releaseDate (from metadata) over streamStartDate
-    if video.releaseDate:
-        meta_update["date"] = str(video.releaseDate)
-    elif video.streamStartDate:
-        meta_update["date"] = str(video.streamStartDate)
+    # Year-only date — matches music track behavior
+    _date = video.releaseDate or getattr(video, 'streamStartDate', None)
+    if _date:
+        meta_update["date"] = str(_date.year) if hasattr(_date, 'year') else str(_date)[:4]
 
     if video.trackNumber:
         meta_update["tracknumber"] = str(video.trackNumber)
