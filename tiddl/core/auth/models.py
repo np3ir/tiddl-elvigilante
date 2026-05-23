@@ -23,7 +23,7 @@ class AuthResponse(BaseModel):
         acceptedEULA: bool
         created: int
         updated: int
-        facebookUid: int
+        facebookUid: Optional[int] = None
         appleUid: Optional[str]
         googleUid: Optional[str]
         accountLinkCreated: bool
