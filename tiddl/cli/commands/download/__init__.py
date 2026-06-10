@@ -3,7 +3,6 @@ import os
 import random
 import typer
 import asyncio
-import time
 
 from pathlib import Path
 from logging import getLogger
@@ -54,6 +53,25 @@ def enrich_track_artists(item: Track, api) -> None:
                 existing.add(name.lower())
     except Exception:
         pass
+
+
+async def enrich_tracks_concurrently(items, api, limit: int = 8) -> None:
+    """Enriquece featured artists de varios tracks en paralelo sin bloquear el event loop.
+
+    Cada llamada a /contributors es HTTP síncrono (~300ms); ejecutarlas en
+    threads con concurrencia acotada evita congelar las descargas activas.
+    """
+    tracks = [it for it in items if isinstance(it, Track)]
+    if not tracks:
+        return
+    sem = asyncio.Semaphore(limit)
+
+    async def _one(track):
+        async with sem:
+            await asyncio.to_thread(enrich_track_artists, track, api)
+
+    await asyncio.gather(*[_one(t) for t in tracks])
+
 
 download_command = typer.Typer(name="download")
 register_subcommands(download_command)
@@ -297,17 +315,30 @@ def download_callback(
                 self,
                 date: str = "",
                 artist: str = "",
-                credits: list[AlbumItemsCredits.ItemWithCredits.CreditsEntry] = [],
-                cover_data: bytes = None,
+                credits: Optional[list[AlbumItemsCredits.ItemWithCredits.CreditsEntry]] = None,
+                cover_data: Optional[bytes] = None,
                 album_review: str = "",
                 genre: str = "",
             ) -> None:
                 self.date = date
                 self.artist = artist
-                self.credits = credits
+                self.credits = credits if credits is not None else []
                 self.cover_data = cover_data
                 self.album_review = album_review
                 self.genre = genre
+
+        # Cache de covers por UID: en playlists/mixes varios tracks comparten
+        # álbum; sin esto cada track re-descarga el mismo JPG.
+        _cover_cache: dict[str, bytes] = {}
+
+        async def get_cover_data_cached(cover_uid: str) -> bytes:
+            data = _cover_cache.get(cover_uid)
+            if data is None:
+                data = await asyncio.to_thread(Cover(cover_uid)._get_data)
+                if len(_cover_cache) >= 64:
+                    _cover_cache.pop(next(iter(_cover_cache)))
+                _cover_cache[cover_uid] = data
+            return data
 
         async def handle_resource(resource: TidalResource):
             async def handle_item(
@@ -372,7 +403,9 @@ def download_callback(
                                 fetched_lyrics = None
                                 for attempt in range(3):
                                     try:
-                                        fetched_lyrics_response = ctx.obj.api.get_track_lyrics(item.id)
+                                        fetched_lyrics_response = await asyncio.to_thread(
+                                            ctx.obj.api.get_track_lyrics, item.id
+                                        )
                                         if fetched_lyrics_response:
                                             fetched_lyrics = fetched_lyrics_response.subtitles
                                         log.debug(f"Lyrics found for {item.title}")
@@ -409,9 +442,9 @@ def download_callback(
                             and CONFIG.metadata.cover
                         ):
                             try:
-                                track_metadata.cover_data = Cover(
+                                track_metadata.cover_data = await get_cover_data_cached(
                                     item.album.cover
-                                )._get_data()
+                                )
                             except Exception as e:
                                 log.warning(f"Could not download track cover: {e}")
                                 track_metadata.cover_data = b""
@@ -482,7 +515,7 @@ def download_callback(
                 if album.cover and (CONFIG.metadata.cover or save_cover):
                     try:
                         cover = Cover(album.cover, size=CONFIG.cover.size)
-                        cover._get_data()
+                        await asyncio.to_thread(cover._get_data)
                     except Exception as e:
                         log.warning(f"Could not download album cover: {e}")
                         cover = None
@@ -491,9 +524,10 @@ def download_callback(
 
                 if CONFIG.metadata.album_review:
                     try:
-                        album_review = ctx.obj.api.get_album_review(
-                            album_id=album.id
-                        ).normalized_text()
+                        review = await asyncio.to_thread(
+                            ctx.obj.api.get_album_review, album.id
+                        )
+                        album_review = review.normalized_text()
                     except Exception as e:
                         log.error(e)
 
@@ -502,8 +536,9 @@ def download_callback(
                     album_items = None
                     for attempt in range(3):
                         try:
-                            album_items = ctx.obj.api.get_album_items_credits(
-                                album_id=album.id, offset=offset
+                            album_items = await asyncio.to_thread(
+                                ctx.obj.api.get_album_items_credits,
+                                album_id=album.id, offset=offset,
                             )
                             break
                         except Exception as e:
@@ -553,12 +588,18 @@ def download_callback(
                             else:
                                 confirmed[track_id] = path
 
+                # --- Enrich featured artists for the whole album in parallel ---
+                # (antes era una petición HTTP síncrona por track dentro del loop,
+                # que bloqueaba el event loop entero)
+                await enrich_tracks_concurrently(
+                    [ai.item for ai in all_album_items], ctx.obj.api
+                )
+
                 # --- Build tasks — confirmed tracks are skipped, rest download normally ---
                 # confirmed-skipped tuples are pre-populated so save_m3u stays complete
                 skipped_with_path: list[tuple] = []
                 for album_item in all_album_items:
                     item = album_item.item
-                    enrich_track_artists(item, ctx.obj.api)
                     if isinstance(item, Track) and item.id in confirmed:
                         confirmed_path = confirmed[item.id]
                         expected_path = Path(format_template(
@@ -639,9 +680,9 @@ def download_callback(
             resource_type = resource.type
 
             if resource_type == "track":
-                track = ctx.obj.api.get_track(resource.id)
-                album = ctx.obj.api.get_album(track.album.id)
-                enrich_track_artists(track, ctx.obj.api)
+                track = await asyncio.to_thread(ctx.obj.api.get_track, resource.id)
+                album = await asyncio.to_thread(ctx.obj.api.get_album, track.album.id)
+                await asyncio.to_thread(enrich_track_artists, track, ctx.obj.api)
 
                 ctx.obj.console.print(f"\n[bold green]Downloading Track:[/] {track.title}")
                 ctx.obj.console.print(f"[dim]Track ID: {resource.id}[/]\n")
@@ -680,7 +721,7 @@ def download_callback(
                     )
 
             elif resource_type == "video":
-                video = ctx.obj.api.get_video(resource.id)
+                video = await asyncio.to_thread(ctx.obj.api.get_video, resource.id)
 
                 ctx.obj.console.print(f"\n[bold blue]Downloading Video:[/] {video.title}")
                 ctx.obj.console.print(f"[dim]Video ID: {resource.id}[/]\n")
@@ -689,7 +730,7 @@ def download_callback(
                 album = None
                 if video.album and video.album.id:
                     try:
-                        album = ctx.obj.api.get_album(video.album.id)
+                        album = await asyncio.to_thread(ctx.obj.api.get_album, video.album.id)
                     except Exception as e:
                         log.warning(f"Could not fetch album {video.album.id} for video {video.id}: {e}")
 
@@ -715,13 +756,17 @@ def download_callback(
 
                 while True:
                     try:
-                        mix_items = ctx.obj.api.get_mix_items(mix_id, offset=offset)
+                        mix_items = await asyncio.to_thread(
+                            ctx.obj.api.get_mix_items, mix_id, offset=offset
+                        )
                     except Exception as e:
                         log.error(f"Could not fetch mix items for {mix_id}: {e}")
                         break
 
+                    await enrich_tracks_concurrently(
+                        [mi.item for mi in mix_items.items], ctx.obj.api
+                    )
                     for mix_item in mix_items.items:
-                        enrich_track_artists(mix_item.item, ctx.obj.api)
                         futures.append(
                             asyncio.create_task(handle_item(
                                 item=mix_item.item,
@@ -817,7 +862,7 @@ def download_callback(
                 
                 # Get artist info for better feedback
                 try:
-                    artist = ctx.obj.api.get_artist(resource.id)
+                    artist = await asyncio.to_thread(ctx.obj.api.get_artist, resource.id)
                     artist_name = artist.name
                     ctx.obj.console.print(f"\n[bold cyan]Downloading Artist:[/] {artist_name}")
                     ctx.obj.console.print(f"[dim]Artist ID: {resource.id}[/]\n")
@@ -828,18 +873,19 @@ def download_callback(
                 collected_albums = []
                 video_tasks: list = []   # asyncio.Task objects for videos
 
-                def collect_albums(singles: bool):
+                async def collect_albums(singles: bool):
                     offset = 0
                     filter_type = "EPSANDSINGLES" if singles else "ALBUMS"
                     display_type = "EPs & Singles" if singles else "Albums"
-                    
+
                     ctx.obj.console.print(f"[dim]Fetching {display_type}...[/]")
 
                     while True:
                         artist_albums = None
                         for attempt in range(3):
                             try:
-                                artist_albums = ctx.obj.api.get_artist_albums(
+                                artist_albums = await asyncio.to_thread(
+                                    ctx.obj.api.get_artist_albums,
                                     artist_id=resource.id,
                                     offset=offset,
                                     filter=filter_type,
@@ -849,13 +895,13 @@ def download_callback(
                                 if attempt < 2:
                                     wait = (attempt + 1) * 2
                                     log.warning(f"Error fetching albums (offset {offset}): {e}. Retrying in {wait}s...")
-                                    time.sleep(wait)
+                                    await asyncio.sleep(wait)
                                 else:
                                     log.error(f"Failed to fetch albums at offset {offset}: {e}")
-                                    
+
                         if not artist_albums:
                             break
-                            
+
                         for album in artist_albums.items:
                             artist_stats['total_albums'] += 1
                             collected_albums.append(album)
@@ -863,17 +909,18 @@ def download_callback(
                         offset += artist_albums.limit
                         if offset >= artist_albums.totalNumberOfItems:
                             break
-                        time.sleep(random.uniform(1, 3))
+                        await asyncio.sleep(random.uniform(1, 3))
 
-                def get_all_videos():
+                async def get_all_videos():
                     offset = 0
-                    
+
                     ctx.obj.console.print(f"[dim]Fetching videos...[/]")
 
                     while True:
                         try:
-                            artist_videos = ctx.obj.api.get_artist_videos(
-                                resource.id, offset=offset
+                            artist_videos = await asyncio.to_thread(
+                                ctx.obj.api.get_artist_videos,
+                                resource.id, offset=offset,
                             )
 
                             for video in artist_videos.items:
@@ -896,24 +943,24 @@ def download_callback(
                                 break
 
                             offset += artist_videos.limit
-                            time.sleep(random.uniform(1, 3))
-                            
+                            await asyncio.sleep(random.uniform(1, 3))
+
                         except Exception as e:
                             log.error(f"Error fetching videos at offset {offset}: {e}")
                             break
 
                 # Gather albums and videos based on filters
                 if VIDEOS_FILTER != "none":
-                    get_all_videos()
-                    time.sleep(random.uniform(2, 5))
+                    await get_all_videos()
+                    await asyncio.sleep(random.uniform(2, 5))
 
                 if VIDEOS_FILTER != "only":
                     if SINGLES_FILTER == "include":
-                        collect_albums(False)
-                        time.sleep(random.uniform(1, 3))
-                        collect_albums(True)
+                        await collect_albums(False)
+                        await asyncio.sleep(random.uniform(1, 3))
+                        await collect_albums(True)
                     else:
-                        collect_albums(SINGLES_FILTER == "only")
+                        await collect_albums(SINGLES_FILTER == "only")
                 
                 # SMART DEDUPLICATION & QUALITY SELECTION
                 # Group albums by Title + Type + Version to find duplicates (e.g. same album in HiRes vs Lossless)
@@ -1034,25 +1081,30 @@ def download_callback(
                 offset = 0
                 futures = []
                 playlist_index = 0
-                playlist = ctx.obj.api.get_playlist(playlist_uuid=resource.id)
+                playlist = await asyncio.to_thread(
+                    ctx.obj.api.get_playlist, playlist_uuid=resource.id
+                )
 
                 ctx.obj.console.print(f"\n[bold magenta]Downloading Playlist:[/] {playlist.title}")
                 ctx.obj.console.print(f"[dim]Playlist ID: {resource.id}[/]\n")
                 ctx.obj.console.print(f"[dim]Fetching tracks...[/]")
 
                 while True:
-                    playlist_items = ctx.obj.api.get_playlist_items(
-                        playlist_uuid=resource.id, offset=offset
+                    playlist_items = await asyncio.to_thread(
+                        ctx.obj.api.get_playlist_items,
+                        playlist_uuid=resource.id, offset=offset,
                     )
 
+                    await enrich_tracks_concurrently(
+                        [pi.item for pi in playlist_items.items], ctx.obj.api
+                    )
                     for playlist_item in playlist_items.items:
                         playlist_index += 1
-                        enrich_track_artists(playlist_item.item, ctx.obj.api)
                         template = resolve_template(PLAYLIST_TEMPLATE, CONFIG.templates.playlist)
 
                         if "{album" in template:
-                            album = ctx.obj.api.get_album(
-                                playlist_item.item.album.id
+                            album = await asyncio.to_thread(
+                                ctx.obj.api.get_album, playlist_item.item.album.id
                             )
                         else:
                             album = None
@@ -1170,6 +1222,9 @@ def download_callback(
                         t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
+            finally:
+                # Flush report_playback pendientes y cierra la sesión HTTP compartida
+                await downloader.close()
 
         rich_output.show_stats()
 

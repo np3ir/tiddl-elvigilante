@@ -30,6 +30,10 @@ class Cover:
         self.data = None
 
     def _get_data(self) -> bytes:
+        # Already fetched — reuse so album-level prefetch is shared per track
+        if self.data is not None:
+            return self.data
+
         retries = 3
         for attempt in range(retries):
             try:
@@ -39,12 +43,13 @@ class Cover:
                     if 500 <= req.status_code < 600:
                          # Force retry on server errors
                          raise RequestException(f"Server error {req.status_code}")
-                    
+
                     log.error(f"could not download cover. ({req.status_code}) {self.url}")
                     return b""
 
                 log.debug(f"got cover {self.url}")
-                return req.content
+                self.data = req.content
+                return self.data
 
             except RequestException as e:
                 if attempt < retries - 1:

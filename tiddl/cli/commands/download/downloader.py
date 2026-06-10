@@ -2,12 +2,11 @@ from __future__ import annotations
 import asyncio
 import shutil
 import hashlib
-import unicodedata
 import uuid
 import sqlite3
 from logging import getLogger
 from pathlib import Path
-from typing import Optional, Callable, Literal, Union
+from typing import Optional, Literal, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -99,57 +98,6 @@ class DownloadTask:
         self.attempts += 1
 
 
-# ====================================================================
-# IMPROVEMENT 5: Download queue manager
-# ====================================================================
-
-class DownloadQueue:
-    """Download queue with priority support"""
-
-    def __init__(self):
-        self.tasks: list[DownloadTask] = []
-        self.completed: list[DownloadTask] = []
-        self.failed: list[DownloadTask] = []
-
-    def add_task(self, task: DownloadTask) -> None:
-        """Adds a task to the queue"""
-        self.tasks.append(task)
-
-    def add_tasks(self, tasks: list[DownloadTask]) -> None:
-        """Adds multiple tasks"""
-        self.tasks.extend(tasks)
-
-    def get_pending_tasks(self) -> list[DownloadTask]:
-        """Gets pending tasks sorted by priority"""
-        pending = [t for t in self.tasks if t.status == DownloadStatus.PENDING]
-        return sorted(pending, key=lambda t: t.priority.value, reverse=True)
-
-    def mark_completed(self, task: DownloadTask) -> None:
-        """Marks a task as completed"""
-        task.status = DownloadStatus.COMPLETED
-        self.completed.append(task)
-        if task in self.tasks:
-            self.tasks.remove(task)
-
-    def mark_failed(self, task: DownloadTask) -> None:
-        """Marks a task as failed"""
-        task.status = DownloadStatus.FAILED
-        self.failed.append(task)
-        if task in self.tasks:
-            self.tasks.remove(task)
-
-    def get_stats(self) -> dict:
-        """Gets queue statistics"""
-        return {
-            "pending": len([t for t in self.tasks if t.status == DownloadStatus.PENDING]),
-            "downloading": len([t for t in self.tasks if t.status == DownloadStatus.DOWNLOADING]),
-            "completed": len(self.completed),
-            "failed": len(self.failed),
-            "total": len(self.tasks) + len(self.completed) + len(self.failed),
-        }
-
-
-
 track_qualities_color: dict[TrackQuality, str] = {
     "LOW": "[gray]96 kbps",
     "HIGH": "[gray]320 kbps",
@@ -165,237 +113,7 @@ video_qualities_color: dict[StreamVideoQuality, str] = {
 
 
 # ====================================================================
-# IMPROVEMENT 4: Downloader with smart retry and verification
-# ====================================================================
-
-class ImprovedDownloader:
-    """
-    Improved downloader with:
-    - Automatic retry with exponential backoff
-    - Integrity verification
-    - Rate limiting management
-    - Detailed progress tracking
-    """
-
-    def __init__(
-        self,
-        max_concurrent_downloads: int = 3,
-        chunk_size: int = 1024**2,  # 1MB
-        timeout: int = 300,  # 5 minutes
-        on_progress: Optional[Callable] = None,
-    ):
-        self.max_concurrent = max_concurrent_downloads
-        self.chunk_size = chunk_size
-        self.timeout = aiohttp.ClientTimeout(total=timeout)
-        self.on_progress = on_progress
-
-        # Semaphore to limit concurrent downloads
-        self.semaphore = asyncio.Semaphore(max_concurrent_downloads)
-
-        # Statistics
-        self.stats = {
-            "completed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "total_bytes": 0,
-        }
-
-    async def download_file(
-        self,
-        task: DownloadTask,
-        session: aiohttp.ClientSession
-    ) -> tuple[bool, Optional[str]]:
-        """
-        Downloads a file with retry and verification.
-
-        Returns:
-            tuple[success, error_message]
-        """
-        async with self.semaphore:
-            # If the file exists and is valid, skip it
-            if task.output_path.exists():
-                is_valid, error = await FileIntegrityChecker.verify_file_async(
-                    task.output_path,
-                    task.expected_size
-                )
-
-                if is_valid:
-                    task.status = DownloadStatus.SKIPPED
-                    self.stats["skipped"] += 1
-                    return True, None
-                else:
-                    # Corrupt file, delete and retry
-                    task.output_path.unlink()
-
-            # Attempt download with retries
-            while task.can_retry:
-                task.increment_attempt()
-                task.status = DownloadStatus.DOWNLOADING
-
-                try:
-                    # Download
-                    success, error = await self._download_with_progress(task, session)
-
-                    if not success:
-                        if "429" in str(error) or "rate limit" in str(error).lower():
-                            # Rate limiting - wait longer
-                            wait_time = min(60 * task.attempts, 300)  # Max 5 min
-                            await asyncio.sleep(wait_time)
-                            continue
-
-                        # Other error - wait less
-                        await asyncio.sleep(2 ** task.attempts)  # Exponential backoff
-                        continue
-
-                    # Verify integrity
-                    task.status = DownloadStatus.VERIFYING
-                    is_valid, error = await FileIntegrityChecker.verify_file_async(
-                        task.output_path,
-                        task.expected_size,
-                        task.expected_hash
-                    )
-
-                    if is_valid:
-                        task.status = DownloadStatus.COMPLETED
-                        self.stats["completed"] += 1
-                        self.stats["total_bytes"] += task.bytes_downloaded
-                        return True, None
-                    else:
-                        # Corrupt file - delete and retry
-                        task.output_path.unlink(missing_ok=True)
-                        task.status = DownloadStatus.CORRUPTED
-
-                        if not task.can_retry:
-                            break
-
-                        await asyncio.sleep(2 ** task.attempts)
-
-                except Exception as e:
-                    task.error_message = str(e)
-
-                    if not task.can_retry:
-                        break
-
-                    await asyncio.sleep(2 ** task.attempts)
-
-            # All attempts failed
-            task.status = DownloadStatus.FAILED
-            self.stats["failed"] += 1
-            return False, task.error_message or "Max retries exceeded"
-
-    async def _download_with_progress(
-        self,
-        task: DownloadTask,
-        session: aiohttp.ClientSession
-    ) -> tuple[bool, Optional[str]]:
-        """
-        Downloads a file with progress tracking.
-
-        Returns:
-            tuple[success, error_message]
-        """
-        try:
-            # Create directory if it does not exist
-            task.output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Download
-            async with session.get(task.url, timeout=self.timeout) as response:
-                # Check status
-                if response.status == 429:
-                    retry_after = response.headers.get("Retry-After", "60")
-                    return False, f"Rate limited - retry after {retry_after}s"
-
-                if response.status != 200:
-                    return False, f"HTTP {response.status}"
-
-                # Get size
-                total_size = int(response.headers.get('content-length', 0))
-                if total_size > 0:
-                    task.expected_size = total_size
-
-                # Write to file
-                task.bytes_downloaded = 0
-
-                async with aiofiles.open(task.output_path, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(self.chunk_size):
-                        await f.write(chunk)
-                        task.bytes_downloaded += len(chunk)
-
-                        # Progress callback
-                        if self.on_progress:
-                            self.on_progress(task)
-
-            return True, None
-
-        except asyncio.TimeoutError:
-            return False, "Download timeout"
-        except aiohttp.ClientError as e:
-            return False, f"Network error: {str(e)}"
-        except Exception as e:
-            return False, f"Unexpected error: {str(e)}"
-
-    async def download_batch(
-        self,
-        tasks: list[DownloadTask],
-        headers: Optional[dict] = None
-    ) -> dict[str, int]:
-        """
-        Downloads a batch of files concurrently.
-
-        Returns:
-            Download statistics
-        """
-        # Sort by priority
-        tasks.sort(key=lambda t: t.priority.value, reverse=True)
-
-        # Create session
-        connector = aiohttp.TCPConnector(limit=self.max_concurrent)
-        async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-            # Create tasks
-            download_tasks = [
-                self.download_file(task, session)
-                for task in tasks
-            ]
-
-            # Execute concurrently
-            results = await asyncio.gather(*download_tasks, return_exceptions=True)
-
-            # Process results
-            for task, result in zip(tasks, results):
-                if isinstance(result, Exception):
-                    task.status = DownloadStatus.FAILED
-                    task.error_message = str(result)
-                    self.stats["failed"] += 1
-
-        return self.stats
-
-
-
-# ====================================================================
-# IMPROVEMENT 3: Improved file integrity checker
-def _win_safe(name: str) -> str:
-    """Convierte un nombre de path a ASCII seguro para shares CIFS/Windows.
-    - Reemplaza fullwidth slash ／ y pipe ｜ por ' - '
-    - Normaliza acentos: á→a, é→e, ñ→n, etc.
-    - Elimina caracteres no-ASCII restantes
-    - Limpia espacios múltiples
-    """
-    # ／ fullwidth slash → separador legible
-    name = name.replace('\uff0f', ' - ')
-    # ｜ fullwidth pipe → separador
-    name = name.replace('\uff5c', ' - ')
-    # Normalizar acentos via NFKD
-    name = unicodedata.normalize('NFKD', name)
-    name = ''.join(c for c in name if not unicodedata.combining(c))
-    # Eliminar cualquier char no-ASCII restante
-    name = name.encode('ascii', errors='replace').decode('ascii')
-    name = name.replace('?', '_')
-    # Limpiar espacios múltiples
-    import re as _re
-    name = _re.sub(r' {2,}', ' ', name).strip()
-    return name
-
-
+# File integrity checker
 # ====================================================================
 
 class FileIntegrityChecker:
@@ -551,6 +269,43 @@ class Downloader:
         # we do a DB lookup first (instant), then a single stat() to confirm
         # the file still exists on disk. No false positives.
         self._db: sqlite3.Connection = self._init_db()
+        # Shared HTTP session: one connection pool for all downloads instead of
+        # a new TCP+TLS handshake per track. Created lazily inside the loop.
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        # Strong refs to fire-and-forget tasks (report_playback) so the GC
+        # can't cancel them mid-flight; awaited in close().
+        self._bg_tasks: set[asyncio.Task] = set()
+
+    def _get_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120)
+            )
+        return self._http_session
+
+    def _spawn_bg(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def close(self) -> None:
+        """Flush pending background tasks and release the HTTP session/DB."""
+        if self._bg_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._bg_tasks, return_exceptions=True),
+                    timeout=15,
+                )
+            except asyncio.TimeoutError:
+                for t in self._bg_tasks:
+                    t.cancel()
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+        if self._db:
+            try:
+                self._db.close()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # SQLite track-DB: O(1) skip-existing without filesystem I/O
@@ -604,19 +359,6 @@ class Downloader:
         except Exception as e:
             log.debug(f"DB insert failed for track {track_id}: {e}")
 
-    def _db_remove(self, track_id: int) -> None:
-        """Remove a track from the DB (e.g. file was deleted from disk)."""
-        if not self._db:
-            return
-        try:
-            self._db.execute(
-                "DELETE FROM downloaded_tracks WHERE track_id = ?",
-                (track_id,)
-            )
-            self._db.commit()
-        except Exception:
-            pass
-
     def _db_batch_lookup(self, track_ids: list) -> dict:
         """Batch lookup multiple track IDs in one SQL query.
 
@@ -638,6 +380,19 @@ class Downloader:
             return {row[0]: Path(row[1]) for row in rows}
         except Exception:
             return {}
+
+    def _db_remove(self, track_id: int) -> None:
+        """Remove a track from the DB (e.g. file was deleted from disk)."""
+        if not self._db:
+            return
+        try:
+            self._db.execute(
+                "DELETE FROM downloaded_tracks WHERE track_id = ?",
+                (track_id,)
+            )
+            self._db.commit()
+        except Exception:
+            pass
 
     async def _scan_directory(self, dir_path: Path) -> None:
         """Scans a directory and caches its contents.
@@ -714,39 +469,39 @@ class Downloader:
                 unique_suffix = f".part.{uuid.uuid4().hex[:8]}"
                 tmp_path = task.output_path.with_suffix(task.output_path.suffix + unique_suffix)
 
-                # Download
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    async with aiofiles.open(tmp_path, "wb") as f:
-                        for url in urls:
-                            async with session.get(url) as resp:
+                # Download — shared session, per-request headers
+                session = self._get_http_session()
+                async with aiofiles.open(tmp_path, "wb") as f:
+                    for url in urls:
+                        async with session.get(url, headers=headers) as resp:
 
-                                # 1. Intercept HTTP Status Errors with specific messages
-                                if resp.status == 451:
-                                    raise Exception(f"HTTP 451 Unavailable For Legal Reasons (Geo-block) for {url}")
-                                if resp.status == 403:
-                                    raise Exception(f"HTTP 403 Forbidden (Token expired or Blocked) for {url}")
-                                if resp.status != 200:
-                                    raise Exception(f"HTTP {resp.status} for {url}")
+                            # 1. Intercept HTTP Status Errors with specific messages
+                            if resp.status == 451:
+                                raise Exception(f"HTTP 451 Unavailable For Legal Reasons (Geo-block) for {url}")
+                            if resp.status == 403:
+                                raise Exception(f"HTTP 403 Forbidden (Token expired or Blocked) for {url}")
+                            if resp.status != 200:
+                                raise Exception(f"HTTP {resp.status} for {url}")
 
-                                # 2. Intercept Invalid Content-Type
-                                content_type = resp.headers.get("Content-Type", "").lower()
-                                if "application/json" in content_type or "text/" in content_type or "xml" in content_type:
-                                    # Try to read the error message
-                                    try:
-                                        error_content = await resp.text()
-                                        # Truncate if too long
-                                        if len(error_content) > 200: error_content = error_content[:200] + "..."
-                                        raise Exception(f"Invalid Content-Type '{content_type}' with content: {error_content}")
-                                    except Exception as read_err:
-                                        if "Invalid Content-Type" in str(read_err): raise read_err
-                                        raise Exception(f"Invalid Content-Type '{content_type}'")
+                            # 2. Intercept Invalid Content-Type
+                            content_type = resp.headers.get("Content-Type", "").lower()
+                            if "application/json" in content_type or "text/" in content_type or "xml" in content_type:
+                                # Try to read the error message
+                                try:
+                                    error_content = await resp.text()
+                                    # Truncate if too long
+                                    if len(error_content) > 200: error_content = error_content[:200] + "..."
+                                    raise Exception(f"Invalid Content-Type '{content_type}' with content: {error_content}")
+                                except Exception as read_err:
+                                    if "Invalid Content-Type" in str(read_err): raise read_err
+                                    raise Exception(f"Invalid Content-Type '{content_type}'")
 
-                                async for chunk in resp.content.iter_chunked(CHUNK_SIZE):
-                                    await f.write(chunk)
-                                    task.bytes_downloaded += len(chunk)
-                                    self.rich_output.download_advance(
-                                        task_id, size=len(chunk)
-                                    )
+                            async for chunk in resp.content.iter_chunked(CHUNK_SIZE):
+                                await f.write(chunk)
+                                task.bytes_downloaded += len(chunk)
+                                self.rich_output.download_advance(
+                                    task_id, size=len(chunk)
+                                )
 
                 # Move temporary file to destination with retry logic
                 # This fixes WinError 32 on network shares where file close is not instant
@@ -878,78 +633,6 @@ class Downloader:
         
         return False
 
-    async def download_batch(
-        self,
-        tasks: list[DownloadTask],
-        headers: Optional[dict] = None
-    ) -> dict:
-        """
-        Downloads a batch of tasks using the queue and semaphore.
-        """
-        completed = 0
-        failed = 0
-        skipped = 0
-        total_bytes = 0
-
-        # Create asynchronous tasks
-        async def process_task(task: DownloadTask, i: int):
-            nonlocal completed, failed, skipped, total_bytes
-
-            async with self.semaphore:
-                if not task.url:
-                    task.status = DownloadStatus.FAILED
-                    task.error_message = "No URL provided"
-                    failed += 1
-                    return
-
-                # If task.url is a string, convert it to a list
-                urls = [task.url]
-
-                # Set up display in rich_output
-                task_id = self.rich_output.download_start(
-                    f"[cyan]Batch[/] {task.track_title or 'Unknown'}",
-                    total=task.expected_size
-                )
-
-                success = await self._download_with_retry(
-                    task=task,
-                    urls=urls,
-                    task_id=task_id,
-                    headers=headers
-                )
-
-                # Finish task in UI
-                self.rich_output.download_finish(task_id=task_id)
-
-                if success:
-                    completed += 1
-                    total_bytes += task.bytes_downloaded
-                    self.rich_output.show_item_result(
-                        result_message="[green]Completed",
-                        item_description=f"{task.track_title}",
-                        item_path=task.output_path
-                    )
-                else:
-                    failed += 1
-                    self.rich_output.show_item_result(
-                        result_message="[red]Failed",
-                        item_description=f"{task.track_title}",
-                        item_path=None
-                    )
-
-        # Execute all tasks
-        await asyncio.gather(*[
-            process_task(task, i)
-            for i, task in enumerate(tasks)
-        ])
-
-        return {
-            "completed": completed,
-            "failed": failed,
-            "skipped": skipped,
-            "total_bytes": total_bytes
-        }
-
     async def download(
         self, item: Union[Track, Video], file_path: Path,
         source_type: str = "ALBUM", source_id: Optional[str] = None,
@@ -1011,14 +694,14 @@ class Downloader:
                 # DB says we downloaded this track.  Do a single stat() to
                 # confirm the file still exists (guards against manual deletes).
                 try:
-                    file_still_exists = await asyncio.to_thread(db_path.exists)
+                    file_still_exists = await self._is_file_in_cache(db_path)
                 except OSError:
                     file_still_exists = False
                 if file_still_exists:
                     # Only skip if the file is already in the intended destination folder.
                     # If it was downloaded elsewhere (e.g. a playlist), still download
                     # it to the correct location (e.g. the album folder).
-                    if db_path.parent.resolve() == file_path.parent.resolve():
+                    if os.path.normcase(os.path.normpath(str(db_path.parent))) == os.path.normcase(os.path.normpath(str(file_path.parent))):
                         self.rich_output.show_item_result(
                             result_message="[yellow]Exists",
                             item_description=f"[{vibrant_color}]{display_title}",
@@ -1185,7 +868,7 @@ class Downloader:
                     self._db_insert(item.id, download_path, str(item.audioQuality))
 
                     # Report playback event — makes activity look like web player streaming
-                    asyncio.create_task(report_playback(
+                    self._spawn_bg(report_playback(
                         headers=dict(self.api.client.session.headers),
                         track_id=item.id,
                         duration=getattr(item, "duration", 240),
@@ -1282,7 +965,7 @@ class Downloader:
                     # Record video in DB as well
                     self._db_insert(item.id, download_path, "VIDEO")
 
-                    asyncio.create_task(report_playback(
+                    self._spawn_bg(report_playback(
                         headers=dict(self.api.client.session.headers),
                         track_id=item.id,
                         duration=getattr(item, "duration", 180),

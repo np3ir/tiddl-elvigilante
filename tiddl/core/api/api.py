@@ -63,10 +63,9 @@ class TidalAPI:
             self.client.session.mount('https://', adapter)
 
     def _fetch_with_retry(self, *args: Any, **kwargs: Any):
-        # Adaptive Throttling
-        if self._rate_limit_delay > 0:
-            time.sleep(self._rate_limit_delay)
-
+        # NOTE: no pre-request sleep here — client.fetch() already enforces the
+        # rate-limit interval plus its own adaptive 429 delay. _rate_limit_delay
+        # is kept only to widen the backoff on retries below.
         max_retries = 10
         attempt = 0
         base_backoff = 5

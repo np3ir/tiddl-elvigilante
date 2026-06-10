@@ -74,6 +74,7 @@ class TidalClientImproved:
         self._rate_limit_delay: float = 0.0  # Adaptive: grows on 429, shrinks on success
         self._refresh_blocked: bool = False  # Set when refresh returns a permanent 4xx
         
+        self._omit_cache = omit_cache
         self.session = CachedSession(
             cache_name=cache_name,
             always_revalidate=omit_cache
@@ -191,29 +192,47 @@ class TidalClientImproved:
         
         # Select base URL based on version
         base_url = API_V1_URL if api_version == "v1" else API_V2_URL
-        
-        # Adaptive delay from previous 429s
-        if self._rate_limit_delay > 0:
-            time.sleep(self._rate_limit_delay)
 
-        # Rate Limiting Enforcement (thread-safe, fixed interval + jitter)
-        with self._rate_lock:
-            elapsed = time.time() - self._last_request_time
-            wait = self._request_interval - elapsed + random.uniform(0, 0.3)
-            if wait > 0:
-                time.sleep(wait)
-            self._last_request_time = time.time()
+        # Cache peek FIRST: a cache hit consumes no API quota, so it must not
+        # pay the rate-limit sleep. only_if_cached returns a dummy 504 (no
+        # network) when the response isn't cached.
+        res = None
+        if not self._omit_cache:
+            try:
+                cached = self.session.get(
+                    f"{base_url}/{endpoint}",
+                    params=params,
+                    expire_after=expire_after,
+                    only_if_cached=True,
+                )
+                if cached.status_code == 200 and getattr(cached, "from_cache", False):
+                    res = cached
+            except Exception:
+                res = None
 
-        res = self.session.get(
-            f"{base_url}/{endpoint}",
-            params=params,
-            expire_after=expire_after
-        )
+        if res is None:
+            # Adaptive delay from previous 429s
+            if self._rate_limit_delay > 0:
+                time.sleep(self._rate_limit_delay)
 
-        # Cache hits don't consume API quota — release the slot
-        if getattr(res, 'from_cache', False):
+            # Rate Limiting Enforcement (thread-safe, fixed interval + jitter)
             with self._rate_lock:
-                self._last_request_time = time.time() - self._request_interval
+                elapsed = time.time() - self._last_request_time
+                wait = self._request_interval - elapsed + random.uniform(0, 0.3)
+                if wait > 0:
+                    time.sleep(wait)
+                self._last_request_time = time.time()
+
+            res = self.session.get(
+                f"{base_url}/{endpoint}",
+                params=params,
+                expire_after=expire_after
+            )
+
+            # Cache hits don't consume API quota — release the slot
+            if getattr(res, 'from_cache', False):
+                with self._rate_lock:
+                    self._last_request_time = time.time() - self._request_interval
 
         # ============================================================
         # IMPROVEMENT 5: Detailed rate limiting handling (429)
