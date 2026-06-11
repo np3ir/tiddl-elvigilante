@@ -540,7 +540,7 @@ class Downloader:
                     # Attempt to repair MP4/M4A container using ffmpeg faststart remux
                     if task.output_path.suffix.lower() in [".m4a", ".mp4", ".m4v"]:
                         try:
-                            repaired_path = fix_mp4_faststart(task.output_path)
+                            repaired_path = await asyncio.to_thread(fix_mp4_faststart, task.output_path)
                             # Verify again after repair
                             is_valid_repaired, error_msg_repaired = await FileIntegrityChecker.verify_file_async(repaired_path)
 
@@ -852,7 +852,7 @@ class Downloader:
                         continue
                     try:
                         if should_extract_flac:
-                            download_path = extract_flac(download_path)
+                            download_path = await asyncio.to_thread(extract_flac, download_path)
                     except Exception as exc:
                         log.error(f"{should_extract_flac=}, {exc=}")
                         self.rich_output.console.print(
@@ -943,7 +943,7 @@ class Downloader:
                     # Convert .ts segments → .mp4
                     ts_path = download_path
                     try:
-                        download_path = convert_to_mp4(download_path)
+                        download_path = await asyncio.to_thread(convert_to_mp4, download_path)
                     except Exception as e:
                         log.error(f"convert_to_mp4 failed for {item.id}: {e}")
                         self.rich_output.download_finish(task_id=task_id)

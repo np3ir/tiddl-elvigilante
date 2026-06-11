@@ -452,7 +452,8 @@ def download_callback(
                         if REWRITE_METADATA or was_downloaded:
                             for _attempt in range(3):
                                 try:
-                                    add_track_metadata(
+                                    await asyncio.to_thread(
+                                        add_track_metadata,
                                         path=download_path,
                                         track=item,
                                         lyrics=lyrics_subtitles,
@@ -477,7 +478,7 @@ def download_callback(
 
                     elif isinstance(item, Video):
                         if REWRITE_METADATA or was_downloaded:
-                            add_video_metadata(path=download_path, video=item, artist_separator=CONFIG.templates.artist_separator)
+                            await asyncio.to_thread(add_video_metadata, path=download_path, video=item, artist_separator=CONFIG.templates.artist_separator)
 
                 if download_path and CONFIG.download.update_mtime:
                     try:
@@ -666,12 +667,13 @@ def download_callback(
                 )
 
                 if save_cover and cover:
-                    cover.save_to_directory(
-                        path=DOWNLOAD_PATH
+                    await asyncio.to_thread(
+                        cover.save_to_directory,
+                        DOWNLOAD_PATH
                         / format_template(
                             template=CONFIG.cover.templates.album, album=album,
                             artist_separator=CONFIG.templates.artist_separator,
-                        )
+                        ),
                     )
 
             # resources should be collected from a distinct function
@@ -710,14 +712,14 @@ def download_callback(
                     and ("track" in CONFIG.cover.allowed)
                     and track.album.cover
                 ):
-                    Cover(
-                        track.album.cover, size=CONFIG.cover.size
-                    ).save_to_directory(
-                        path=DOWNLOAD_PATH
+                    _track_cover = Cover(track.album.cover, size=CONFIG.cover.size)
+                    await asyncio.to_thread(
+                        _track_cover.save_to_directory,
+                        DOWNLOAD_PATH
                         / format_template(
                             CONFIG.cover.templates.track, item=track, album=album,
                             artist_separator=CONFIG.templates.artist_separator,
-                        )
+                        ),
                     )
 
             elif resource_type == "video":
@@ -1172,15 +1174,15 @@ def download_callback(
                     and ("playlist" in CONFIG.cover.allowed)
                     and playlist.squareImage
                 ):
-                    Cover(
-                        playlist.squareImage, size=max(CONFIG.cover.size, 1080)
-                    ).save_to_directory(
-                        path=DOWNLOAD_PATH
+                    _pl_cover = Cover(playlist.squareImage, size=max(CONFIG.cover.size, 1080))
+                    await asyncio.to_thread(
+                        _pl_cover.save_to_directory,
+                        DOWNLOAD_PATH
                         / format_template(
                             template=CONFIG.cover.templates.playlist,
                             playlist=playlist,
                             artist_separator=CONFIG.templates.artist_separator,
-                        )
+                        ),
                     )
 
                 ctx.obj.console.print(f"\n[bold green]✅ Playlist download completed:[/] {playlist.title}")
