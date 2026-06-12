@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from requests.exceptions import HTTPError
 from typing import Any, Callable, Optional, TypeAlias
 
 from tiddl.core.auth.exceptions import AuthClientError
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -245,9 +248,11 @@ class AuthClientImproved:
             # Intentar refrescar silenciosamente
             try:
                 self.refresh_current_token()
-            except Exception:
-                # Si falla el refresh, seguimos retornando el actual
-                pass
+            except Exception as e:
+                # Si falla el refresh, seguimos retornando el actual,
+                # pero dejamos rastro: un refresh que falla en silencio
+                # termina en token caducado sin aviso (visto 2026-05-22)
+                log.warning("Token refresh failed, keeping current token: %s", e)
         
         return self._current_token
     
@@ -270,13 +275,15 @@ class AuthClientImproved:
         if not token_to_use:
             raise ValueError("No refresh_token available")
         
+        # No mandar "scope" en el refresh: el client TV lo rechaza con
+        # invalid_scope (sub_status 1002). RFC 6749 §6: scope es opcional
+        # y por defecto se mantiene el del grant original.
         res = self.session.post(
             f"{self.auth_url}/token",
             data={
                 "client_id": self.credentials.client_id,
                 "refresh_token": token_to_use,
                 "grant_type": "refresh_token",
-                "scope": "r_usr+w_usr+w_sub",
             },
             auth=self.credentials.to_tuple(),
         )
