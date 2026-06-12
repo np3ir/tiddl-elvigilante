@@ -1,3 +1,4 @@
+import os
 from logging import getLogger
 from pathlib import Path
 from pydantic import BaseModel, validator, Field
@@ -73,10 +74,15 @@ class Config(BaseModel):
 
         @validator("download_path", "scan_path", "video_download_path", pre=True, always=True)
         def str_to_path(cls, v):
-            # convert to absolute, expand ~, normalize
+            # Convert to an absolute, ~-expanded, normalized path WITHOUT touching
+            # the filesystem. .resolve() calls os.path.realpath(), which does a
+            # network round-trip for mapped drives (e.g. Z:\ on a NAS); when the
+            # share is temporarily offline that raised WinError 64 here and took
+            # down config loading — and thus all of tiddl — at import time.
+            # os.path.abspath normalizes (expands ~ first) with no I/O.
             if v is None:
                 return None
-            return Path(v).expanduser().resolve() if isinstance(v, str) else v
+            return Path(os.path.abspath(os.path.expanduser(v))) if isinstance(v, str) else v
 
         @validator("scan_path", always=True)
         def sync_scan_path(cls, v, values):
