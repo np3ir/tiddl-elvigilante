@@ -117,17 +117,16 @@ class TidalAPI:
                         # Use debug log instead of print to avoid spamming UI for optional items like lyrics
                         log.debug(f"Content not found ({status}). Skipping...")
                         raise e
-                    if status in [429, 500, 502, 503, 504]: 
+                    if status in [429, 500, 502, 503, 504]:
                         is_http = True
                         if status == 429:
                             self._rate_limit_delay = min(5.0, self._rate_limit_delay + 1.0)
-                        
-                        # Add delay for 500/502/503/504 errors
-                        if status in [500, 502, 503, 504]:
-                            # Exponential backoff for server errors
-                            wait_time = (2 ** attempt) + self._rate_limit_delay
-                            print(f"⚠️ Server Error ({status}). Retrying in {wait_time:.1f}s...")
-                            time.sleep(wait_time)
+                        # 500/502/503/504 fall through to the single capped backoff
+                        # in the is_http branch below. There used to be a second
+                        # sleep here with an UNCAPPED 2**attempt delay — every server
+                        # error then waited twice (once uncapped, once capped),
+                        # adding up to ~17 min of dead time on a persistently failing
+                        # endpoint. The unified backoff (capped at max_backoff) is enough.
                 elif "429" in str(e):
                     is_http = True
                     self._rate_limit_delay = min(5.0, self._rate_limit_delay + 1.0)
