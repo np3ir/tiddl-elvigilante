@@ -422,4 +422,15 @@ def sanitize_filename(s: str, item_id: Optional[int] = None, max_len: int = 100,
     # Apply byte reserve for downloader suffixes (.flac.part.<hash>)
     # Folders should pass reserve_bytes=0, filenames should pass reserve_bytes=50
     effective_max = max(max_len - reserve_bytes, 20)
-    return truncate_str_bytes(s, effective_max)
+    s = truncate_str_bytes(s, effective_max)
+
+    # Re-strip trailing dots/spaces AFTER truncation: byte-truncation can land
+    # right after a space or dot (very common with 3-byte/char scripts like Thai
+    # that hit the byte limit on short titles). Windows \\?\ extended-length
+    # paths — which the downloader uses — do NOT auto-strip trailing dots/spaces
+    # like normal paths, so a leftover one causes [Errno 22] Invalid argument on
+    # open()/mkdir(). Fall back to the id-based name if stripping empties it.
+    s = s.rstrip(". ")
+    if not s:
+        return _generate_fallback_name(original_input, item_id)
+    return s
