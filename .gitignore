@@ -68,3 +68,8 @@ downloads/
 *.tmp
 temp/
 *.zip
+
+# Local backups (added 2026-06-12)
+.backup_*/
+*.bak
+*.bak-*
