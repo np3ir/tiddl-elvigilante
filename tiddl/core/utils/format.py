@@ -59,8 +59,14 @@ _RE_ANTI_FEAT = re.compile(
     # Option 2: Dash Separator - consumes rest of string or until next delimiter
     r"(?:\s+[-\u2013]\s+\s*"
     r"(?:" + _KEYWORDS_PATTERN + r")"
-    r"\s+(.*))",
-    
+    r"\s+(.*))"
+
+    r"|"  # OR
+
+    # Option 3: Bare feat/ft/featuring (no brackets/dash). Restricted to the
+    # unambiguous feat keyword; is_known() still protects titles like "6 Ft. 7 Ft.".
+    r"(?:\s+f(?:ea)?t(?:\.|uring)?\s+(.*))",
+
     flags=re.IGNORECASE
 )
 
@@ -98,8 +104,8 @@ def clean_track_title(track_title: str, artist_name: str) -> str:
 
     def replacement(match):
         full_match = match.group(0)
-        # Check which group matched (1 for parens, 2 for dash)
-        content = match.group(1) or match.group(2)
+        # Check which group matched (1 for parens, 2 for dash, 3 for bare feat)
+        content = match.group(1) or match.group(2) or match.group(3)
         
         if not content: return full_match
         
