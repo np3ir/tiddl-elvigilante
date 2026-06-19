@@ -466,15 +466,19 @@ def download_callback(
                                         artist_separator=CONFIG.templates.artist_separator,
                                     )
                                     break
-                                except (PermissionError, OSError) as e:
-                                    if _attempt < 2:
+                                except Exception as e:
+                                    # mutagen envuelve el PermissionError del SO (lock de slskd/AV en NAS/SMB)
+                                    # en su propia excepcion, asi que detectamos el lock por tipo O por mensaje.
+                                    _locked = isinstance(e, (PermissionError, OSError)) or "Permission denied" in str(e) or "Errno 13" in str(e) or "WinError 5" in str(e)
+                                    if _locked and _attempt < 2:
                                         log.warning(f"Metadata write blocked (attempt {_attempt + 1}/3), retrying in 2s: {download_path}")
                                         await asyncio.sleep(2)
+                                    elif _locked:
+                                        log.warning(f"Could not write metadata after 3 attempts (file locked by another process), skipping: {download_path} — {e}")
+                                        break
                                     else:
-                                        log.warning(f"Could not write metadata after 3 attempts, skipping: {download_path} — {e}")
-                                except Exception as e:
-                                    log.warning(f"Metadata write failed for {download_path}, skipping: {e}")
-                                    break
+                                        log.warning(f"Metadata write failed for {download_path}, skipping: {e}")
+                                        break
 
                     elif isinstance(item, Video):
                         if REWRITE_METADATA or was_downloaded:
