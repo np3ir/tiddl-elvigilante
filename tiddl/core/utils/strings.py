@@ -29,9 +29,14 @@ CHAR_TO_FULL_WIDTH = {
 # ASCII_FALLBACK = True/False  # Force aggressive transliteration to ASCII
 # AGGRESSIVE_NORMALIZATION = True/False # Use NFKC instead of NFC (collapses ®, ™, etc.)
 
-MAX_FILENAME_BYTES = 250
-MAX_COMPONENT_LEN = 250
-RESERVED_BYTE_COUNT = 50
+# 255 bytes is the hard per-component limit on ext4/btrfs/NTFS — use it in full
+# so names stay as complete as the filesystem allows (aligned with OrpheusDL).
+MAX_FILENAME_BYTES = 255
+MAX_COMPONENT_LEN = 255
+# Bytes reserved on the FINAL filename for transient download/convert suffixes
+# (e.g. ".fixed.flac", ".tmp.flac" ≈ 11 bytes). 16 leaves headroom without
+# eating into the visible name the way the old 50-byte reserve did.
+RESERVED_BYTE_COUNT = 16
 
 _WIN_FORBIDDEN_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 _DRIVE_RE = re.compile(r"^[A-Za-z]:$")

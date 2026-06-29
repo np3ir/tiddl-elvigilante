@@ -22,10 +22,16 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # LENGTH LIMITS
 # ============================================================
-MAX_ARTISTS_LEN = 100
-MAX_TITLE_LEN = 150
-MAX_FILENAME_BYTES = 250
-MAX_COMPONENT_LEN = 250
+# Aligned with OrpheusDL: keep names as full as the filesystem allows.
+# The only hard limit is 255 bytes PER PATH COMPONENT (ext4/btrfs/NTFS).
+# Title/artist soft caps are raised so they never pre-truncate a name; the
+# per-component byte cap is the single real limiter. The total-path cap is
+# relaxed to PATH_MAX so a long folder no longer crushes the filename
+# (Orpheus byte-limits only the folder, never the filename + uses \\?\).
+MAX_ARTISTS_LEN = 500
+MAX_TITLE_LEN = 500
+MAX_FILENAME_BYTES = 4000
+MAX_COMPONENT_LEN = 255
 DEFAULT_ARTIST_SEPARATOR = " / "
 
 # ============================================================
@@ -249,7 +255,7 @@ def generate_template_data(item=None, album=None, playlist=None, playlist_index=
     # Helper to calc safe limits (defined at scope level to be available for all blocks)
     # sanitize_filename now accepts reserve_bytes, so we pass explicit limits here.
     safe_file_len = MAX_COMPONENT_LEN
-    safe_folder_len = 150
+    safe_folder_len = MAX_COMPONENT_LEN
 
     item_tmpl = None
 
@@ -423,7 +429,7 @@ def clean_filepath(fp: str) -> str:
         # Apply reservation ONLY to the last component (filename)
         # Folders get 0 reservation.
         r_bytes = RESERVED_BYTE_COUNT if is_last else 0
-        limit = MAX_COMPONENT_LEN if is_last else 150
+        limit = MAX_COMPONENT_LEN  # folders & filename: same FS component cap
         sanitized.append(_normalize_for_filesystem(p, max_len=limit, reserve_bytes=r_bytes))
     parts = sanitized
 
@@ -539,7 +545,7 @@ def format_template(template: str,
         # Otherwise it's a folder -> 150
         # sanitize_filename will subtract RESERVED_BYTE_COUNT (50) from these.
         is_last = (idx == len(parts) - 1)
-        limit = MAX_COMPONENT_LEN if is_last else 150
+        limit = MAX_COMPONENT_LEN  # folders & filename: same FS component cap
         r_bytes = RESERVED_BYTE_COUNT if is_last else 0
         
         rendered_parts.append(_sanitize_segment(rendered, seg_idx, current_id, max_len=limit, reserve_bytes=r_bytes))
@@ -549,7 +555,7 @@ def format_template(template: str,
     if item and album and safe_getattr(album, "numberOfVolumes", 0) > 1:
         if "{item.volume}" not in template:
             vol = safe_getattr(item, "volumeNumber", 1)
-            disc_part = _sanitize_segment(f"Disc {vol}", 0, current_id, max_len=150, reserve_bytes=0)
+            disc_part = _sanitize_segment(f"Disc {vol}", 0, current_id, max_len=MAX_COMPONENT_LEN, reserve_bytes=0)
             # Insert before the filename (last component)
             if len(rendered_parts) >= 1:
                 rendered_parts.insert(-1, disc_part)
