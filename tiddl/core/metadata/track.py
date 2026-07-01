@@ -255,9 +255,12 @@ def add_track_metadata(
     Title is cleaned to remove 'feat.' parts, while the full artist list
     (main + featured) is stored in the ARTIST/©ART field.
     """
-    # Build artist list — sorted for consistency
-    artists_sorted = sorted(a.name.strip() for a in track.artists)
-    # Separator-joined string → used for filenames and folder names
+    # Build artist list — MAIN primero (ordenado), luego FEATURED (ordenado),
+    # paridad con el nombre de archivo (format.py artists_with_features)
+    _m = sorted(a.name.strip() for a in track.artists if getattr(a, "type", None) != "FEATURED")
+    _f = sorted(a.name.strip() for a in track.artists if getattr(a, "type", None) == "FEATURED")
+    artists_sorted = _m + _f
+    # Separator-joined string
     artists_str = artist_separator.join(artists_sorted)
     # Individual list → written as repeated tags in FLAC/M4A (spec-correct)
     artists_list = artists_sorted
