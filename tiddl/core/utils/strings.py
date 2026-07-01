@@ -379,7 +379,9 @@ def sanitize_filename(s: str, item_id: Optional[int] = None, max_len: int = 100,
     # 2. Post-cleanup: Consolidate whitespace and other cosmetic fixes.
     s = re.sub(r'\s+', ' ', s)  # Collapse multiple spaces into one
     s = re.sub(r'_+', '_', s)    # Collapse multiple underscores
-    s = re.sub(r'\.+', '.', s)    # Collapse multiple dots
+    # NOTE: internal runs of dots are preserved (aligned with OrpheusDL), so
+    # titles like "Flashdance...What a Feeling" keep their ellipsis. Trailing
+    # dots are still removed below by rstrip('. ') per the Windows rule.
 
     # 3. Strip problematic characters ONLY from the very end, as per Windows rules.
     # We do NOT strip from the start, to preserve names like '.Flakes'.
