@@ -34,6 +34,23 @@ MAX_FILENAME_BYTES = 4000
 MAX_COMPONENT_LEN = 255
 DEFAULT_ARTIST_SEPARATOR = " / "
 
+# Max artists rendered in an on-disk name before the tail collapses into
+# "& others". Compilation tracks can list 20+ artists which, joined into the
+# filename, blow past Windows MAX_PATH (260 chars) and make the file
+# unopenable in players that aren't long-path-aware (even with the registry
+# LongPathsEnabled=1). ALL artists are still written to the ARTIST tag in
+# core/metadata/track.py — this only shortens the visible name/folder.
+MAX_ARTISTS_IN_NAME = 3
+OTHERS_SUFFIX = " & others"
+
+
+def _join_artists_capped(names, separator, limit=MAX_ARTISTS_IN_NAME):
+    """Join artist names, collapsing the tail into '& others' past `limit`."""
+    names = [n for n in names if n]
+    if len(names) <= limit:
+        return separator.join(names)
+    return separator.join(names[:limit]) + OTHERS_SUFFIX
+
 # ============================================================
 # Security options
 # ============================================================
@@ -298,7 +315,7 @@ def generate_template_data(item=None, album=None, playlist=None, playlist_index=
         t_trunc = _truncate(clean_title, MAX_TITLE_LEN)
         ver_str = f" ({ver})" if ver else ""
         tv_trunc = _truncate(f"{t_trunc}{ver_str}", MAX_TITLE_LEN)
-        af_trunc = _truncate(artist_separator.join(m_arts + f_arts), MAX_ARTISTS_LEN)
+        af_trunc = _truncate(_join_artists_capped(m_arts + f_arts, artist_separator), MAX_ARTISTS_LEN)
         
         item_artist_obj = safe_getattr(item, "artist", None)
         art_name = get_name(item_artist_obj) if item_artist_obj else (m_arts[0] if m_arts else "")
@@ -317,8 +334,8 @@ def generate_template_data(item=None, album=None, playlist=None, playlist_index=
             quality=quality,
             artist=art_name,
             safe_artist=sanitize_filename(art_name, safe_getattr(item, "id", 0), max_len=safe_folder_len),
-            artists=artist_separator.join(m_arts),
-            safe_artists=sanitize_filename(artist_separator.join(m_arts), safe_getattr(item, "id", 0), max_len=safe_folder_len),
+            artists=_join_artists_capped(m_arts, artist_separator),
+            safe_artists=sanitize_filename(_join_artists_capped(m_arts, artist_separator), safe_getattr(item, "id", 0), max_len=safe_folder_len),
             features=artist_separator.join(f_arts),
             artists_with_features=af_trunc,
             explicit=Explicit(safe_getattr(item, "explicit", None)),
@@ -356,8 +373,8 @@ def generate_template_data(item=None, album=None, playlist=None, playlist_index=
             safe_title=sanitize_filename(clean_album_title, safe_getattr(album, "id", 0), max_len=safe_folder_len),
             artist=album_artist_name,
             safe_artist=sanitize_filename(album_artist_name, safe_getattr(album, "id", 0), max_len=safe_folder_len),
-            artists=artist_separator.join(alb_main_artists),
-            safe_artists=sanitize_filename(artist_separator.join(alb_main_artists), safe_getattr(album, "id", 0), max_len=safe_folder_len),
+            artists=_join_artists_capped(alb_main_artists, artist_separator),
+            safe_artists=sanitize_filename(_join_artists_capped(alb_main_artists, artist_separator), safe_getattr(album, "id", 0), max_len=safe_folder_len),
             date=d,
             explicit=Explicit(safe_getattr(album, "explicit", None)),
             master=UserFormat(is_master),
