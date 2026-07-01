@@ -33,10 +33,15 @@ CHAR_TO_FULL_WIDTH = {
 # so names stay as complete as the filesystem allows (aligned with OrpheusDL).
 MAX_FILENAME_BYTES = 255
 MAX_COMPONENT_LEN = 255
-# Bytes reserved on the FINAL filename for transient download/convert suffixes
-# (e.g. ".fixed.flac", ".tmp.flac" ≈ 11 bytes). 16 leaves headroom without
-# eating into the visible name the way the old 50-byte reserve did.
-RESERVED_BYTE_COUNT = 16
+# Bytes reserved on the visible (extension-less) filename for the real
+# extension PLUS any transient download/convert suffix appended on top of it.
+# The binding case is the download temp file: output = "<name>.flac" and the
+# downloader writes to "<name>.flac.part.<8 hex>" (downloader.py), i.e.
+# ".flac" (5) + ".part." (6) + 8 = 19 bytes on top of the visible name. The
+# old 16-byte reserve only covered ".tmp.flac"/".fixed.flac" (~11) and blew
+# the 255-byte NTFS component limit on huge names → [Errno 22] on \\?\ paths.
+# 24 covers the 19-byte worst case with a little headroom.
+RESERVED_BYTE_COUNT = 24
 
 _WIN_FORBIDDEN_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 _DRIVE_RE = re.compile(r"^[A-Za-z]:$")
