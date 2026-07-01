@@ -73,3 +73,4 @@ temp/
 .backup_*/
 *.bak
 *.bak-*
+*.bak_*
