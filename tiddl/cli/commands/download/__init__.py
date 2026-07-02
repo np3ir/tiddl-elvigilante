@@ -600,6 +600,15 @@ def download_callback(
                     [ai.item for ai in all_album_items], ctx.obj.api
                 )
 
+                # Ensure tracks are processed in disc/track order (the API is
+                # usually ordered, but paginated credits endpoints can arrive
+                # shuffled). With threads_count=1 this means they also complete
+                # in order; with more threads it only fixes the start order.
+                all_album_items.sort(key=lambda ai: (
+                    getattr(ai.item, "volumeNumber", 0) or 0,
+                    getattr(ai.item, "trackNumber", 0) or 0,
+                ))
+
                 # --- Build tasks — confirmed tracks are skipped, rest download normally ---
                 # confirmed-skipped tuples are pre-populated so save_m3u stays complete
                 skipped_with_path: list[tuple] = []
@@ -1021,9 +1030,16 @@ def download_callback(
                             # Current is better or equal
                             artist_stats['skipped_duplicates'] += 1
                 
-                # Queue the selected best versions in random order
+                # Queue the selected best versions oldest-first (by release date),
+                # so an artist download proceeds from the earliest album to the
+                # newest. Albums without a date sort last; title is a tie-breaker.
                 albums_to_download = list(unique_map.values())
-                random.shuffle(albums_to_download)
+                albums_to_download.sort(
+                    key=lambda a: (
+                        str(a.releaseDate) if a.releaseDate else "9999-99-99",
+                        (a.title or "").lower(),
+                    )
+                )
                 for album in albums_to_download:
                     if album.id not in seen_album_ids:
                         seen_album_ids.add(album.id)
