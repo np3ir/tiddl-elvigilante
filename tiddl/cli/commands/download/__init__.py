@@ -363,18 +363,26 @@ def download_callback(
                 if not track_metadata:
                     track_metadata = Metadata()
 
-                if TRACK_DELAY > 0:
-                    # 85% del tiempo: pausa corta (comportamiento normal)
-                    # 15% del tiempo: pausa larga (simula distracción/scroll)
-                    if random.random() < 0.15:
-                        await asyncio.sleep(random.uniform(TRACK_DELAY * 2, TRACK_DELAY * 6))
-                    else:
-                        await asyncio.sleep(random.uniform(0.5, max(0.5, TRACK_DELAY)))
+                # Acquire the download semaphore *before* the human-pacing delay so
+                # tasks enter their delay in FIFO (creation) order. Previously the
+                # delay ran before downloader.download()'s own semaphore acquire,
+                # so a track that randomly rolled a long "distracted" pause let
+                # later, shorter-delayed tracks slip past it and download first —
+                # scrambling the disc/track order even with threads_count=1.
+                async with downloader.semaphore:
+                    if TRACK_DELAY > 0:
+                        # 85% del tiempo: pausa corta (comportamiento normal)
+                        # 15% del tiempo: pausa larga (simula distracción/scroll)
+                        if random.random() < 0.15:
+                            await asyncio.sleep(random.uniform(TRACK_DELAY * 2, TRACK_DELAY * 6))
+                        else:
+                            await asyncio.sleep(random.uniform(0.5, max(0.5, TRACK_DELAY)))
 
-                download_path, was_downloaded = await downloader.download(
-                    item=item, file_path=Path(file_path),
-                    source_type=source_type, source_id=source_id,
-                )
+                    download_path, was_downloaded = await downloader.download(
+                        item=item, file_path=Path(file_path),
+                        source_type=source_type, source_id=source_id,
+                        _skip_semaphore=True,
+                    )
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
 
