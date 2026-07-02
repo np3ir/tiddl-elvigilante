@@ -640,7 +640,10 @@ class Downloader:
         """
         returns
         - Path `item_path` path of existing/downloaded item
-        - bool `was_downloaded`
+        - bool `needs_metadata` — True if the caller should (re)write metadata:
+          either the audio was just downloaded, or it was found on disk without
+          a confirmed-complete DB record. False only when the DB confirms both
+          audio and tags were already fully written on a previous run.
         """
 
         artist_name = item.artist.name if getattr(item, 'artist', None) else "Unknown"
@@ -688,6 +691,9 @@ class Downloader:
         result_message = "[green]Downloaded"
 
         # --- Fast path: SQLite DB lookup (O(1), no network I/O) ---
+        # A DB record is only inserted by the caller *after* metadata is
+        # successfully written (see handle_item), so a hit here means audio
+        # + tags are both confirmed complete — safe to fully skip.
         if self.skip_existing and isinstance(item, Track):
             db_path = self._db_lookup(item.id)
             if db_path is not None:
@@ -714,6 +720,13 @@ class Downloader:
                     log.debug(f"Track {item.id} was in DB but file missing, re-downloading")
 
         # --- Fallback: directory scan cache ---
+        # Unlike the DB fast-path above, a file found only by scanning disk is
+        # NOT a confirmed-complete record — the DB is only inserted (by the
+        # caller) after metadata is written, so a file that exists without a
+        # DB entry may have been left mid-way (process killed between the
+        # download finishing and tags being written). Return True here (not
+        # False) so the caller still attempts to (re)write metadata, even
+        # though the audio itself doesn't need re-downloading.
         if await self._is_file_in_cache(existing_file_path):
             result_message = "[cyan]Overwritten"
 
@@ -723,7 +736,7 @@ class Downloader:
                     item_description=f"[{vibrant_color}]{display_title}",
                     item_path=existing_file_path,
                 )
-                return existing_file_path, False
+                return existing_file_path, True
 
         # Check for alternative extensions (e.g. have FLAC, requesting M4A)
         elif self.skip_existing:
@@ -750,7 +763,7 @@ class Downloader:
                         item_description=f"[{vibrant_color}]{display_title}",
                         item_path=alt_path,
                     )
-                    return alt_path, False
+                    return alt_path, True
 
         should_extract_flac = False
 
@@ -864,8 +877,11 @@ class Downloader:
                         item_description=task.description,
                         item_path=download_path,
                     )
-                    # Record in DB so next run skips the filesystem scan entirely
-                    self._db_insert(item.id, download_path, str(item.audioQuality))
+                    # DB insert happens in the caller, after metadata is written —
+                    # not here. Recording "done" this early meant a process killed
+                    # between the download finishing and tags being written left a
+                    # file permanently marked complete with no metadata (skip_existing
+                    # would never revisit it). See handle_item() in __init__.py.
 
                     # Report playback event — makes activity look like web player streaming
                     self._spawn_bg(report_playback(
@@ -962,8 +978,8 @@ class Downloader:
                         item_description=finished_task.description,
                         item_path=download_path,
                     )
-                    # Record video in DB as well
-                    self._db_insert(item.id, download_path, "VIDEO")
+                    # DB insert happens in the caller, after metadata is written —
+                    # see handle_item() in __init__.py.
 
                     self._spawn_bg(report_playback(
                         headers=dict(self.api.client.session.headers),

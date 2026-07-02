@@ -484,6 +484,18 @@ def download_callback(
                         if REWRITE_METADATA or was_downloaded:
                             await asyncio.to_thread(add_video_metadata, path=download_path, video=item, artist_separator=CONFIG.templates.artist_separator)
 
+                # Mark complete in the skip-existing DB only *after* metadata has
+                # been attempted (see downloader.download()'s docstring). If the
+                # process dies before this line, the DB stays clean and a re-run
+                # will find the file via the directory-scan fallback and retry
+                # writing its metadata, instead of silently leaving it untagged
+                # forever.
+                if download_path and was_downloaded:
+                    if isinstance(item, Track):
+                        downloader._db_insert(item.id, download_path, str(item.audioQuality))
+                    elif isinstance(item, Video):
+                        downloader._db_insert(item.id, download_path, "VIDEO")
+
                 if download_path and CONFIG.download.update_mtime:
                     try:
                         os.utime(download_path, None)
