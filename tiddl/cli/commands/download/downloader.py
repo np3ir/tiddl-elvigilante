@@ -28,7 +28,7 @@ from tiddl.core.utils.const import (
     track_qualities,
     video_qualities,
 )
-from tiddl.core.utils.ffmpeg import convert_to_mp4, extract_flac, fix_mp4_faststart
+from tiddl.core.utils.ffmpeg import convert_to_mp4, extract_flac, fix_mp4_faststart, is_mp4_container
 from tiddl.core.api.playback import report_playback
 
 from .output import RichOutput
@@ -864,6 +864,14 @@ class Downloader:
                         )
                         continue
                     try:
+                        # audioQuality alone can't be trusted to predict the actual
+                        # container anymore — TIDAL now sometimes wraps plain
+                        # LOSSLESS in MP4 too, not just HI_RES_LOSSLESS. Sniff the
+                        # real bytes on disk for any .flac-named file so it still
+                        # gets unwrapped even when audioQuality said otherwise.
+                        if not should_extract_flac and download_path.suffix.lower() == ".flac":
+                            if await asyncio.to_thread(is_mp4_container, download_path):
+                                should_extract_flac = True
                         if should_extract_flac:
                             download_path = await asyncio.to_thread(extract_flac, download_path)
                     except Exception as exc:

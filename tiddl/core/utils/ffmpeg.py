@@ -45,6 +45,22 @@ def convert_to_mp4(source: Path) -> Path:
     return output_path
 
 
+def is_mp4_container(path: Path) -> bool:
+    """
+    Checks the actual bytes on disk for an MP4/M4A 'ftyp' box, regardless of
+    the file's extension. TIDAL doesn't only wrap HI_RES_LOSSLESS in MP4 —
+    it has also started delivering plain LOSSLESS this way, so a '.flac'
+    file's real container can't be trusted from the requested/reported
+    quality alone.
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(12)
+    except OSError:
+        return False
+    return header[4:8] == b"ftyp"
+
+
 def extract_flac(source: Path) -> Path:
     """
     Extracts flac audio from mp4 container
