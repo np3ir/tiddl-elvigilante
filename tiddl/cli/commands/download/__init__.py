@@ -580,7 +580,10 @@ def download_callback(
                     offset += album_items.limit
                     if offset >= album_items.totalNumberOfItems:
                         break
-                    await asyncio.sleep(random.uniform(1, 3))
+                    # No extra sleep here: client.fetch() already enforces
+                    # requests_per_minute globally (tiddl/core/api/client.py), so
+                    # an additional pause between pages was pure redundant dead
+                    # time on top of that — same class of bug as ad25ba1.
 
                 # --- Batch DB prefetch: one SQL query for all tracks in this album ---
                 # Instead of one SELECT per track inside each task, we do a single
@@ -821,7 +824,7 @@ def download_callback(
                     offset += mix_items.limit
                     if offset >= mix_items.totalNumberOfItems:
                         break
-                    await asyncio.sleep(random.uniform(1, 3))
+                    # client.fetch() already paces every request via requests_per_minute.
 
                 total_items = len(futures)
                 ctx.obj.console.print(f"\nFound:")
@@ -863,7 +866,7 @@ def download_callback(
                     ctx.obj.console.print(f"   • [red]Failed: {failed_count} items[/]")
 
             elif resource_type == "album":
-                album = ctx.obj.api.get_album(album_id=resource.id)
+                album = await asyncio.to_thread(ctx.obj.api.get_album, album_id=resource.id)
                 await download_album(album)
 
             elif resource_type == "artist":
@@ -945,7 +948,7 @@ def download_callback(
                         offset += artist_albums.limit
                         if offset >= artist_albums.totalNumberOfItems:
                             break
-                        await asyncio.sleep(random.uniform(1, 3))
+                        # client.fetch() already paces every request via requests_per_minute.
 
                 async def get_all_videos():
                     offset = 0
@@ -980,7 +983,7 @@ def download_callback(
                                 break
 
                             offset += artist_videos.limit
-                            await asyncio.sleep(random.uniform(1, 3))
+                            # client.fetch() already paces every request via requests_per_minute.
 
                         except Exception as e:
                             log.error(f"Error fetching videos at offset {offset}: {e}")
@@ -989,12 +992,10 @@ def download_callback(
                 # Gather albums and videos based on filters
                 if VIDEOS_FILTER != "none":
                     await get_all_videos()
-                    await asyncio.sleep(random.uniform(2, 5))
 
                 if VIDEOS_FILTER != "only":
                     if SINGLES_FILTER == "include":
                         await collect_albums(False)
-                        await asyncio.sleep(random.uniform(1, 3))
                         await collect_albums(True)
                     else:
                         await collect_albums(SINGLES_FILTER == "only")
@@ -1175,7 +1176,7 @@ def download_callback(
                     offset += playlist_items.limit
                     if offset >= playlist_items.totalNumberOfItems:
                         break
-                    await asyncio.sleep(random.uniform(1, 3))
+                    # client.fetch() already paces every request via requests_per_minute.
 
                 total_items = len(futures)
                 ctx.obj.console.print(f"\nFound:")
