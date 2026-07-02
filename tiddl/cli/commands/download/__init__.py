@@ -363,26 +363,18 @@ def download_callback(
                 if not track_metadata:
                     track_metadata = Metadata()
 
-                # Acquire the download semaphore *before* the human-pacing delay so
-                # tasks enter their delay in FIFO (creation) order. Previously the
-                # delay ran before downloader.download()'s own semaphore acquire,
-                # so a track that randomly rolled a long "distracted" pause let
-                # later, shorter-delayed tracks slip past it and download first —
-                # scrambling the disc/track order even with threads_count=1.
-                async with downloader.semaphore:
-                    if TRACK_DELAY > 0:
-                        # 85% del tiempo: pausa corta (comportamiento normal)
-                        # 15% del tiempo: pausa larga (simula distracción/scroll)
-                        if random.random() < 0.15:
-                            await asyncio.sleep(random.uniform(TRACK_DELAY * 2, TRACK_DELAY * 6))
-                        else:
-                            await asyncio.sleep(random.uniform(0.5, max(0.5, TRACK_DELAY)))
-
-                    download_path, was_downloaded = await downloader.download(
-                        item=item, file_path=Path(file_path),
-                        source_type=source_type, source_id=source_id,
-                        _skip_semaphore=True,
-                    )
+                # The human-pacing delay (TRACK_DELAY) is awaited by the caller,
+                # *before* this task is even created — see `_dispatch_delay()`.
+                # That keeps every track's delay strictly sequential (so a track
+                # that rolls a long "distracted" pause can never let a later,
+                # shorter-delayed track jump ahead of it — the disc/track order
+                # always matches dispatch order), while still letting a track's
+                # delay run concurrently with the *previous* track's in-flight
+                # download instead of stacking dead time after it.
+                download_path, was_downloaded = await downloader.download(
+                    item=item, file_path=Path(file_path),
+                    source_type=source_type, source_id=source_id,
+                )
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
 
@@ -499,6 +491,23 @@ def download_callback(
                         log.warning(f"could not update mtime for {download_path}")
 
                 return download_path, item
+
+            async def _dispatch_delay():
+                """Human-pacing delay awaited by the *dispatch loop* before creating
+                each track's download task — not inside the task itself. Doing it
+                here keeps every track's delay strictly sequential (so dispatch
+                order == download order), while still letting it run concurrently
+                with the previous track's in-flight download instead of adding
+                dead time after it finishes.
+                """
+                if TRACK_DELAY <= 0:
+                    return
+                # 85% del tiempo: pausa corta (comportamiento normal)
+                # 15% del tiempo: pausa larga (simula distracción/scroll)
+                if random.random() < 0.15:
+                    await asyncio.sleep(random.uniform(TRACK_DELAY * 2, TRACK_DELAY * 6))
+                else:
+                    await asyncio.sleep(random.uniform(0.5, max(0.5, TRACK_DELAY)))
 
             async def _simulate_browse(album: Album):
                 """Simulate natural browsing before downloading an album."""
@@ -642,6 +651,7 @@ def download_callback(
                             skipped_with_path.append((confirmed_path, item))
                             continue
 
+                    await _dispatch_delay()
                     futures.append(
                         asyncio.create_task(handle_item(
                             item=item,
@@ -710,6 +720,7 @@ def download_callback(
                 ctx.obj.console.print(f"\n[bold green]Downloading Track:[/] {track.title}")
                 ctx.obj.console.print(f"[dim]Track ID: {resource.id}[/]\n")
 
+                await _dispatch_delay()
                 await handle_item(
                     item=track,
                     file_path=format_template(
@@ -757,6 +768,7 @@ def download_callback(
                     except Exception as e:
                         log.warning(f"Could not fetch album {video.album.id} for video {video.id}: {e}")
 
+                await _dispatch_delay()
                 await handle_item(
                     item=video,
                     file_path=format_template(
@@ -790,6 +802,7 @@ def download_callback(
                         [mi.item for mi in mix_items.items], ctx.obj.api
                     )
                     for mix_item in mix_items.items:
+                        await _dispatch_delay()
                         futures.append(
                             asyncio.create_task(handle_item(
                                 item=mix_item.item,
@@ -948,6 +961,7 @@ def download_callback(
 
                             for video in artist_videos.items:
                                 artist_stats['total_videos'] += 1
+                                await _dispatch_delay()
                                 video_tasks.append(
                                     asyncio.create_task(handle_item(
                                         item=video,
@@ -1139,6 +1153,7 @@ def download_callback(
                         else:
                             album = None
 
+                        await _dispatch_delay()
                         futures.append(
                             asyncio.create_task(handle_item(
                                 item=playlist_item.item,

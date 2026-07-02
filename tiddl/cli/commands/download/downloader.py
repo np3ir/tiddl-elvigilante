@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio
-import contextlib
 import shutil
 import hashlib
 import uuid
@@ -637,7 +636,6 @@ class Downloader:
     async def download(
         self, item: Union[Track, Video], file_path: Path,
         source_type: str = "ALBUM", source_id: Optional[str] = None,
-        _skip_semaphore: bool = False,
     ) -> tuple[Union[Path, None], bool]:
         """
         returns
@@ -756,10 +754,7 @@ class Downloader:
 
         should_extract_flac = False
 
-        # Caller may already hold self.semaphore (e.g. to keep the pre-download
-        # delay inside the same FIFO turn, so tracks finish in queued order).
-        sem_cm = contextlib.nullcontext() if _skip_semaphore else self.semaphore
-        async with sem_cm:
+        async with self.semaphore:
             if isinstance(item, Track):
                 # Optimization: Only attempt qualities up to the track's available quality
                 quality_score = {"HI_RES_LOSSLESS": 3, "LOSSLESS": 2, "HIGH": 1, "LOW": 0}
