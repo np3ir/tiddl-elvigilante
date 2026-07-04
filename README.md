@@ -7,6 +7,8 @@
 [![Fork of oskvr37/tiddl](https://img.shields.io/badge/Fork%20of-oskvr37%2Ftiddl-lightgrey)](https://github.com/oskvr37/tiddl)
 [![Status: Production](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com)
 
+📘 **[Guía en español / Spanish tutorial →](TUTORIAL_ES.md)**
+
 ---
 
 ## ⚠️ Disclaimer
@@ -148,10 +150,9 @@ tiddl download fav
 
 # Get information about a track
 tiddl info url https://tidal.com/track/123456789
-
-# Export playlist as M3U8
-tiddl export url https://tidal.com/playlist/xyz -o my_playlist.m3u8
 ```
+
+> **M3U8 playlists**: there's no standalone `export` command — set `[m3u] save = true` in `config.toml` (see [CONFIG.md](CONFIG.md)) and an `.m3u8` file is generated automatically whenever you download an album/playlist/mix.
 
 ### Options
 
@@ -160,13 +161,13 @@ tiddl export url https://tidal.com/playlist/xyz -o my_playlist.m3u8
 tiddl download url --track-quality max https://...
 
 # Specify download location
-tiddl download url --download-path "D:/Music" https://...
+tiddl download url --path "D:/Music" https://...
 
 # Custom naming template
 tiddl download url --template "{album.artist}/{album.title}/{item.title}" https://...
 
-# Debug mode
-tiddl download url --debug https://...
+# Debug mode (global flag — goes before the subcommand)
+tiddl --debug download url https://...
 ```
 
 See [USAGE.md](USAGE.md) for complete examples.

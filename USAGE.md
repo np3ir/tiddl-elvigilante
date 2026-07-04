@@ -137,8 +137,18 @@ Shows:
 ## 📦 Playlist Export
 
 ### Export as M3U8
+
+> There's no standalone `export` command — enable it in `config.toml` instead,
+> and it's generated automatically as a side effect of downloading.
+
+```toml
+[m3u]
+save = true
+allowed = ["playlist", "album", "mix"]
+```
+
 ```bash
-tiddl export url https://tidal.com/playlist/xyz -o my_playlist.m3u8
+tiddl download url https://tidal.com/playlist/xyz
 ```
 
 Works with VLC, Winamp, iTunes, and other media players.
@@ -195,8 +205,8 @@ tiddl download url --no-skip https://...
 # Re-authenticate
 tiddl auth login
 
-# Debug
-tiddl download url --debug https://...
+# Debug (global flag, goes before the subcommand)
+tiddl --debug download url https://...
 ```
 
 ### Slow Downloads

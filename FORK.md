@@ -237,7 +237,7 @@ pip install git+https://github.com/Np3ir/tiddl-elvigilante.git
 ### First Steps
 ```bash
 # Authenticate
-tiddl auth
+tiddl auth login
 
 # Download something
 tiddl download url https://tidal.com/album/497662013

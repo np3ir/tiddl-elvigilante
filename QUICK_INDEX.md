@@ -17,11 +17,14 @@
 
 ✅ tiddl download      - Download
    ├── url             - Download by link
-   └── fav             - Download favorites
+   ├── fav             - Download favorites
+   └── search          - Search and download by name
 
 ✅ tiddl info          - Get information
 
-✅ tiddl export        - Export to M3U8
+⚠️ M3U8 export         - Not a standalone command; enable [m3u] save=true
+                         in config.toml and it's generated automatically
+                         during a normal `download` (see CONFIG.md)
 ```
 
 **Each command includes:**
@@ -218,8 +221,8 @@ tiddl download fav
 # INFORMATION
 tiddl info url https://tidal.com/album/123
 
-# EXPORT
-tiddl export url https://tidal.com/playlist/xyz -o file.m3u8
+# M3U8 EXPORT (no standalone command — set [m3u] save=true in config.toml, then download normally)
+tiddl download url https://tidal.com/playlist/xyz
 
 # OPTIONS
 --track-quality max

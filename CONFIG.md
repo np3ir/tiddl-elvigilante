@@ -87,25 +87,26 @@ artist_separator = " / "
 
 ### `threads_count`
 - **Type**: integer
-- **Default**: 4
+- **Default**: 1
 - **Range**: 1-20
-- Number of concurrent downloads. Higher values increase speed but may be more detectable. Values of 2–6 are recommended.
+- Number of concurrent downloads (tracks in flight at once, within a single album/playlist). Higher values increase speed but mean more simultaneous connections to Tidal, which is more detectable. The default of 1 is the most conservative setting.
 
 ### `requests_per_minute`
 - **Type**: integer
-- **Default**: 50
+- **Default**: 20
 - **Range**: 1–300
 - Maximum TIDAL API calls per minute. The client enforces a fixed-interval gate with
   per-request jitter so downloads never trigger HTTP 429 (Too Many Requests). Lower this
   value if you still see rate-limit errors; raise it only if you have a high-throughput
   account. The adaptive delay mechanism adjusts automatically, so this value is the
-  ceiling, not a guaranteed throughput.
+  ceiling, not a guaranteed throughput. Note this only paces metadata/API calls — the
+  actual audio file transfer is not rate-limited by this setting.
 - **Example**:
   ```toml
   [download]
-  requests_per_minute = 30   # conservative; good for slow connections or shared accounts
-  requests_per_minute = 50   # default; suits most accounts
-  requests_per_minute = 80   # aggressive; raise only if 429s never occur
+  requests_per_minute = 20   # default; most conservative
+  requests_per_minute = 30   # moderate
+  requests_per_minute = 50   # aggressive; raise only if 429s never occur
   ```
 
 ### `download_path`
@@ -118,6 +119,11 @@ artist_separator = " / "
 - **Default**: same as download_path
 - Directory to scan for existing files
 
+### `video_download_path`
+- **Type**: path (optional)
+- **Default**: not set (falls back to `download_path`)
+- Separate base directory for video downloads only. Overrides `download_path` for videos when set.
+
 ### `singles_filter`
 - **Type**: none / only / include
 - **Default**: none
@@ -128,22 +134,36 @@ artist_separator = " / "
 - **Default**: none
 - How to handle music videos
 
+### `max_tracks_per_session`
+- **Type**: integer
+- **Default**: 0 (no limit)
+- Stop after downloading this many tracks in a single `tiddl download` run. Restart the command to continue.
+
+### `download_start_hour` / `download_end_hour`
+- **Type**: integer (0–23)
+- **Default**: 0 / 0 (no restriction — both at 0 means the window check is disabled)
+- Restrict downloads to only run within this hour range (24h, local time).
+
 ### `artist_concurrency`
 - **Type**: integer
-- **Default**: 0 (unlimited)
-- **Recommended**: 3
-- Max number of albums downloading in parallel when downloading a full artist. 0 means no limit. Lower values reduce API pressure and lower the chance of triggering abuse detection.
+- **Default**: 1
+- Max number of albums downloading in parallel when downloading a full artist. 0 means no limit. The default of 1 processes albums one at a time — the most conservative setting. Lower values reduce API pressure and lower the chance of triggering abuse detection.
 
 ### `artist_delay`
 - **Type**: float (seconds)
-- **Default**: 0.0
-- **Recommended**: 30.0
+- **Default**: 8.0
 - Max random delay before each album starts downloading (artist downloads only). Each album waits a random time between 0 and this value before starting. Staggers API requests to avoid sustained hammering.
+
+### `track_delay`
+- **Type**: float (seconds)
+- **Default**: 3.0
+- Max random delay before each track download starts (all download types — album, playlist, artist, mix). Most of the time waits a short random pause (0.5s–this value); ~15% of the time waits a longer "distracted" pause (2×–6× this value) to look less like a bot. Set to `0` to disable — not recommended for bulk downloads.
 - **Example**:
   ```toml
   [download]
-  artist_concurrency = 3    # at most 3 albums at once
-  artist_delay = 30.0       # each album starts after a random 0–30s pause
+  artist_concurrency = 1    # one album at a time (default, safest)
+  artist_delay = 8.0        # each album starts after a random 0–8s pause
+  track_delay = 3.0         # each track starts after a random pause (default, safest)
   ```
 
 ---
@@ -308,6 +328,12 @@ M3U8 playlist export settings.
 
 ## 📋 Full Example Config
 
+> ⚠️ This example uses a **faster, more aggressive** throughput profile than the
+> shipped defaults (`threads_count`, `requests_per_minute`, `artist_concurrency`,
+> `artist_delay` are all higher than default here). See each option's "Default"
+> value above for the safest baseline — the defaults process one album/track at
+> a time with real pacing, which is recommended for large bulk downloads.
+
 ```toml
 enable_cache = true
 debug = false
@@ -326,6 +352,7 @@ update_mtime = false
 rewrite_metadata = true
 artist_concurrency = 3
 artist_delay = 30.0
+track_delay = 5.0
 
 [metadata]
 enable = true

@@ -119,8 +119,8 @@ tiddl download url -r https://...
 # Naming template
 tiddl download url --template "{album.artist}/{album.title}/{item.title}" https://...
 
-# Debug
-tiddl download url --debug https://...
+# Debug (global flag, goes before the subcommand)
+tiddl --debug download url https://...
 ```
 
 ---
@@ -202,20 +202,27 @@ tiddl info url https://tidal.com/album/497662013
 
 ---
 
-## 4. `tiddl export` - Export Playlist
+## 4. M3U8 Playlist Export
 
-Save a playlist as M3U8 file (compatible with media players).
+> There is no standalone `tiddl export` command — that subcommand exists in the
+> source but is an unfinished stub (disabled). M3U8 export is a side effect of
+> a normal `download` run instead.
 
-```bash
-tiddl export url https://tidal.com/playlist/xyz -o my_playlist.m3u8
+Save a playlist/album/mix as an M3U8 file (compatible with media players) by enabling it in `config.toml`:
+
+```toml
+[m3u]
+save = true
+allowed = ["playlist", "album", "mix"]
 ```
 
-**Options:**
+Then just download normally — the `.m3u8` file is written automatically:
+
 ```bash
-# Save to specific folder
-tiddl export url https://... -o "D:/Playlists/playlist.m3u8"
-tiddl export url https://... --output "~/Music/my_playlist.m3u8"
+tiddl download url https://tidal.com/playlist/xyz
 ```
+
+See [CONFIG.md](CONFIG.md) for the `[m3u]` section and template options.
 
 ---
 
@@ -716,7 +723,7 @@ tiddl download fav
 ## "What is --debug?"
 
 ```bash
-tiddl download url https://... --debug
+tiddl --debug download url https://...
 ```
 
 Creates detailed logs in `~/.tiddl/api_debug/`
@@ -768,15 +775,17 @@ tiddl download fav                                    # Favorites
 # INFORMATION
 tiddl info url https://tidal.com/album/123
 
-# EXPORT
-tiddl export url https://tidal.com/playlist/xyz -o file.m3u8
+# M3U8 EXPORT (no standalone command — enable [m3u] save=true in config.toml, then download normally)
+tiddl download url https://tidal.com/playlist/xyz
 
-# COMMON OPTIONS
+# COMMON OPTIONS (after the subcommand, e.g. `tiddl download url --path ... <url>`)
 --track-quality max                                   # Maximum quality
 --path "D:/Music"                                     # Folder
 --threads-count 8                                     # Speed
 --no-skip                                             # Re-download
 --template "{artist}/{album}/{title}"                # Custom naming
+
+# GLOBAL FLAG (before the subcommand: `tiddl --debug download url <url>`)
 --debug                                               # Logs
 
 # MAIN VARIABLES

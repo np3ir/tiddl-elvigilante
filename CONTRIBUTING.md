@@ -69,7 +69,7 @@ Python Version: 3.12
 Error: ConnectionError: Connection timeout
 
 Steps:
-1. Run: tiddl download "https://..."
+1. Run: tiddl download url "https://..."
 2. Wait 30 seconds
 3. Get timeout error
 
