@@ -232,7 +232,7 @@ cat ~/.tiddl/api_debug/...
 ## 📚 Reference
 
 - **[COMPLETE_COMMAND_REFERENCE.md](COMPLETE_COMMAND_REFERENCE.md)** - All commands and placeholders
-- **[INDICE_RAPIDO.md](INDICE_RAPIDO.md)** - Quick index
+- **[QUICK_INDEX.md](QUICK_INDEX.md)** - Quick index
 - **[CONFIG.md](CONFIG.md)** - Configuration options
 
 ---

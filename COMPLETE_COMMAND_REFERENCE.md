@@ -269,17 +269,38 @@ tiddl --omit-cache <command>
 
 ## Download Command Options
 
+These go **after** the subcommand, e.g. `tiddl download url --path "D:/Music" <url>`.
+
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--track-quality` | `-q` | low/normal/high/max | high | Audio quality |
 | `--video-quality` | `-vq` | sd/hd/fhd | fhd | Video quality |
 | `--no-skip` | `-ns` | bool | false | Don't skip existing |
 | `--rewrite-metadata` | `-r` | bool | false | Rewrite existing metadata |
-| `--threads-count` | `-t` | 1-20 | 4 | Concurrent downloads |
+| `--threads-count` | `-t` | 1-20 | 1 | Concurrent downloads |
 | `--path` | `-p` | path | ~/Music/tiddl | Download folder |
-| `--template` | - | string | config | Naming template |
-| `--scan-path` | `--sp` | path | same as path | Folder to scan |
+| `--scan-path` | `--sp` | path | same as `--path` | Folder to scan for existing files |
+| `--video-path` | `-vp` | path | (unset, falls back to `--path`) | Separate folder for videos |
+| `--template` | `--output` / `-o` | string | config | Global naming template fallback |
+| `--album-template` | `--atf` | string | config | Template for album folders |
+| `--track-template` | `--ttf` | string | config | Template for track filenames |
+| `--video-template` | `--vtf` | string | config | Template for video filenames |
+| `--playlist-template` | `--ptf` | string | config | Template for playlist folders |
+| `--singles` | `-s` | none/only/include | none | Artist singles handling |
+| `--videos` | `-vid` | none/allow/only | none | Music video handling |
+| `--concurrency` | `-c` | integer (0=unlimited) | 1 | Max albums in parallel (artist downloads) |
+| `--delay` | `-d` | float (seconds) | 8.0 | Max random delay before each album (artist downloads) |
+| `--track-delay` | `-td` | float (seconds) | 3.0 | Max random delay before each track download |
+
+## Global Options
+
+These go **before** the subcommand, e.g. `tiddl --debug download url <url>`.
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
 | `--debug` | - | bool | false | Save API logs |
+| `--omit-cache` | - | bool | false | Skip the API response cache |
+| `--version` | `-v` | - | - | Show version |
 
 ---
 
