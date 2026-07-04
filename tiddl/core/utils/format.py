@@ -103,20 +103,28 @@ def safe_getattr(obj: Any, attr: str, default: Any = None) -> Any:
         return obj.get(attr, default)
     return getattr(obj, attr, default)
 
+def _fold_accents(s: str) -> str:
+    """Strip diacritics for loose comparison. Tidal spells the same person's
+    name inconsistently across its own fields (e.g. 'Raúl' vs 'Raül'), so an
+    accent-sensitive comparison misses matches that are clearly the same
+    artist and leaves a redundant "(feat. ...)" in the cleaned title."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
 def clean_track_title(track_title: str, artist_name: str) -> str:
     # 1. Parse metadata artists
     # Normalize but keep spaces for word boundary checks
-    meta_artists = [a.strip().lower() for a in artist_name.split(",")]
+    meta_artists = [_fold_accents(a.strip().lower()) for a in artist_name.split(",")]
     meta_artists = [a for a in meta_artists if a]
-    
+
     # Helper to check if a name is in metadata
     def is_known(name):
-        n = name.strip().lower()
+        n = _fold_accents(name.strip().lower())
         if not n: return True # Ignore empty parts
-        
+
         # Check exact match
         if n in meta_artists: return True
-        
+
         # Check word-boundary match inside any meta artist
         # e.g. meta="Lil Wayne". feat="Lil". Match.
         # meta="Lily Allen". feat="Lil". No Match.
