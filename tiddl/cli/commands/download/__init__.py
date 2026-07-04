@@ -1,8 +1,10 @@
 from __future__ import annotations
 import os
+import re
 import random
 import typer
 import asyncio
+import unicodedata
 
 from pathlib import Path
 from logging import getLogger
@@ -35,6 +37,12 @@ from .downloader import Downloader
 from .output import RichOutput
 
 
+def _fold_accents(s: str) -> str:
+    """Strip diacritics for loose comparison (Tidal spells the same person's
+    name inconsistently across endpoints, e.g. 'Raúl' vs 'Raül')."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
 def enrich_track_artists(item: Track, api) -> None:
     """Agrega Featured Artists faltantes del endpoint /contributors.
 
@@ -45,12 +53,28 @@ def enrich_track_artists(item: Track, api) -> None:
     if not isinstance(item, Track):
         return
     try:
-        existing = {a.name.lower() for a in item.artists}
+        existing_names = [a.name for a in item.artists if a.name]
+        existing = {_fold_accents(n.lower()) for n in existing_names}
         featured = api.get_featured_from_contributors(item.id)
         for name in featured:
-            if name.lower() not in existing:
-                item.artists.append(Track.Artist(id=0, name=name, type="FEATURED"))
-                existing.add(name.lower())
+            n_folded = _fold_accents(name.lower())
+            if n_folded in existing:
+                continue
+            # Some tracks have a single MAIN artist whose *name* is already a
+            # compound "Artist feat. X, Y & Z" string (Tidal data quirk, e.g.
+            # "Macaco feat. Niño De Elche, Bego Salazar & Raúl Refree" as ONE
+            # artists[] entry). In that case X/Y/Z are already represented —
+            # adding them again as separate FEATURED entries duplicates the
+            # credit in both the filename and the tags. Skip any contributor
+            # name that's already embedded (word-boundary match, accent-
+            # insensitive since Tidal spells names inconsistently across its
+            # own endpoints) inside an existing artist's name.
+            pattern = re.compile(r"\b" + re.escape(n_folded) + r"\b")
+            if any(pattern.search(_fold_accents(existing_name.lower())) for existing_name in existing_names):
+                continue
+            item.artists.append(Track.Artist(id=0, name=name, type="FEATURED"))
+            existing.add(n_folded)
+            existing_names.append(name)
     except Exception:
         pass
 
