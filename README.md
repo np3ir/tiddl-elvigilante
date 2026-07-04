@@ -25,7 +25,7 @@ pip install git+https://github.com/Np3ir/tiddl-elvigilante
 ### First Use
 ```bash
 # Authenticate with TIDAL
-tiddl auth
+tiddl auth login
 
 # Download an album
 tiddl download url https://tidal.com/album/497662013
@@ -132,7 +132,7 @@ sudo apt install ffmpeg
 
 ```bash
 # Authenticate
-tiddl auth
+tiddl auth login
 
 # Download track
 tiddl download url https://tidal.com/track/123456789
@@ -208,6 +208,7 @@ artist_separator = " / "
 ### 📖 Getting Started
 - **[COMPLETE_COMMAND_REFERENCE.md](COMPLETE_COMMAND_REFERENCE.md)** ⭐ **START HERE** - Complete command and placeholder reference (734 lines)
 - **[QUICK_INDEX.md](QUICK_INDEX.md)** - Quick index and navigation guide
+- **[TUTORIAL_ES.md](TUTORIAL_ES.md)** 🇪🇸 - Guía paso a paso en español (instalación y configuración)
 
 ### 📋 Detailed Guides
 - **[USAGE.md](USAGE.md)** - Practical command examples and scenarios
@@ -316,4 +317,4 @@ This tool respects TIDAL's ToS and copyright laws. Users are responsible for ens
 
 **Version:** 1.1.6
 **Status:** Production Ready ✅
-**Last Updated:** March 29, 2026
+**Last Updated:** July 3, 2026
