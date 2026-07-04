@@ -349,7 +349,7 @@ If "no" to any, reconsider.
 ## 📈 Performance Constraints
 
 ### Download Speed
-- Limit concurrent downloads (default: 4)
+- Limit concurrent downloads (default: 1, the most conservative setting)
 - Configurable via `threads_count`
 - Respect TIDAL's rate limits
 
