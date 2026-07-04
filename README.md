@@ -8,6 +8,7 @@
 [![Status: Production](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com)
 
 📘 **[Guía en español / Spanish tutorial →](TUTORIAL_ES.md)**
+📖 **[Full documentation wiki (EN/ES) →](https://github.com/np3ir/tiddl-elvigilante/wiki)**
 
 ---
 
