@@ -1,5 +1,8 @@
 # 🎵 tiddl - TIDAL Downloader
 
+> [!WARNING]
+> **This app is for personal, educational, and archival purposes only.** It is not affiliated with Tidal. Users must ensure their use complies with Tidal's terms of service and all applicable local copyright laws. Downloaded content is for personal use and may not be shared or redistributed. The developer assumes no responsibility for misuse of this app.
+
 **Production-Ready TIDAL Music Downloader** | Python 3.10+ Compatible | Pydantic v1 Optimized
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/downloads/)
