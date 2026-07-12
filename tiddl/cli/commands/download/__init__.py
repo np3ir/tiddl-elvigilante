@@ -334,6 +334,18 @@ def download_callback(
             video_download_path=VIDEO_DOWNLOAD_PATH,
         )
 
+        # Fast-skip shortcuts (whole-album fast exit, up-front present detection,
+        # per-item pre-checks in playlist/mix/artist-video flows) are only sound
+        # when nothing forces reprocessing of existing files. When the user asks
+        # to rewrite metadata or bump mtimes, every existing item must still flow
+        # through handle_item, so all shortcuts turn off and behaviour is
+        # identical to before.
+        can_skip = (
+            downloader.skip_existing
+            and not REWRITE_METADATA
+            and not CONFIG.download.update_mtime
+        )
+
         class Metadata:
             def __init__(
                 self,
@@ -559,37 +571,16 @@ def download_callback(
                 except Exception:
                     pass
 
-            async def download_album(album: Album):
+            async def download_album(album: Album, pre_delay: float = 0.0):
                 offset = 0
                 futures = []
                 all_album_items = []  # collect all pages first for batch prefetch
 
-                # Simulate browsing before downloading
-                await _simulate_browse(album)
-
-                cover: Union[Cover, None] = None
-                save_cover = ("album" in CONFIG.cover.allowed) and CONFIG.cover.save
-
-                if album.cover and (CONFIG.metadata.cover or save_cover):
-                    try:
-                        cover = Cover(album.cover, size=CONFIG.cover.size)
-                        await asyncio.to_thread(cover._get_data)
-                    except Exception as e:
-                        log.warning(f"Could not download album cover: {e}")
-                        cover = None
-
-                album_review = ""
-
-                if CONFIG.metadata.album_review:
-                    try:
-                        review = await asyncio.to_thread(
-                            ctx.obj.api.get_album_review, album.id
-                        )
-                        album_review = review.normalized_text()
-                    except Exception as e:
-                        log.error(e)
-
-                # --- Page collection (all pages, no tasks yet) ---
+                # --- Page collection FIRST (all pages, no tasks yet) ---
+                # We need the track IDs *before* spending any time on browsing,
+                # cover/review fetch or /contributors enrichment, so an album that
+                # is already fully downloaded can bail out before paying for any
+                # of that overhead.
                 while True:
                     album_items = None
                     for attempt in range(3):
@@ -621,39 +612,133 @@ def download_callback(
                     # an additional pause between pages was pure redundant dead
                     # time on top of that — same class of bug as ad25ba1.
 
-                # --- Batch DB prefetch: one SQL query for all tracks in this album ---
-                # Instead of one SELECT per track inside each task, we do a single
-                # SELECT ... IN (...) for all track IDs, then check file existence
-                # concurrently. Tracks confirmed on disk are skipped without creating
-                # a coroutine. Stale DB entries (file deleted) are cleaned up here too.
-                confirmed: dict = {}  # {track_id: Path} — tracks verified on disk
-                if downloader.skip_existing:
-                    track_ids = [
-                        ai.item.id
-                        for ai in all_album_items
-                        if isinstance(ai.item, Track)
+                # --- Detect already-complete items up front (read-only) ---
+                # `present` maps item_id -> on-disk path for tracks AND videos the
+                # skip DB confirms are complete (media + tags) and sitting in the
+                # correct folder. Those need neither download, metadata rewrite
+                # nor /contributors enrichment, so we filter them out below.
+                # (`can_skip` is defined once in download_resources; shortcuts
+                # turn off under --rewrite-metadata / update_mtime.)
+
+                def _will_process(it) -> bool:
+                    # Mirrors download()'s videos_filter gate: items the filter
+                    # discards are no-ops, need no present-check and must not
+                    # block the whole-album fast exit below.
+                    if isinstance(it, Track):
+                        return VIDEOS_FILTER != "only"
+                    if isinstance(it, Video):
+                        return VIDEOS_FILTER != "none"
+                    return False
+
+                present: dict = {}  # {item_id: Path} — confirmed-complete items
+                if can_skip:
+                    check_items = [
+                        ai.item for ai in all_album_items if _will_process(ai.item)
                     ]
-                    db_hits = downloader._db_batch_lookup(track_ids)
+                    present_results = await asyncio.gather(
+                        *[
+                            downloader.is_item_present(
+                                it,
+                                Path(format_template(
+                                    template=resolve_template(ALBUM_TEMPLATE, CONFIG.templates.album),
+                                    item=it,
+                                    album=album,
+                                    quality=get_item_quality(it),
+                                    artist_separator=CONFIG.templates.artist_separator,
+                                )),
+                            )
+                            for it in check_items
+                        ],
+                        return_exceptions=True,
+                    )
+                    for it, res in zip(check_items, present_results):
+                        if not isinstance(res, Exception) and res is not None:
+                            present[it.id] = res
 
-                    if db_hits:
-                        # Check all found paths concurrently (one asyncio round instead of N)
-                        hit_items = list(db_hits.items())  # [(track_id, path), ...]
-                        exists_results = await asyncio.gather(
-                            *[asyncio.to_thread(p.exists) for _, p in hit_items],
-                            return_exceptions=True,
+                # --- Fast exit: whole album already on disk ---
+                # Every item we would actually process (track or video, per
+                # videos_filter) is already complete, so nothing will be
+                # downloaded. Skip the human-simulation browse, the cover fetch,
+                # the review fetch, the per-track /contributors enrichment AND the
+                # artist stagger delay — all pure overhead when no media moves.
+                # Items the videos_filter discards are no-ops and don't block.
+                # (The album cover was saved on the run that downloaded it, so it
+                # is intentionally not re-saved here.)
+                if (
+                    can_skip
+                    and all_album_items
+                    and all(
+                        not _will_process(ai.item) or ai.item.id in present
+                        for ai in all_album_items
+                    )
+                ):
+                    skipped_with_path: list[tuple] = []
+                    for album_item in all_album_items:
+                        item = album_item.item
+                        if item.id not in present:
+                            continue  # filtered-out no-op (videos_filter)
+                        downloader.rich_output.show_item_result(
+                            result_message="[yellow]Exists",
+                            item_description=f"[bold]{item.title}",
+                            item_path=present[item.id],
                         )
-                        for (track_id, path), exists in zip(hit_items, exists_results):
-                            if isinstance(exists, Exception) or not exists:
-                                downloader._db_remove(track_id)
-                                log.debug(f"Track {track_id} was in DB but file missing, will re-download")
-                            else:
-                                confirmed[track_id] = path
+                        skipped_with_path.append((present[item.id], item))
+                    save_m3u(
+                        resource_type="album",
+                        filename=format_template(
+                            CONFIG.m3u.templates.album,
+                            album=album,
+                            type="album",
+                            artist_separator=CONFIG.templates.artist_separator,
+                        ),
+                        tracks_with_path=skipped_with_path,
+                    )
+                    return
 
-                # --- Enrich featured artists for the whole album in parallel ---
-                # (antes era una petición HTTP síncrona por track dentro del loop,
-                # que bloqueaba el event loop entero)
+                # --- Album needs at least one download: pay the artist stagger now ---
+                # (Moved here from download_album_throttled so a fully-downloaded
+                # album — handled by the fast exit above — never waits on it.)
+                if pre_delay > 0:
+                    await asyncio.sleep(random.uniform(0, pre_delay))
+
+                # Simulate browsing before downloading
+                await _simulate_browse(album)
+
+                cover: Union[Cover, None] = None
+                save_cover = ("album" in CONFIG.cover.allowed) and CONFIG.cover.save
+
+                if album.cover and (CONFIG.metadata.cover or save_cover):
+                    try:
+                        cover = Cover(album.cover, size=CONFIG.cover.size)
+                        await asyncio.to_thread(cover._get_data)
+                    except Exception as e:
+                        log.warning(f"Could not download album cover: {e}")
+                        cover = None
+
+                album_review = ""
+
+                if CONFIG.metadata.album_review:
+                    try:
+                        review = await asyncio.to_thread(
+                            ctx.obj.api.get_album_review, album.id
+                        )
+                        album_review = review.normalized_text()
+                    except Exception as e:
+                        log.error(e)
+
+                # --- Enrich featured artists ONLY for tracks we will process ---
+                # A /contributors HTTP call for an already-complete track is pure
+                # waste (enrichment only affects the filename/tags of tracks we are
+                # about to (re)write), so the confirmed-complete ones are filtered
+                # out. Tracks only found on disk (not in the DB) are NOT in
+                # `present`, so they stay in — they still get retagged with the
+                # correct featured artists exactly as before.
                 await enrich_tracks_concurrently(
-                    [ai.item for ai in all_album_items], ctx.obj.api
+                    [
+                        ai.item for ai in all_album_items
+                        if not (isinstance(ai.item, Track) and ai.item.id in present)
+                    ],
+                    ctx.obj.api,
                 )
 
                 # Ensure tracks are processed in disc/track order (the API is
@@ -665,30 +750,25 @@ def download_callback(
                     getattr(ai.item, "trackNumber", 0) or 0,
                 ))
 
-                # --- Build tasks — confirmed tracks are skipped, rest download normally ---
-                # confirmed-skipped tuples are pre-populated so save_m3u stays complete
+                # --- Build tasks — already-complete items skipped, rest download ---
+                # `present` (computed above) holds tracks/videos the DB confirms
+                # are complete AND in the correct folder, so they skip with no
+                # metadata rewrite. Items only found on disk (not in the DB) are
+                # NOT in `present`, so they still flow through handle_item and get
+                # their tags (re)written exactly as before. skipped tuples keep
+                # m3u complete.
                 skipped_with_path: list[tuple] = []
                 for album_item in all_album_items:
                     item = album_item.item
-                    if isinstance(item, Track) and item.id in confirmed:
-                        confirmed_path = confirmed[item.id]
-                        expected_path = Path(format_template(
-                            template=resolve_template(ALBUM_TEMPLATE, CONFIG.templates.album),
-                            item=item,
-                            album=album,
-                            quality=get_item_quality(item),
-                            artist_separator=CONFIG.templates.artist_separator,
-                        ))
-                        # Only skip if the file is already in the correct album folder.
-                        # If it was downloaded elsewhere (e.g. a playlist), fall through to download.
-                        if confirmed_path.parent.resolve() == expected_path.parent.resolve():
-                            downloader.rich_output.show_item_result(
-                                result_message="[yellow]Exists",
-                                item_description=f"[bold]{item.title}",
-                                item_path=confirmed_path,
-                            )
-                            skipped_with_path.append((confirmed_path, item))
-                            continue
+                    if item.id in present:
+                        existing_path = present[item.id]
+                        downloader.rich_output.show_item_result(
+                            result_message="[yellow]Exists",
+                            item_description=f"[bold]{item.title}",
+                            item_path=existing_path,
+                        )
+                        skipped_with_path.append((existing_path, item))
+                        continue
 
                     await _dispatch_delay()
                     futures.append(
@@ -824,6 +904,7 @@ def download_callback(
             elif resource_type == "mix":
                 offset = 0
                 futures = []
+                skipped_with_path: list[tuple] = []
                 mix_id = resource.id
                 ctx.obj.console.print(f"\n[bold yellow]🎧 Downloading Mix:[/] {mix_id}")
                 ctx.obj.console.print(f"[dim]Fetching tracks...[/]\n")
@@ -841,17 +922,34 @@ def download_callback(
                         [mi.item for mi in mix_items.items], ctx.obj.api
                     )
                     for mix_item in mix_items.items:
+                        item_file_path = format_template(
+                            template=resolve_template("", CONFIG.templates.mix),
+                            item=mix_item.item,
+                            mix_id=mix_id,
+                            quality=get_item_quality(mix_item.item),
+                            artist_separator=CONFIG.templates.artist_separator,
+                        )
+
+                        # Already-complete items (DB-confirmed, correct folder)
+                        # skip the dispatch delay and the whole handle_item task.
+                        if can_skip:
+                            _existing = await downloader.is_item_present(
+                                mix_item.item, Path(item_file_path)
+                            )
+                            if _existing is not None:
+                                downloader.rich_output.show_item_result(
+                                    result_message="[yellow]Exists",
+                                    item_description=f"[bold]{mix_item.item.title}",
+                                    item_path=_existing,
+                                )
+                                skipped_with_path.append((_existing, mix_item.item))
+                                continue
+
                         await _dispatch_delay()
                         futures.append(
                             asyncio.create_task(handle_item(
                                 item=mix_item.item,
-                                file_path=format_template(
-                                    template=resolve_template("", CONFIG.templates.mix),
-                                    item=mix_item.item,
-                                    mix_id=mix_id,
-                                    quality=get_item_quality(mix_item.item),
-                                    artist_separator=CONFIG.templates.artist_separator,
-                                ),
+                                file_path=item_file_path,
                                 source_type="MIX",
                                 source_id=mix_id,
                             ))
@@ -862,10 +960,12 @@ def download_callback(
                         break
                     # client.fetch() already paces every request via requests_per_minute.
 
-                total_items = len(futures)
+                total_items = len(futures) + len(skipped_with_path)
                 ctx.obj.console.print(f"\nFound:")
                 ctx.obj.console.print(f"  • {total_items} items in the mix.")
-                ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
+                if skipped_with_path:
+                    ctx.obj.console.print(f"  • [yellow]{len(skipped_with_path)} already downloaded (skipped)[/]")
+                ctx.obj.console.print(f"  • [bold]{len(futures)} total items to download[/]\n")
 
                 try:
                     results = await asyncio.gather(*futures, return_exceptions=True)
@@ -876,7 +976,7 @@ def download_callback(
                     await asyncio.gather(*futures, return_exceptions=True)
                     raise
 
-                tracks_with_path = []
+                tracks_with_path = list(skipped_with_path)
                 failed_count = 0
                 for res in results:
                     if isinstance(res, Exception):
@@ -919,13 +1019,14 @@ def download_callback(
                         await auto_refresh_if_needed(threshold_minutes=30)
                     except Exception as _re:
                         log.debug(f"auto_refresh_if_needed failed (non-fatal): {_re}")
-                    if ARTIST_DELAY > 0:
-                        await asyncio.sleep(random.uniform(0, ARTIST_DELAY))
+                    # ARTIST_DELAY is now applied *inside* download_album, after it
+                    # has confirmed the album actually needs downloading — a fully
+                    # already-downloaded album skips the stagger entirely.
                     if _sem:
                         async with _sem:
-                            await download_album(album)
+                            await download_album(album, pre_delay=ARTIST_DELAY)
                     else:
-                        await download_album(album)
+                        await download_album(album, pre_delay=ARTIST_DELAY)
 
                 futures = []
                 seen_album_ids = set()  # Use album.id instead of title for proper deduplication
@@ -1000,16 +1101,32 @@ def download_callback(
 
                             for video in artist_videos.items:
                                 artist_stats['total_videos'] += 1
+                                video_file_path = format_template(
+                                    template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
+                                    item=video,
+                                    quality=get_item_quality(video),
+                                    artist_separator=CONFIG.templates.artist_separator,
+                                )
+                                # Already-complete videos (DB-confirmed, correct
+                                # folder) skip the dispatch delay and the whole
+                                # handle_item task — no download, no metadata
+                                # rewrite, no network.
+                                if can_skip:
+                                    _existing = await downloader.is_item_present(
+                                        video, Path(video_file_path)
+                                    )
+                                    if _existing is not None:
+                                        downloader.rich_output.show_item_result(
+                                            result_message="[yellow]Exists",
+                                            item_description=f"[bold]{video.title}",
+                                            item_path=_existing,
+                                        )
+                                        continue
                                 await _dispatch_delay()
                                 video_tasks.append(
                                     asyncio.create_task(handle_item(
                                         item=video,
-                                        file_path=format_template(
-                                            template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
-                                            item=video,
-                                            quality=get_item_quality(video),
-                                            artist_separator=CONFIG.templates.artist_separator,
-                                        ),
+                                        file_path=video_file_path,
                                         source_type="VIDEO",
                                         source_id=str(resource.id),
                                     ))
@@ -1162,6 +1279,7 @@ def download_callback(
                 offset = 0
                 futures = []
                 playlist_index = 0
+                skipped_with_path: list[tuple] = []
                 playlist = await asyncio.to_thread(
                     ctx.obj.api.get_playlist, playlist_uuid=resource.id
                 )
@@ -1190,19 +1308,36 @@ def download_callback(
                         else:
                             album = None
 
+                        item_file_path = format_template(
+                            template=template,
+                            item=playlist_item.item,
+                            album=album,
+                            playlist=playlist,
+                            playlist_index=playlist_index,
+                            quality=get_item_quality(playlist_item.item),
+                            artist_separator=CONFIG.templates.artist_separator,
+                        )
+
+                        # Already-complete items (DB-confirmed, correct folder)
+                        # skip the dispatch delay and the whole handle_item task.
+                        if can_skip:
+                            _existing = await downloader.is_item_present(
+                                playlist_item.item, Path(item_file_path)
+                            )
+                            if _existing is not None:
+                                downloader.rich_output.show_item_result(
+                                    result_message="[yellow]Exists",
+                                    item_description=f"[bold]{playlist_item.item.title}",
+                                    item_path=_existing,
+                                )
+                                skipped_with_path.append((_existing, playlist_item.item))
+                                continue
+
                         await _dispatch_delay()
                         futures.append(
                             asyncio.create_task(handle_item(
                                 item=playlist_item.item,
-                                file_path=format_template(
-                                    template=template,
-                                    item=playlist_item.item,
-                                    album=album,
-                                    playlist=playlist,
-                                    playlist_index=playlist_index,
-                                    quality=get_item_quality(playlist_item.item),
-                                    artist_separator=CONFIG.templates.artist_separator,
-                                ),
+                                file_path=item_file_path,
                                 track_metadata=Metadata(),
                                 source_type="PLAYLIST",
                                 source_id=resource.id,
@@ -1214,10 +1349,12 @@ def download_callback(
                         break
                     # client.fetch() already paces every request via requests_per_minute.
 
-                total_items = len(futures)
+                total_items = len(futures) + len(skipped_with_path)
                 ctx.obj.console.print(f"\nFound:")
                 ctx.obj.console.print(f"  • {total_items} items in the playlist.")
-                ctx.obj.console.print(f"  • [bold]{total_items} total items to download[/]\n")
+                if skipped_with_path:
+                    ctx.obj.console.print(f"  • [yellow]{len(skipped_with_path)} already downloaded (skipped)[/]")
+                ctx.obj.console.print(f"  • [bold]{len(futures)} total items to download[/]\n")
 
                 try:
                     results = await asyncio.gather(*futures, return_exceptions=True)
@@ -1228,8 +1365,8 @@ def download_callback(
                     await asyncio.gather(*futures, return_exceptions=True)
                     raise
 
-                # Filter out exceptions from results
-                tracks_with_path = []
+                # Filter out exceptions from results; skipped items seed the list
+                tracks_with_path = list(skipped_with_path)
                 failed_count = 0
                 for res in results:
                     if isinstance(res, Exception):

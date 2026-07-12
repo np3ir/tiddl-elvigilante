@@ -38,6 +38,20 @@ log = getLogger(__name__)
 CHUNK_SIZE = 1024**2
 MAX_RETRIES = 3  # Maximum number of retries for corrupt files
 
+
+def _normalize_dir(path: Path) -> str:
+    """Canonical form of a directory path for equality checks.
+
+    Strips the Windows long-path prefix (``\\\\?\\`` / ``\\\\?\\UNC\\``) so a
+    DB-stored, prefixed path compares equal to a freshly built one, then applies
+    ``normcase`` + ``normpath``. Pure string work — no filesystem access."""
+    s = str(path)
+    if s.startswith("\\\\?\\UNC\\"):
+        s = "\\\\" + s[len("\\\\?\\UNC\\"):]
+    elif s.startswith("\\\\?\\"):
+        s = s[len("\\\\?\\"):]
+    return os.path.normcase(os.path.normpath(s))
+
 # ====================================================================
 # IMPROVEMENT 1: Enums for download states
 # ====================================================================
@@ -442,6 +456,58 @@ class Downloader:
             await self._scan_directory(dir_path)
         return file_path.name in self.dir_cache.get(dir_path, set())
 
+    async def is_item_present(
+        self, item: Union[Track, Video], file_path: Path
+    ) -> Optional[Path]:
+        """Read-only check used by the album/playlist/mix/artist flows to detect
+        *confirmed-complete* items (tracks AND videos) up front, so fully
+        downloaded content can skip the browse simulation, cover/review fetch,
+        per-track /contributors enrichment and dispatch delays — and each such
+        item can also skip the per-run metadata rewrite.
+
+        Returns the on-disk path only when the item is BOTH:
+          * recorded in the skip DB — a record is inserted by the caller only
+            *after* metadata was successfully applied, so this proves the media
+            AND tags are complete (unlike a file found by a bare directory scan,
+            which may have been left untagged and must still be reprocessed); and
+          * that DB file still exists and sits in the folder THIS download targets
+            (compared absolute-vs-absolute, long-path prefix normalized).
+
+        Returns None otherwise (missing, only-on-disk/untagged, or wrong folder),
+        so the item falls through to download()'s normal path exactly as before.
+        A false negative merely costs the overhead we hoped to save — never a
+        wrong skip. The network is never touched.
+        """
+        if not self.skip_existing or not isinstance(item, (Track, Video)):
+            return None
+
+        db_path = self._db_lookup(item.id)
+        if db_path is None:
+            return None
+
+        try:
+            still_on_disk = await self._is_file_in_cache(db_path)
+        except OSError:
+            return None
+        if not still_on_disk:
+            self._db_remove(item.id)
+            return None
+
+        # Mirror download()'s destination logic per item type: videos land in
+        # video_download_path (when configured) with a fixed .mp4 suffix.
+        if isinstance(item, Video):
+            filename = file_path.with_suffix(".mp4")
+            base_path = self.video_download_path or self.scan_path
+        else:
+            filename = get_existing_track_filename(
+                item.audioQuality, self.track_quality, file_path
+            )
+            base_path = self.scan_path
+        intended_dir = (base_path / filename).parent
+        if _normalize_dir(db_path.parent) == _normalize_dir(intended_dir):
+            return db_path
+        return None
+
     async def _download_with_retry(
         self,
         task: DownloadTask,
@@ -692,22 +758,27 @@ class Downloader:
 
         # --- Fast path: SQLite DB lookup (O(1), no network I/O) ---
         # A DB record is only inserted by the caller *after* metadata is
-        # successfully written (see handle_item), so a hit here means audio
+        # successfully written (see handle_item), so a hit here means media
         # + tags are both confirmed complete — safe to fully skip.
-        if self.skip_existing and isinstance(item, Track):
+        # Applies to tracks AND videos (handle_item records both types).
+        if self.skip_existing:
             db_path = self._db_lookup(item.id)
             if db_path is not None:
-                # DB says we downloaded this track.  Do a single stat() to
+                # DB says we downloaded this item.  Do a single stat() to
                 # confirm the file still exists (guards against manual deletes).
                 try:
                     file_still_exists = await self._is_file_in_cache(db_path)
                 except OSError:
                     file_still_exists = False
                 if file_still_exists:
-                    # Only skip if the file is already in the intended destination folder.
-                    # If it was downloaded elsewhere (e.g. a playlist), still download
-                    # it to the correct location (e.g. the album folder).
-                    if os.path.normcase(os.path.normpath(str(db_path.parent))) == os.path.normcase(os.path.normpath(str(file_path.parent))):
+                    # Only skip if the file is already in the intended destination
+                    # folder. If it was downloaded elsewhere (e.g. a playlist),
+                    # still download it to the correct location. Compared against
+                    # existing_file_path (absolute; scan/video base) — the old
+                    # comparison against the template-relative file_path.parent
+                    # never matched, which silently forced a metadata rewrite of
+                    # every existing file on each rescan via the dir-scan path.
+                    if _normalize_dir(db_path.parent) == _normalize_dir(existing_file_path.parent):
                         self.rich_output.show_item_result(
                             result_message="[yellow]Exists",
                             item_description=f"[{vibrant_color}]{display_title}",
@@ -717,7 +788,7 @@ class Downloader:
                 else:
                     # File is gone — remove stale DB entry and continue to download
                     self._db_remove(item.id)
-                    log.debug(f"Track {item.id} was in DB but file missing, re-downloading")
+                    log.debug(f"Item {item.id} was in DB but file missing, re-downloading")
 
         # --- Fallback: directory scan cache ---
         # Unlike the DB fast-path above, a file found only by scanning disk is
