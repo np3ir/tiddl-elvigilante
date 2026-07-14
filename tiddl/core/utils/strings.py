@@ -19,6 +19,15 @@ CHAR_TO_FULL_WIDTH = {
     '*': '＊',  # U+FF0A
 }
 
+# Unicode dash/hyphen lookalikes -> ASCII hyphen. TIDAL (and other services)
+# sometimes use these instead of "-"; normalizing keeps filenames identical
+# across sources (and matches how Last.fm etc. treat them as the same string).
+# Covers hyphen, non-breaking hyphen, figure/en/em dash, horizontal bar, minus.
+DASH_TO_HYPHEN = str.maketrans({
+    "‐": "-", "‑": "-", "‒": "-", "–": "-",
+    "—": "-", "―": "-", "−": "-",
+})
+
 
 # ============================================================
 # Security & Length Limits
@@ -375,6 +384,7 @@ def sanitize_filename(s: str, item_id: Optional[int] = None, max_len: int = 100,
     s = remove_zalgo(s)
     s = transliterate_unicode(s, mode=TRANSLITERATION_MODE)
     s = unicodedata.normalize("NFC", s)
+    s = s.translate(DASH_TO_HYPHEN)  # normalize Unicode dash lookalikes to "-"
     s = "".join(ch for ch in s if unicodedata.category(ch) not in ("Cc", "Cf", "Cs"))
 
     # 1. Main rule: Convert forbidden characters to their full-width counterparts.
