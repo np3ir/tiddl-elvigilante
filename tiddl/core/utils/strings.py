@@ -456,3 +456,28 @@ def sanitize_filename(s: str, item_id: Optional[int] = None, max_len: int = 100,
     if not s:
         return _generate_fallback_name(original_input, item_id)
     return s
+
+
+def normalize_artist_name(name: str) -> str:
+    """Comparison key for artist names: accent-insensitive, case-insensitive,
+    whitespace-collapsed — "Rosalia" and "ROSALÍA" count as the same artist.
+    Some sources credit the same artist with different normalization; parity
+    with the same fix in streamrip-elvigilante."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(stripped.casefold().split())
+
+
+def dedup_artists(names, exclude=()) -> List[str]:
+    """Drop duplicate artist names (per normalize_artist_name), keeping order
+    and the FIRST spelling seen. Names normalizing equal to any in `exclude`
+    are dropped too (e.g. featured artists already credited as main)."""
+    seen = {normalize_artist_name(n) for n in exclude}
+    out: List[str] = []
+    for n in names:
+        key = normalize_artist_name(n)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out

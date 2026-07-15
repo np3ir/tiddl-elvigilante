@@ -11,8 +11,8 @@ from pathlib import Path
 
 from tiddl.core.api.models import Track, Video, Album, Playlist, Explicit
 from tiddl.core.utils.strings import (
-    sanitize_filename, remove_zalgo, get_alpha_bucket, 
-    truncate_str_bytes, _truncate,
+    sanitize_filename, remove_zalgo, get_alpha_bucket,
+    truncate_str_bytes, _truncate, dedup_artists,
     _DRIVE_RE, _WIN_FORBIDDEN_RE, _RESERVED_NAMES,
     MAX_COMPONENT_LEN, RESERVED_BYTE_COUNT
 )
@@ -302,8 +302,11 @@ def generate_template_data(item=None, album=None, playlist=None, playlist_index=
             # Fallback if no type (common in some API responses)
             elif not a_type: m_arts.append(a_name)
 
-        m_arts = sorted(m_arts)
-        f_arts = sorted(f_arts)
+        # Dedup normalizado (acentos/mayúsculas): el mismo artista con distinta
+        # grafía cuenta una sola vez; los FEATURED ya acreditados como MAIN se
+        # descartan. Paridad con streamrip-elvigilante (caso "ROSALÍA"/"Rosalia").
+        m_arts = sorted(dedup_artists(m_arts))
+        f_arts = sorted(dedup_artists(f_arts, exclude=m_arts))
 
         ver = safe_getattr(item, "version", "") or ""
 

@@ -13,6 +13,7 @@ from mutagen.mp4 import MP4 as MutagenMP4, MP4Cover
 
 from tiddl.core.api.models import AlbumItemsCredits, Track
 from tiddl.core.utils.format import clean_track_title, DEFAULT_ARTIST_SEPARATOR
+from tiddl.core.utils.strings import dedup_artists
 
 log = logging.getLogger(__name__)
 
@@ -256,9 +257,10 @@ def add_track_metadata(
     (main + featured) is stored in the ARTIST/©ART field.
     """
     # Build artist list — MAIN primero (ordenado), luego FEATURED (ordenado),
-    # paridad con el nombre de archivo (format.py artists_with_features)
-    _m = sorted(a.name.strip() for a in track.artists if getattr(a, "type", None) != "FEATURED")
-    _f = sorted(a.name.strip() for a in track.artists if getattr(a, "type", None) == "FEATURED")
+    # paridad con el nombre de archivo (format.py artists_with_features).
+    # Dedup normalizado (acentos/mayúsculas) por si la fuente repite grafías.
+    _m = sorted(dedup_artists(a.name.strip() for a in track.artists if getattr(a, "type", None) != "FEATURED"))
+    _f = sorted(dedup_artists((a.name.strip() for a in track.artists if getattr(a, "type", None) == "FEATURED"), exclude=_m))
     artists_sorted = _m + _f
     # Separator-joined string
     artists_str = artist_separator.join(artists_sorted)
