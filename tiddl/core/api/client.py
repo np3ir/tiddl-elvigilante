@@ -159,7 +159,7 @@ class TidalClientImproved:
                 self._refresh_blocked = True
                 log.warning(
                     "Token refresh blocked by TIDAL (account flagged). "
-                    "Current token will be used until it expires, then run: tiddl auth login --tv"
+                    "Current token will be used until it expires, then run: tiddl auth login"
                 )
             else:
                 log.error(f"Failed to refresh token: {e}")

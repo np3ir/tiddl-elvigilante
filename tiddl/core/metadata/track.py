@@ -97,7 +97,10 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
             "DISCNUMBER": metadata.disc_number,
             "ALBUM": metadata.album_title,
             "ALBUMARTIST": metadata.album_artist,
-            "ARTIST": metadata.artists_list or [metadata.artists],
+            # Opcion A: un solo valor unido con " / " (VirtualDJ/RadioBoss no leen
+            # multivaluados). metadata.artists ya viene con el separador y todos
+            # los artistas (main + featured).
+            "ARTIST": [metadata.artists],
             "DATE": str(date.year) if date else "",
             "COPYRIGHT": metadata.copyright or "",
             "ISRC": metadata.isrc,
@@ -189,7 +192,7 @@ def add_m4a_metadata(track_path: Path, metadata: Metadata) -> None:
     mp4["\xa9nam"] = metadata.title                    # Title
     mp4["\xa9alb"] = metadata.album_title              # Album
     mp4["aART"] = metadata.album_artist                # Album artist
-    mp4["\xa9ART"] = metadata.artists_list or [metadata.artists]  # Track artists (multi-value)
+    mp4["\xa9ART"] = [metadata.artists]  # Opcion A: un solo valor " / " (todos los artistas)
     
     # Date / Year (extract year only)
     if metadata.date:

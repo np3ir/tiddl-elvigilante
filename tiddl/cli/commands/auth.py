@@ -250,7 +250,7 @@ def refresh(
         if e.response is not None and 400 <= e.response.status_code < 500:
             console.print(
                 "[yellow]Token refresh blocked by TIDAL — continuing with current token. "
-                "Run [bold]tiddl auth login --tv[/bold] when it expires."
+                "Run [bold]tiddl auth login[/bold] when it expires."
             )
         else:
             raise
