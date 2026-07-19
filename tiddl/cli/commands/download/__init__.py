@@ -1503,7 +1503,9 @@ def download_callback(
                 ctx.obj.console.print(msg)
                 return expanded
 
+            expanded_run = False
             if EXPAND_ALBUMS or EXPAND_ARTISTS or EXPAND_TRACKS:
+                expanded_run = True
                 new_resources: list[TidalResource] = []
                 seen_global: set = set()
                 for r in ctx.obj.resources:
@@ -1517,7 +1519,22 @@ def download_callback(
                         new_resources.append(r)
                 ctx.obj.resources = new_resources
 
-            tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
+            if expanded_run:
+                # Expanded runs can be hundreds of resources. Launching them all
+                # concurrently starves every task on the API client's global
+                # rate-limit lock (each task's next request queues behind every
+                # other task's), so nothing visibly completes for a long time.
+                # Cap concurrency like artist downloads do so resource #1 starts
+                # producing output immediately.
+                expand_sem = asyncio.Semaphore(max(1, ARTIST_CONCURRENCY))
+
+                async def wrapper_limited(r: TidalResource):
+                    async with expand_sem:
+                        await wrapper(r)
+
+                tasks = [asyncio.create_task(wrapper_limited(r)) for r in ctx.obj.resources]
+            else:
+                tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
             try:
                 await asyncio.gather(*tasks)
             except (asyncio.CancelledError, KeyboardInterrupt):
