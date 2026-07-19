@@ -1527,12 +1527,22 @@ def download_callback(
                 # Cap concurrency like artist downloads do so resource #1 starts
                 # producing output immediately.
                 expand_sem = asyncio.Semaphore(max(1, ARTIST_CONCURRENCY))
+                expand_total = len(ctx.obj.resources)
 
-                async def wrapper_limited(r: TidalResource):
+                async def wrapper_limited(r: TidalResource, idx: int):
                     async with expand_sem:
+                        # Steady per-resource heartbeat: complete albums are
+                        # skipped silently, so without this the output can go
+                        # quiet for minutes on largely-downloaded expansions.
+                        ctx.obj.console.print(
+                            f"[{idx}/{expand_total}] {r.type}/{r.id}", markup=False
+                        )
                         await wrapper(r)
 
-                tasks = [asyncio.create_task(wrapper_limited(r)) for r in ctx.obj.resources]
+                tasks = [
+                    asyncio.create_task(wrapper_limited(r, i))
+                    for i, r in enumerate(ctx.obj.resources, start=1)
+                ]
             else:
                 tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
             try:
