@@ -267,13 +267,20 @@ def download_callback(
             help="Expand playlists into their tracks' credited artists (downloads full discographies).",
         ),
     ] = False,
+    EXPAND_TRACKS: Annotated[
+        bool,
+        typer.Option(
+            "--tracks",
+            help="Expand playlists into standalone tracks (track template/folders, not the playlist layout).",
+        ),
+    ] = False,
 ):
     """
     Download Tidal resources.
     """
 
-    if EXPAND_ALBUMS and EXPAND_ARTISTS:
-        raise typer.BadParameter("Use either --albums or --artists, not both.")
+    if sum([EXPAND_ALBUMS, EXPAND_ARTISTS, EXPAND_TRACKS]) > 1:
+        raise typer.BadParameter("Use only one of --albums, --artists or --tracks.")
 
     ctx.invoke(refresh, EARLY_EXPIRE_TIME=600)
 
@@ -1473,6 +1480,10 @@ def download_callback(
                             if item.album and item.album.id not in seen:
                                 seen.add(item.album.id)
                                 expanded.append(TidalResource(type="album", id=str(item.album.id)))
+                        elif EXPAND_TRACKS:
+                            if item.id not in seen:
+                                seen.add(item.id)
+                                expanded.append(TidalResource(type="track", id=str(item.id)))
                         else:
                             artists = item.artists or ([item.artist] if item.artist else [])
                             for artist in artists:
@@ -1482,7 +1493,7 @@ def download_callback(
                     offset += page.limit
                     if offset >= page.totalNumberOfItems:
                         break
-                kind = "albums" if EXPAND_ALBUMS else "artists"
+                kind = "albums" if EXPAND_ALBUMS else ("tracks" if EXPAND_TRACKS else "artists")
                 msg = (
                     f"\n[bold magenta]Playlist expanded:[/] {playlist.title} "
                     f"-> [bold]{len(expanded)} unique {kind}[/]"
@@ -1492,7 +1503,7 @@ def download_callback(
                 ctx.obj.console.print(msg)
                 return expanded
 
-            if EXPAND_ALBUMS or EXPAND_ARTISTS:
+            if EXPAND_ALBUMS or EXPAND_ARTISTS or EXPAND_TRACKS:
                 new_resources: list[TidalResource] = []
                 seen_global: set = set()
                 for r in ctx.obj.resources:

@@ -304,6 +304,7 @@ tiddl download --track-quality max url <url>
 | `--track-delay` | `-td` | float (seconds) | 3.0 | Max random delay before each track download |
 | `--albums` | - | bool | false | Expand playlists into their tracks' full albums (deduped) |
 | `--artists` | - | bool | false | Expand playlists into their tracks' credited artists (full discographies) |
+| `--tracks` | - | bool | false | Expand playlists into standalone tracks (track template/folders, no playlist layout) |
 
 ## Global Options
 
