@@ -1448,6 +1448,11 @@ def download_callback(
         rich_output.show_stats()
 
     def run():
+        # Sin recursos no hay nada que descargar: evita pintar los paneles
+        # vacíos de progreso (que entierran el mensaje de error de Click
+        # cuando el subcomando falló al parsear sus argumentos).
+        if not ctx.obj.resources:
+            return
         import warnings, sys
         # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
         if sys.platform == "win32":

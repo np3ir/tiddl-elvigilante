@@ -15,6 +15,26 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [Unreleased] — 2026-07-19
+
+### 🐛 Fixed
+
+- **Download options now accepted after the subcommand** (`tiddl/cli/app.py`)
+  — `tiddl download url --track-quality max <url>` (the syntax shown throughout the
+  docs) failed with `No such option: --track-quality` because Click required group
+  options before the subcommand. An argv-normalization shim in the entry point now
+  moves download-group options written after `url`/`fav`/`search` to their correct
+  position, so both orders work. Options owned by the subcommand itself
+  (`fav --types/-t`, `search --limit/-l`) are left in place.
+
+- **Clean error output on bad subcommand arguments** (`tiddl/cli/commands/download/__init__.py`)
+  — When the subcommand failed to parse (e.g. an invalid option), the teardown still
+  rendered empty Downloading/Total Progress panels and `Total downloads: 0` before
+  the actual error message, burying it. The downloader teardown now exits early when
+  no resources were queued.
+
+---
+
 ## [Unreleased] — 2026-05-16
 
 ### 🐛 Fixed

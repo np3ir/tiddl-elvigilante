@@ -269,7 +269,18 @@ tiddl --omit-cache <command>
 
 ## Download Command Options
 
-These go **after** the subcommand, e.g. `tiddl download url --path "D:/Music" <url>`.
+These work **before or after** the subcommand — both are equivalent:
+
+```bash
+tiddl download url --track-quality max <url>
+tiddl download --track-quality max url <url>
+```
+
+> Note: older builds only accepted the second form (options before the subcommand)
+> and failed with `No such option` otherwise. Update tiddl if you hit that error.
+>
+> Caveat: after `fav`, `-t` means `--types` (fav's own option). To set threads
+> there, use the long form `--threads-count` or put `-t` before the subcommand.
 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
@@ -799,7 +810,7 @@ tiddl info url https://tidal.com/album/123
 # M3U8 EXPORT (no standalone command — enable [m3u] save=true in config.toml, then download normally)
 tiddl download url https://tidal.com/playlist/xyz
 
-# COMMON OPTIONS (after the subcommand, e.g. `tiddl download url --path ... <url>`)
+# COMMON OPTIONS (before or after the subcommand, e.g. `tiddl download url --path ... <url>`)
 --track-quality max                                   # Maximum quality
 --path "D:/Music"                                     # Folder
 --threads-count 8                                     # Speed
