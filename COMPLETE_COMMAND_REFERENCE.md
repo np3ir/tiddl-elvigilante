@@ -302,6 +302,8 @@ tiddl download --track-quality max url <url>
 | `--concurrency` | `-c` | integer (0=unlimited) | 1 | Max albums in parallel (artist downloads) |
 | `--delay` | `-d` | float (seconds) | 8.0 | Max random delay before each album (artist downloads) |
 | `--track-delay` | `-td` | float (seconds) | 3.0 | Max random delay before each track download |
+| `--albums` | - | bool | false | Expand playlists into their tracks' full albums (deduped) |
+| `--artists` | - | bool | false | Expand playlists into their tracks' credited artists (full discographies) |
 
 ## Global Options
 

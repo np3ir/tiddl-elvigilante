@@ -17,6 +17,15 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased] — 2026-07-19
 
+### ✨ Added
+
+- **`--albums` / `--artists` playlist expansion** (`tiddl/cli/commands/download/__init__.py`)
+  — `tiddl download --albums url <playlist>` downloads the full albums of every track
+  in the playlist (deduped by album id) instead of the playlist tracks; `--artists`
+  downloads the full discographies of every credited artist (deduped by artist id).
+  Same semantics as `tidmon playlist albums/artists --export`, without the export
+  round-trip. Mutually exclusive; non-playlist URLs in the same command are unaffected.
+
 ### 🐛 Fixed
 
 - **Download options now accepted after the subcommand** (`tiddl/cli/app.py`)

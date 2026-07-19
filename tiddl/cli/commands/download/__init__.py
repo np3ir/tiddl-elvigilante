@@ -253,10 +253,27 @@ def download_callback(
             min=0.0,
         ),
     ] = CONFIG.download.track_delay,
+    EXPAND_ALBUMS: Annotated[
+        bool,
+        typer.Option(
+            "--albums",
+            help="Expand playlists into their tracks' full albums instead of downloading the playlist tracks.",
+        ),
+    ] = False,
+    EXPAND_ARTISTS: Annotated[
+        bool,
+        typer.Option(
+            "--artists",
+            help="Expand playlists into their tracks' credited artists (downloads full discographies).",
+        ),
+    ] = False,
 ):
     """
     Download Tidal resources.
     """
+
+    if EXPAND_ALBUMS and EXPAND_ARTISTS:
+        raise typer.BadParameter("Use either --albums or --artists, not both.")
 
     ctx.invoke(refresh, EARLY_EXPIRE_TIME=600)
 
@@ -1431,6 +1448,63 @@ def download_callback(
                     raise
                 except Exception as e:
                     ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
+
+            async def expand_playlist(resource: TidalResource) -> list[TidalResource]:
+                """--albums/--artists: turn a playlist into its unique albums or
+                credited artists (same dedupe semantics as tidmon playlist)."""
+                playlist = await asyncio.to_thread(
+                    ctx.obj.api.get_playlist, playlist_uuid=resource.id
+                )
+                seen: set = set()
+                expanded: list[TidalResource] = []
+                skipped_videos = 0
+                offset = 0
+                while True:
+                    page = await asyncio.to_thread(
+                        ctx.obj.api.get_playlist_items,
+                        playlist_uuid=resource.id, offset=offset,
+                    )
+                    for playlist_item in page.items:
+                        item = playlist_item.item
+                        if not isinstance(item, Track):
+                            skipped_videos += 1
+                            continue
+                        if EXPAND_ALBUMS:
+                            if item.album and item.album.id not in seen:
+                                seen.add(item.album.id)
+                                expanded.append(TidalResource(type="album", id=str(item.album.id)))
+                        else:
+                            artists = item.artists or ([item.artist] if item.artist else [])
+                            for artist in artists:
+                                if artist and artist.id and artist.id not in seen:
+                                    seen.add(artist.id)
+                                    expanded.append(TidalResource(type="artist", id=str(artist.id)))
+                    offset += page.limit
+                    if offset >= page.totalNumberOfItems:
+                        break
+                kind = "albums" if EXPAND_ALBUMS else "artists"
+                msg = (
+                    f"\n[bold magenta]Playlist expanded:[/] {playlist.title} "
+                    f"-> [bold]{len(expanded)} unique {kind}[/]"
+                )
+                if skipped_videos:
+                    msg += f" [dim]({skipped_videos} video item(s) skipped)[/]"
+                ctx.obj.console.print(msg)
+                return expanded
+
+            if EXPAND_ALBUMS or EXPAND_ARTISTS:
+                new_resources: list[TidalResource] = []
+                seen_global: set = set()
+                for r in ctx.obj.resources:
+                    if r.type == "playlist":
+                        for er in await expand_playlist(r):
+                            key = (er.type, er.id)
+                            if key not in seen_global:
+                                seen_global.add(key)
+                                new_resources.append(er)
+                    else:
+                        new_resources.append(r)
+                ctx.obj.resources = new_resources
 
             tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
             try:
