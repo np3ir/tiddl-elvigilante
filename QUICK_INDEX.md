@@ -18,7 +18,10 @@
 ✅ tiddl download      - Download
    ├── url             - Download by link
    ├── fav             - Download favorites
-   └── search          - Search and download by name
+   ├── search          - Search and download by name
+   └── --albums / --artists / --tracks
+                       - Expand a playlist into full albums,
+                         artist discographies or standalone tracks
 
 ✅ tiddl info          - Get information
 

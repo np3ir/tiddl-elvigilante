@@ -126,6 +126,11 @@ tiddl download url https://tidal.com/playlist/abc-123-xyz
 # Toda la discografía de un artista
 tiddl download url https://tidal.com/artist/12316
 
+# Expandir una playlist (en vez de bajarla como playlist):
+tiddl download --albums url https://tidal.com/playlist/abc-123-xyz   # el álbum completo de cada canción
+tiddl download --artists url https://tidal.com/playlist/abc-123-xyz  # la discografía de cada artista (¡puede ser MUCHO!)
+tiddl download --tracks url https://tidal.com/playlist/abc-123-xyz   # cada canción suelta, con estructura de track
+
 # Tus favoritos (canciones que marcaste con ♥ en TIDAL)
 tiddl download fav
 

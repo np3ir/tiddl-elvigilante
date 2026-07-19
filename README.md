@@ -149,6 +149,11 @@ tiddl download url https://tidal.com/album/497662013
 # Download playlist
 tiddl download url https://tidal.com/playlist/abc123xyz
 
+# Expand a playlist instead of downloading it as a playlist:
+tiddl download --albums url https://tidal.com/playlist/abc123xyz   # full album of every track
+tiddl download --artists url https://tidal.com/playlist/abc123xyz  # full discography of every credited artist
+tiddl download --tracks url https://tidal.com/playlist/abc123xyz   # each track standalone (track template/folders)
+
 # Download your favorites
 tiddl download fav
 

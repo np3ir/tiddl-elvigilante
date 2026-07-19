@@ -134,6 +134,14 @@ tiddl download search "Pink Floyd" --limit 5
 - Avoids wasting API quota and retry cycles on tracks that are not yet available for streaming
 - Produces a clear yellow warning instead of cryptic API errors
 
+### 10. **Playlist Expansion (`--albums` / `--artists` / `--tracks`)**
+- Downloads a playlist AS its components instead of as a playlist
+- `--albums`: the full album of every track (deduped by album id)
+- `--artists`: the full discography of every credited artist (deduped by artist id)
+- `--tracks`: each track standalone with the track template/folders
+- Nothing goes through the playlist template, playlist folder or m3u
+- Flexible option order: download options are accepted before or after the subcommand
+
 ---
 
 ## 📊 Feature Comparison

@@ -42,6 +42,26 @@ tiddl download url https://tidal.com/album/497662013
 tiddl download url https://tidal.com/playlist/abc123xyz
 ```
 
+### Expand a Playlist (download as albums / artists / tracks)
+
+Instead of downloading a playlist into the playlist layout, expand it into its
+components — downloads use the album/artist/track templates and folders, and
+nothing goes through the playlist template, playlist folder or m3u:
+
+```bash
+# Full album of every track in the playlist (deduped)
+tiddl download --albums url https://tidal.com/playlist/abc123xyz
+
+# Full discography of every credited artist (deduped; respects --singles filter)
+tiddl download --artists url https://tidal.com/playlist/abc123xyz
+
+# Every track as a standalone track (track template/folders)
+tiddl download --tracks url https://tidal.com/playlist/abc123xyz
+```
+
+The three flags are mutually exclusive. Video items in the playlist are skipped
+with a notice. Non-playlist URLs in the same command are unaffected.
+
 ### Download Artist (All Albums)
 ```bash
 tiddl download url https://tidal.com/artist/789123456

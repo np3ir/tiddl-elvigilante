@@ -119,6 +119,13 @@ tiddl download url -r https://...
 # Naming template
 tiddl download url --template "{album.artist}/{album.title}/{item.title}" https://...
 
+# Playlist expansion — download a playlist AS albums / artists / tracks
+# (uses the album/artist/track templates and folders; nothing goes through
+#  the playlist template, playlist folder or m3u; flags are mutually exclusive)
+tiddl download --albums url https://tidal.com/playlist/...   # full album of every track (deduped)
+tiddl download --artists url https://tidal.com/playlist/...  # full discography of every credited artist
+tiddl download --tracks url https://tidal.com/playlist/...   # each track standalone
+
 # Debug (global flag, goes before the subcommand)
 tiddl --debug download url https://...
 ```
