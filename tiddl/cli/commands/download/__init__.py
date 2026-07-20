@@ -1519,13 +1519,14 @@ def download_callback(
                         new_resources.append(r)
                 ctx.obj.resources = new_resources
 
-            if expanded_run:
-                # Expanded runs can be hundreds of resources. Launching them all
-                # concurrently starves every task on the API client's global
-                # rate-limit lock (each task's next request queues behind every
-                # other task's), so nothing visibly completes for a long time.
-                # Cap concurrency like artist downloads do so resource #1 starts
-                # producing output immediately.
+            if expanded_run or len(ctx.obj.resources) > 1:
+                # Multi-resource runs (expansions or many pasted URLs) can be
+                # hundreds of resources. Launching them all concurrently starves
+                # every task on the API client's global rate-limit lock (each
+                # task's next request queues behind every other task's), so
+                # nothing visibly completes for a long time. Cap concurrency
+                # like artist downloads do so resource #1 starts producing
+                # output immediately.
                 expand_sem = asyncio.Semaphore(max(1, ARTIST_CONCURRENCY))
                 expand_total = len(ctx.obj.resources)
 
