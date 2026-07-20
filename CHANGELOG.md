@@ -19,6 +19,12 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ### ✨ Added
 
+- **`--embed-lyrics` / `--save-lyrics` per-run overrides** (`tiddl/cli/commands/download/__init__.py`)
+  — Lyrics options lived only in `[metadata]` config. The new paired flags
+  (`--save-lyrics/--no-save-lyrics`, `--embed-lyrics/--no-embed-lyrics`) override the
+  config for a single run: embed lyrics in tags and/or write an `.lrc` sidecar next
+  to each track. Omitting them keeps the config behavior.
+
 - **`--albums` / `--artists` / `--tracks` playlist expansion** (`tiddl/cli/commands/download/__init__.py`)
   — `tiddl download --albums url <playlist>` downloads the full albums of every track
   in the playlist (deduped by album id) instead of the playlist tracks; `--artists`

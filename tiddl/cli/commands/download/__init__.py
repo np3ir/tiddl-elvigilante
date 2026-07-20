@@ -274,6 +274,20 @@ def download_callback(
             help="Expand playlists into standalone tracks (track template/folders, not the playlist layout).",
         ),
     ] = False,
+    EMBED_LYRICS: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--embed-lyrics/--no-embed-lyrics",
+            help="Embed lyrics in the file tags (overrides config).",
+        ),
+    ] = None,
+    SAVE_LYRICS: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--save-lyrics/--no-save-lyrics",
+            help="Save an .lrc lyrics file next to each track (overrides config).",
+        ),
+    ] = None,
 ):
     """
     Download Tidal resources.
@@ -281,6 +295,13 @@ def download_callback(
 
     if sum([EXPAND_ALBUMS, EXPAND_ARTISTS, EXPAND_TRACKS]) > 1:
         raise typer.BadParameter("Use only one of --albums, --artists or --tracks.")
+
+    # Lyrics come from [metadata] in config.toml; these flags override per run
+    # (the download flow reads CONFIG.metadata at runtime).
+    if EMBED_LYRICS is not None:
+        CONFIG.metadata.lyrics = EMBED_LYRICS
+    if SAVE_LYRICS is not None:
+        CONFIG.metadata.save_lyrics = SAVE_LYRICS
 
     ctx.invoke(refresh, EARLY_EXPIRE_TIME=600)
 
