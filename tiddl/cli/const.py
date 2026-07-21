@@ -9,13 +9,23 @@ APP_DIR_NAME = ".tiddl"
 
 
 def get_app_path(env_key: str = ENV_KEY) -> Path:
-    # Check if running as PyInstaller bundle (Portable Mode)
-    if getattr(sys, 'frozen', False):
-        # Return a 'config' directory next to the executable
-        return Path(sys.executable).parent / "config"
-
+    # Explicit TIDDL_PATH always wins, frozen or not.
     if environ.get(env_key):
         return Path(environ[env_key])
+
+    # PyInstaller bundle (Portable Mode): config next to the executable,
+    # but only if that location is writable - installed under Program Files
+    # it is not, and crashing at import left a clean machine unusable.
+    if getattr(sys, "frozen", False):
+        portable = Path(sys.executable).parent / "config"
+        try:
+            portable.mkdir(parents=True, exist_ok=True)
+            probe = portable / ".write_test"
+            probe.touch()
+            probe.unlink()
+            return portable
+        except OSError:
+            pass
 
     return Path.home() / APP_DIR_NAME
 
