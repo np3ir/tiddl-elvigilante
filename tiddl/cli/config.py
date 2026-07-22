@@ -16,6 +16,7 @@ from tiddl.core.utils.format import DEFAULT_ARTIST_SEPARATOR
 
 CONFIG_FILENAME = "config.toml"
 DEFAULT_DOWNLOAD_PATH = Path.home() / "Music" / "tiddl"
+DEFAULT_TEMPLATE = "{album.artist}/{album.title}/{item.title}"
 
 ARTIST_SINGLES_FILTER_LITERAL = Literal["none", "only", "include"]
 VALID_M3U_RESOURCE_LITERAL = Literal["album", "playlist", "mix"]
@@ -108,7 +109,7 @@ class Config(BaseModel):
     m3u: M3UConfig = M3UConfig()
 
     class TemplatesConfig(BaseModel):
-        default: str = "{album.artist}/{album.title}/{item.title}"
+        default: str = DEFAULT_TEMPLATE
         track: str = ""
         video: str = ""
         album: str = ""
@@ -116,11 +117,12 @@ class Config(BaseModel):
         mix: str = ""
         artist_separator: str = DEFAULT_ARTIST_SEPARATOR
 
-        @validator("default")
+        @validator("default", always=True)
         def default_not_empty(cls, v):
-            if not v:
-                raise ValueError("Default template cannot be empty.")
-            return v
+            # An empty default (e.g. written by a GUI that saved a blank field)
+            # would otherwise crash tiddl at import for every command. Fall back
+            # to the built-in template instead of raising.
+            return v or DEFAULT_TEMPLATE
 
         @validator("track", "video", "album", "playlist", "mix", always=True)
         def inherit_default(cls, v, values):
