@@ -173,7 +173,7 @@ tiddl download search "Pink Floyd" --limit 5
 ### Installation Independence
 ```bash
 # Install directly from this fork
-pip install git+https://github.com/Np3ir/tiddl-elvigilante.git
+pip install git+https://github.com/np3ir/tiddl-elvigilante.git
 
 # No need to install original
 # This fork is completely standalone
@@ -239,7 +239,7 @@ We deeply respect the original work by @oskvr37. This fork:
 
 ### Installation
 ```bash
-pip install git+https://github.com/Np3ir/tiddl-elvigilante.git
+pip install git+https://github.com/np3ir/tiddl-elvigilante.git
 ```
 
 ### First Steps
@@ -281,7 +281,7 @@ See [LICENSE](LICENSE) file for details.
 
 ## 🔗 Links
 
-- **This Fork**: https://github.com/Np3ir/tiddl-elvigilante
+- **This Fork**: https://github.com/np3ir/tiddl-elvigilante
 - **Original Project**: https://github.com/oskvr37/tiddl
 - **Original Author**: @oskvr37
 - **TIDAL**: https://tidal.com

@@ -86,6 +86,30 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
+## [1.1.7] - 2026-07-24
+
+### 🐛 Fixed
+
+- **`click` missing from dependencies broke every install** (`pyproject.toml`)
+  — `tiddl/cli/app.py` imports `click` directly (`click.Option` in
+  `_reorder_download_options`, which runs on *every* invocation). `click` was never
+  declared as a dependency; it only resolved because older `typer` pulled it in
+  transitively. `typer>=0.27` no longer depends on `click`, so clean installs
+  (`pip install git+https://github.com/np3ir/tiddl-elvigilante`) succeeded but then
+  crashed on the first command with `ModuleNotFoundError: No module named 'click'`.
+  Now declared explicitly as `click>=8.0`.
+
+### 📖 Documentation
+
+- **Normalized all repository URLs** to lowercase `np3ir/tiddl-elvigilante`
+  (README, FORK, CONTRIBUTING, CHANGELOG, `pyproject.toml`). GitHub usernames are
+  case-insensitive so the old `Np3ir` links still resolved, but the canonical form
+  is now consistent everywhere.
+- **Added an Android / Termux installation section** to the README, since
+  `pip install git+…` needs the `git` command available and Android does not ship it.
+
+---
+
 ## [1.1.6] - 2026-03-29
 
 ### 📖 Documentation
@@ -164,7 +188,7 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 #### Packaging — `tiddl.cli` / `tiddl.core` not found after pip install
 - Moved source into `tiddl/` subdirectory so setuptools discovers the correct namespace
 - Entry points updated to `tiddl.cli.app:main`
-- `pip install git+https://github.com/Np3ir/tiddl-elvigilante` now works correctly
+- `pip install git+https://github.com/np3ir/tiddl-elvigilante` now works correctly
 
 #### Templates not applied from config.toml
 - `model_post_init` (Pydantic v2 only) was silently ignored in Pydantic v1, leaving
@@ -330,7 +354,7 @@ All original features preserved:
 
 ### 🔗 Links
 
-- **GitHub**: https://github.com/Np3ir/tiddl-elvigilante
+- **GitHub**: https://github.com/np3ir/tiddl-elvigilante
 - **Original**: https://github.com/oskvr37/tiddl
 - **TIDAL**: https://tidal.com
 

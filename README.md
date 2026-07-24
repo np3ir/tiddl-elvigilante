@@ -25,7 +25,7 @@ This application is for personal, educational, and archival purposes only. It is
 
 ### Installation (Easiest)
 ```bash
-pip install git+https://github.com/Np3ir/tiddl-elvigilante
+pip install git+https://github.com/np3ir/tiddl-elvigilante
 ```
 
 ### First Use
@@ -103,15 +103,32 @@ At scale — tens of thousands of albums — this means your library reflects th
 
 ### From GitHub (Recommended)
 ```bash
-pip install git+https://github.com/Np3ir/tiddl-elvigilante
+pip install git+https://github.com/np3ir/tiddl-elvigilante
 ```
 
 ### Local Development
 ```bash
-git clone https://github.com/Np3ir/tiddl-elvigilante.git
+git clone https://github.com/np3ir/tiddl-elvigilante.git
 cd tiddl-elvigilante
 pip install -e .
 ```
+
+### Android (Termux)
+
+`pip install git+…` needs the `git` command available, and Android does not ship it —
+that is why you may see an error about `git` not being recognized. Use **Termux**:
+
+1. Install Termux from **[F-Droid](https://f-droid.org/packages/com.termux/)** (the Play Store build is outdated).
+2. Then run:
+
+```bash
+pkg update && pkg upgrade -y
+pkg install -y python git ffmpeg rust clang
+pip install git+https://github.com/np3ir/tiddl-elvigilante
+```
+
+`ffmpeg` is required for audio processing; `rust`/`clang` let the native dependencies
+compile on Android. After that, use `tiddl` exactly as on desktop.
 
 ### Install FFmpeg
 
@@ -296,7 +313,7 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 ## 🔗 Links
 
-- **This Fork:** https://github.com/Np3ir/tiddl-elvigilante
+- **This Fork:** https://github.com/np3ir/tiddl-elvigilante
 - **Original Project:** https://github.com/oskvr37/tiddl
 - **TIDAL:** https://tidal.com
 - **Python:** https://python.org
