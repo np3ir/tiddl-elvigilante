@@ -840,9 +840,13 @@ class Downloader:
 
         async with self.semaphore:
             if isinstance(item, Track):
-                # Optimization: Only attempt qualities up to the track's available quality
+                # Cap attempts at the quality the USER requested (self.track_quality),
+                # then fall back downward only on real stream failures. Do NOT cap by
+                # item.audioQuality: TIDAL's track LISTING under-reports it (frequently
+                # reports LOSSLESS when HI_RES_LOSSLESS is actually available), which
+                # silently prevented downloads in maximum quality.
                 quality_score = {"HI_RES_LOSSLESS": 3, "LOSSLESS": 2, "HIGH": 1, "LOW": 0}
-                max_score = quality_score.get(item.audioQuality, 3)
+                max_score = quality_score.get(self.track_quality, 3)
 
                 # Check for Dolby Atmos
                 is_atmos = False
