@@ -711,6 +711,11 @@ class Downloader:
           a confirmed-complete DB record. False only when the DB confirms both
           audio and tags were already fully written on a previous run.
         """
+        # Cooperative cancellation for in-process (GUI) use: bail immediately so
+        # queued items drain fast. The CLI download command never sets this flag.
+        from tiddl.core.cancel import is_cancelled
+        if is_cancelled():
+            return None, False
 
         artist_name = item.artist.name if getattr(item, 'artist', None) else "Unknown"
         display_title = f"{artist_name} - {item.title}"
