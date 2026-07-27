@@ -10,7 +10,7 @@ from requests.exceptions import HTTPError
 
 from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData
 from tiddl.core.auth import AuthAPI, AuthClientError
-from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS, AuthClient
+from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS, AuthClient, CLIENT_ID
 from tiddl.cli.commands.web_login import web_login as _web_login, launch_chrome as _launch_chrome
 
 from typing_extensions import Annotated
@@ -26,7 +26,7 @@ auth_command.command(name="launch-chrome", help="Lanza Chrome con remote debuggi
 
 
 # TODO add context and load auth data from ctx
-@auth_command.command(help="Login with your Tidal account via TV device flow.")
+@auth_command.command(help="Login with your Tidal account via device flow (cliente HiRes).")
 def login():
     loaded_auth_data = load_auth_data()
 
@@ -34,7 +34,10 @@ def login():
         console.print("[cyan bold]Already logged in.")
         raise typer.Exit()
 
-    auth_api = AuthAPI(client=AuthClient(credentials=TV_CREDENTIALS))
+    # Cliente por defecto (fX2JxdmntZWK0ixT): a diferencia del TV, este SÍ tiene
+    # derecho a HI_RES_LOSSLESS (24-bit) por device flow. Confirmado extrayendo el
+    # client_id de la app de ARCLIGHTSTRVL, que baja HiRes con este mismo cliente.
+    auth_api = AuthAPI(client=AuthClient())
     device_auth = auth_api.get_device_auth()
 
     uri = f"https://{device_auth.verificationUriComplete}"
@@ -57,7 +60,7 @@ def login():
                     expires_at=auth.expires_in + int(time()),
                     user_id=str(auth.user_id),
                     country_code=auth.user.countryCode,
-                    client_id=TV_CREDENTIALS.client_id,
+                    client_id=CLIENT_ID,
                 )
                 save_auth_data(auth_data)
                 status.console.print("[bold green]Logged in!")
