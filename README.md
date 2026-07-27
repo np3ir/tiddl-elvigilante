@@ -27,6 +27,10 @@ This application is for personal, educational, and archival purposes only. It is
 ```bash
 pip install git+https://github.com/np3ir/tiddl-elvigilante
 ```
+### For force update 
+```bash
+pip install --upgrade --force-reinstall "git+https://github.com/np3ir/tiddl-elvigilante.git
+```
 
 ### First Use
 ```bash
