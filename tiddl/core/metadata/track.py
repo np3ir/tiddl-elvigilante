@@ -65,10 +65,8 @@ class Metadata:
 # FLAC metadata writing
 # =====================
 
-def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
-    """Write FLAC metadata tags using Mutagen."""
-    mutagen = MutagenFLAC(track_path)
-
+def _apply_flac_tags(mutagen: "MutagenFLAC", metadata: Metadata) -> None:
+    """Aplica cover + tags al objeto FLAC de mutagen (sin guardar)."""
     # Embed cover art
     if metadata.cover_data:
         picture = Picture()
@@ -126,28 +124,35 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
             safe_key = normalized.encode('ascii', 'ignore').decode('ascii')
             # Final cleanup
             safe_key = safe_key.replace('=', '').strip()
-            
+
             if safe_key:
                 mutagen[safe_key] = [c.name for c in entry.contributors]
         except Exception as e:
             log.debug(f"Skipping invalid credit tag '{entry.type}': {e}")
 
+
+def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
+    """Write FLAC metadata tags using Mutagen.
+
+    El intento directo puede fallar con [Errno 22] al ABRIR o guardar cuando la
+    ruta lleva el prefijo \\?\, un caracter fullwidth (ej. ？ de un '?' del
+    titulo) o esta sobre SMB. En ese caso se copia a un temp LOCAL de ruta ASCII
+    limpia, se escriben los tags ahi y se mueve de vuelta (shutil sí maneja esa
+    ruta, igual que la escritura del audio)."""
+    import os
     try:
+        mutagen = MutagenFLAC(track_path)
+        _apply_flac_tags(mutagen, metadata)
         mutagen.save()
-    except (OSError, Exception) as e:
-        # On Windows SMB shares, mutagen's resize_bytes() can fail with
-        # [Errno 22] Invalid argument because seek()+read() doesn't work
-        # reliably over SMB. Fallback: write metadata to a local temp file
-        # then replace the original.
-        log.debug(f"Direct FLAC save failed ({e}), retrying via temp file...")
+    except Exception as e:
+        log.debug(f"Direct FLAC metadata failed ({e}), retrying via temp file...")
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".flac")
         tmp = Path(tmp_path)
         try:
-            import os
             os.close(tmp_fd)
             shutil.copy2(track_path, tmp)
             tmp_mutagen = MutagenFLAC(tmp)
-            tmp_mutagen.update(mutagen)
+            _apply_flac_tags(tmp_mutagen, metadata)
             tmp_mutagen.save()
             shutil.move(str(tmp), str(track_path))
             log.debug(f"FLAC metadata saved via temp file for {track_path.name}")
