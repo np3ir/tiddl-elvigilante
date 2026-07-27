@@ -78,12 +78,18 @@ Si ves la lista de comandos, ya está listo.
 tiddl auth login
 ```
 
-Esto va a:
-1. Abrir automáticamente un link en tu navegador (o mostrarlo en la terminal si no se abre solo).
-2. Pedirte que inicies sesión con tu cuenta de TIDAL y confirmes un código.
-3. Una vez que confirmes en el navegador, la terminal va a mostrar **"Logged in!"** sola — no hace falta que hagas nada más ahí.
+> **⚠️ Ahora aparecen 2 autorizaciones (login híbrido).** Para lograr la máxima calidad sin tener que mantener ventanas abiertas, `tiddl auth login` configura **dos** tokens:
+> - **Paso 1/2 — HiRes:** cliente con derecho a `HI_RES_LOSSLESS` (24-bit).
+> - **Paso 2/2 — Fallback:** cliente TV que entrega `LOSSLESS` (16-bit) en los tracks donde el primario bajaría a 320 kbps.
 
-La sesión queda guardada, no hace falta repetir este paso cada vez.
+Esto va a:
+1. Abrir un link en el navegador para el **Paso 1/2 (HiRes)** — inicia sesión en TIDAL y confirma el código.
+2. Abrir **otro** link para el **Paso 2/2 (Fallback)** — confirma el segundo código.
+3. La terminal muestra **"Logged in!"** en cada paso y al final **"Hibrido listo"**.
+
+Ambas sesiones quedan guardadas y **se auto-refrescan solas**: no hace falta repetir esto ni mantener ventanas abiertas. Resultado: **24-bit en HiRes + 16-bit LOSSLESS en el resto, nunca lossy (AAC).**
+
+Para reconfigurar solo el segundo token: `tiddl auth login-fallback`. Para salir de ambos: `tiddl auth logout`.
 
 ---
 

@@ -29,7 +29,7 @@ pip install git+https://github.com/np3ir/tiddl-elvigilante
 ```
 ### For force update 
 ```bash
-pip install --upgrade --force-reinstall "git+https://github.com/np3ir/tiddl-elvigilante.git
+pip install --upgrade --force-reinstall "git+https://github.com/np3ir/tiddl-elvigilante.git"
 ```
 
 ### First Use
@@ -43,6 +43,15 @@ tiddl download url https://tidal.com/album/497662013
 # Download a track
 tiddl download url https://tidal.com/track/123456789
 ```
+
+> **⚠️ Hybrid login — you'll now see 2 authorizations.**
+> `tiddl auth login` sets up **two** device-flow tokens to reach maximum quality without keeping any window open:
+> 1. **Step 1/2 — HiRes:** client entitled to `HI_RES_LOSSLESS` (24-bit).
+> 2. **Step 2/2 — Fallback:** TV client that serves `LOSSLESS` (16-bit) on tracks where the primary would drop to 320 kbps.
+>
+> The browser opens **once for each** (approve both codes, first time only). Both tokens then **auto-refresh** — no re-login, no windows to keep open. Result: **24-bit on HiRes tracks + 16-bit LOSSLESS on the rest, never lossy.**
+>
+> Reconfigure only the second token with `tiddl auth login-fallback`; sign out of both with `tiddl auth logout`.
 
 ---
 
