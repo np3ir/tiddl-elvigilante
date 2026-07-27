@@ -132,7 +132,7 @@ def _apply_flac_tags(mutagen: "MutagenFLAC", metadata: Metadata) -> None:
 
 
 def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
-    """Write FLAC metadata tags using Mutagen.
+    r"""Write FLAC metadata tags using Mutagen.
 
     El intento directo puede fallar con [Errno 22] al ABRIR o guardar cuando la
     ruta lleva el prefijo \\?\, un caracter fullwidth (ej. ？ de un '?' del
