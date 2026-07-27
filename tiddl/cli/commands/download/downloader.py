@@ -866,7 +866,7 @@ class Downloader:
                 # Filter out qualities higher than what the track supports
                 attempt_qualities = [q for q in attempt_qualities if quality_score.get(q, 0) <= max_score]
 
-                for q in attempt_qualities:
+                for _qi, q in enumerate(attempt_qualities):
                     try:
                         # Use asyncio.to_thread to prevent blocking the event loop during retries (sleep)
                         stream = await asyncio.to_thread(self.api.get_track_stream, track_id=item.id, quality=q)
@@ -891,6 +891,17 @@ class Downloader:
                             return None, False
 
                         continue
+
+                    # Si TIDAL degrado la entrega POR DEBAJO del siguiente nivel que
+                    # ibamos a intentar, no aceptes el downgrade lossy: reintenta
+                    # explicitamente en ese nivel. Ej.: HI_RES_LOSSLESS puede volver
+                    # como HIGH (320 kbps) en un track solo-lossless; pedir LOSSLESS
+                    # entonces entrega el FLAC 16-bit en vez de AAC.
+                    if stream.audioQuality != q and _qi + 1 < len(attempt_qualities):
+                        _next_q = attempt_qualities[_qi + 1]
+                        if quality_score.get(stream.audioQuality, 0) < quality_score.get(_next_q, 0):
+                            log.debug(f"{item.id}: {q}->{stream.audioQuality} degradado, reintento en {_next_q}")
+                            continue
                     urls, _ = parse_track_stream(stream)
                     # Use stream.audioQuality (actual delivery) not q (requested quality).
                     # TIDAL can downgrade silently; using q would save M4A content as .flac.
