@@ -24,11 +24,9 @@ from .exceptions import ApiError
 
 T = TypeVar("T", bound=BaseModel)
 
-# EXPERIMENTO: usar api.tidalhifi.com (como streamrip) a ver si el token device del
-# cliente fX2Jxdmnt sirve LOSSLESS en tracks no-HiRes (en api.tidal.com daba HIGH 320).
-API_URL = "https://api.tidalhifi.com/v1"
-API_V1_URL = "https://api.tidalhifi.com/v1"
-API_V2_URL = "https://api.tidal.com/v2"  # For Feed and Activity API (v2 no existe en tidalhifi)
+API_URL = "https://api.tidal.com/v1"
+API_V1_URL = "https://api.tidal.com/v1"
+API_V2_URL = "https://api.tidal.com/v2"  # For Feed and Activity API
 MAX_RETRIES = 5
 RETRY_DELAY = 2
 
