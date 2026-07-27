@@ -260,8 +260,12 @@ class Downloader:
         download_path: Path,
         scan_path: Path,
         video_download_path: Optional[Path] = None,
+        fallback_api: Optional[TidalAPI] = None,
     ) -> None:
         self.api = tidal_api
+        # Modo hibrido: cliente TV (lossless) para cuando el primario (HiRes)
+        # degrada un track no-HiRes a 320. None = sin fallback.
+        self.fallback_api = fallback_api
         self.rich_output = rich_output
         self.semaphore = asyncio.Semaphore(threads_count)
         self.track_quality = track_qualities[track_quality]
@@ -891,6 +895,25 @@ class Downloader:
                             return None, False
 
                         continue
+
+                    # Hibrido de 2 tokens: si el primario (HiRes) degrado por debajo
+                    # de LOSSLESS (ej. HI_RES_LOSSLESS -> HIGH 320 en un track solo
+                    # lossless), pide LOSSLESS al cliente fallback (TV), que SI entrega
+                    # el FLAC 16-bit. Headless, sin ventanas. Sustituye el stream.
+                    if (self.fallback_api is not None
+                            and quality_score.get(stream.audioQuality, 0) < quality_score.get("LOSSLESS", 2)):
+                        try:
+                            _fb = await asyncio.to_thread(
+                                self.fallback_api.get_track_stream, track_id=item.id, quality="LOSSLESS"
+                            )
+                            if quality_score.get(_fb.audioQuality, 0) > quality_score.get(stream.audioQuality, 0):
+                                self.rich_output.console.print(
+                                    f"[cyan]↩ Fallback LOSSLESS para '{display_title}': "
+                                    f"{stream.audioQuality} → {_fb.audioQuality}[/]"
+                                )
+                                stream, q = _fb, _fb.audioQuality
+                        except Exception as _fe:
+                            log.debug(f"fallback lossless fallo {item.id}: {_fe}")
 
                     # Si TIDAL degrado la entrega POR DEBAJO del siguiente nivel que
                     # ibamos a intentar, no aceptes el downgrade lossy: reintenta

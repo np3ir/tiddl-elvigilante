@@ -377,6 +377,7 @@ def download_callback(
             download_path=DOWNLOAD_PATH,
             scan_path=SCAN_PATH,
             video_download_path=VIDEO_DOWNLOAD_PATH,
+            fallback_api=ctx.obj.fallback_api,
         )
 
         # Fast-skip shortcuts (whole-album fast exit, up-front present detection,

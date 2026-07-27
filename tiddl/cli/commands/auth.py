@@ -8,7 +8,7 @@ from rich.console import Console
 
 from requests.exceptions import HTTPError
 
-from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData
+from tiddl.cli.utils.auth.core import load_auth_data, save_auth_data, AuthData, AUTH_DATA_FILE, AUTH_FALLBACK_FILE
 from tiddl.core.auth import AuthAPI, AuthClientError
 from tiddl.core.auth.client import get_auth_client_for, TV_CREDENTIALS, AuthClient, CLIENT_ID
 from tiddl.cli.commands.web_login import web_login as _web_login, launch_chrome as _launch_chrome
@@ -25,33 +25,22 @@ auth_command.command(name="web-login", help="Captura token desde Chrome (CDP) o 
 auth_command.command(name="launch-chrome", help="Lanza Chrome con remote debugging para web-login.")(_launch_chrome)
 
 
-# TODO add context and load auth data from ctx
-@auth_command.command(help="Login with your Tidal account via device flow (cliente HiRes).")
-def login():
-    loaded_auth_data = load_auth_data()
-
-    if loaded_auth_data.token:
-        console.print("[cyan bold]Already logged in.")
-        raise typer.Exit()
-
-    # Cliente por defecto (fX2JxdmntZWK0ixT): a diferencia del TV, este SÍ tiene
-    # derecho a HI_RES_LOSSLESS (24-bit) por device flow. Confirmado extrayendo el
-    # client_id de la app de ARCLIGHTSTRVL, que baja HiRes con este mismo cliente.
-    auth_api = AuthAPI(client=AuthClient())
+def _device_flow(auth_client: "AuthClient", client_id_to_save: str, target_file: Path, label: str) -> bool:
+    """Ejecuta el device flow de TIDAL con un cliente concreto y guarda el token
+    en `target_file`. Devuelve True si logueo, False si expiro. Headless salvo el
+    navegador que abre una sola vez para aprobar el codigo."""
+    auth_api = AuthAPI(client=auth_client)
     device_auth = auth_api.get_device_auth()
 
     uri = f"https://{device_auth.verificationUriComplete}"
     typer.launch(uri)
-
-    console.print(f"Go to '{uri}' and complete authentication!")
+    console.print(f"[{label}] Ve a '{uri}' y aprueba el acceso.")
 
     auth_end_at = time() + device_auth.expiresIn
-    status_text = "Authenticating..."
-
+    status_text = f"[{label}] Authenticating..."
     with console.status(status_text) as status:
         while True:
             sleep(device_auth.interval)
-
             try:
                 auth = auth_api.get_auth(device_auth.deviceCode)
                 auth_data = AuthData(
@@ -60,22 +49,49 @@ def login():
                     expires_at=auth.expires_in + int(time()),
                     user_id=str(auth.user_id),
                     country_code=auth.user.countryCode,
-                    client_id=CLIENT_ID,
+                    client_id=client_id_to_save,
                 )
-                save_auth_data(auth_data)
-                status.console.print("[bold green]Logged in!")
-                break
-
+                save_auth_data(auth_data, file=target_file)
+                status.console.print(f"[bold green][{label}] Logged in!")
+                return True
             except AuthClientError as e:
                 if e.error == "authorization_pending":
                     time_left = auth_end_at - time()
                     minutes, seconds = time_left // 60, int(time_left % 60)
                     status.update(f"{status_text} time left: {minutes:.0f}:{seconds:02d}")
                     continue
-
                 if e.error == "expired_token":
-                    status.console.print("\n[bold red]Time for authentication has expired.")
-                    break
+                    status.console.print(f"\n[bold red][{label}] Time for authentication has expired.")
+                    return False
+
+
+# TODO add context and load auth data from ctx
+@auth_command.command(help="Login hibrido: cliente HiRes (24-bit) + TV (fallback LOSSLESS). Ambos device flow, headless.")
+def login():
+    primary = load_auth_data()
+    fallback = load_auth_data(file=AUTH_FALLBACK_FILE)
+
+    if primary.token and fallback.token:
+        console.print("[cyan bold]Ya logueado (hibrido: HiRes + fallback LOSSLESS).")
+        raise typer.Exit()
+
+    # 1) Primario: cliente HiRes (fX2JxdmntZWK0ixT) -> 24-bit donde exista.
+    if not primary.token:
+        console.print("[bold]Paso 1/2 — cliente HiRes (24-bit)[/]")
+        _device_flow(AuthClient(), CLIENT_ID, AUTH_DATA_FILE, "HiRes")
+
+    # 2) Fallback: cliente TV -> LOSSLESS 16-bit en los tracks donde el HiRes
+    #    degrada a 320. Ambos tokens se auto-refrescan; no hay que re-loguear.
+    if not load_auth_data(file=AUTH_FALLBACK_FILE).token:
+        console.print("[bold]Paso 2/2 — cliente TV (fallback LOSSLESS)[/]")
+        _device_flow(AuthClient(credentials=TV_CREDENTIALS), TV_CREDENTIALS.client_id, AUTH_FALLBACK_FILE, "Fallback")
+
+    console.print("[bold green]Hibrido listo: HiRes 24-bit + fallback LOSSLESS, headless con auto-refresh.")
+
+
+@auth_command.command(name="login-fallback", help="(Re)configura solo el token fallback TV (LOSSLESS) del modo hibrido.")
+def login_fallback():
+    _device_flow(AuthClient(credentials=TV_CREDENTIALS), TV_CREDENTIALS.client_id, AUTH_FALLBACK_FILE, "Fallback")
 
 
 @auth_command.command(name="mobile-login", help="Login with username and password (mobile OAuth, fallback).")
@@ -180,18 +196,17 @@ def import_orpheus(
 
 @auth_command.command(help="Logout and remove token from app.")
 def logout():
-    loaded_auth_data = load_auth_data()
+    # Limpia primario + fallback del modo hibrido.
+    for _file in (AUTH_DATA_FILE, AUTH_FALLBACK_FILE):
+        ad = load_auth_data(file=_file)
+        if ad.token:
+            try:
+                AuthAPI().logout_token(ad.token)
+            except Exception:
+                pass  # Token already expired or invalid on TIDAL's side — clear locally anyway
+        save_auth_data(AuthData(), file=_file)
 
-    if loaded_auth_data.token:
-        try:
-            auth_api = AuthAPI()
-            auth_api.logout_token(loaded_auth_data.token)
-        except Exception:
-            pass  # Token already expired or invalid on TIDAL's side — clear locally anyway
-
-    save_auth_data(AuthData())
-
-    console.print("[bold green]Logged out!")
+    console.print("[bold green]Logged out (primario + fallback)!")
 
 
 @auth_command.command(help="Refreshes your token in app.")

@@ -7,6 +7,9 @@ from .models import AuthData
 
 
 AUTH_DATA_FILE = APP_PATH / "auth.json"
+# Segundo token para el modo hibrido: cliente TV (lossless) que cubre los tracks
+# donde el cliente HiRes primario degrada a 320. Ver ctx.fallback_api.
+AUTH_FALLBACK_FILE = APP_PATH / "auth_fallback.json"
 
 
 log = getLogger(__name__)
