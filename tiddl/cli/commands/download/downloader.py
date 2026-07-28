@@ -939,9 +939,11 @@ class Downloader:
                                 self.fallback_api.get_track_stream, track_id=item.id, quality="LOSSLESS"
                             )
                             if quality_score.get(_fb.audioQuality, 0) > quality_score.get(stream.audioQuality, 0):
-                                self.rich_output.console.print(
-                                    f"[cyan]↩ Fallback LOSSLESS para '{display_title}': "
-                                    f"{stream.audioQuality} → {_fb.audioQuality}[/]"
+                                # Demoted to debug: this per-track line was noise in
+                                # normal output. Still visible with `--debug`.
+                                log.debug(
+                                    f"Fallback LOSSLESS para '{display_title}': "
+                                    f"{stream.audioQuality} -> {_fb.audioQuality}"
                                 )
                                 stream, q = _fb, _fb.audioQuality
                         except Exception as _fe:
