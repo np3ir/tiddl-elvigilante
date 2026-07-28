@@ -848,6 +848,14 @@ class Downloader:
         should_extract_flac = False
 
         async with self.semaphore:
+            # Re-check cancel AFTER acquiring the semaphore. The check at the top of
+            # download() runs when the coroutine is first scheduled — with a gather()
+            # over many tracks that happens up-front, before the user can click
+            # Cancel, so it never fires for queued items. This second check runs the
+            # instant each track is about to download, so a mid-run cancel drains the
+            # remaining queue fast instead of downloading everything anyway.
+            if is_cancelled():
+                return None, False
             if isinstance(item, Track):
                 # Cap attempts at the quality the USER requested (self.track_quality),
                 # then fall back downward only on real stream failures. Do NOT cap by
