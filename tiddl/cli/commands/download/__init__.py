@@ -296,6 +296,18 @@ def download_callback(
     if sum([EXPAND_ALBUMS, EXPAND_ARTISTS, EXPAND_TRACKS]) > 1:
         raise typer.BadParameter("Use only one of --albums, --artists or --tracks.")
 
+    # Select which client_id backs ALL requests this run, from config
+    # `hires_client` + the requested -q. The HiRes client has a strict TIDAL
+    # rate limit (429 on big lists); the TV client is lenient but tops at
+    # LOSSLESS. Set BEFORE any ctx.obj.api access (the refresh below builds it).
+    _hires_mode = CONFIG.download.hires_client
+    if _hires_mode == "always":
+        ctx.obj.prefer_hires = True
+    elif _hires_mode == "never":
+        ctx.obj.prefer_hires = False
+    else:  # "auto": HiRes only when the user actually asked for max (24-bit)
+        ctx.obj.prefer_hires = (TRACK_QUALITY == "max")
+
     # Lyrics come from [metadata] in config.toml; these flags override per run
     # (the download flow reads CONFIG.metadata at runtime).
     if EMBED_LYRICS is not None:

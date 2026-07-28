@@ -37,6 +37,12 @@ class ContextObject:
         self._fallback_built = False
         self.api_omit_cache = api_omit_cache
         self.debug_path = debug_path
+        # Which client_id backs the PRIMARY api. True = HiRes (fX2Jxdmnt): 24-bit
+        # but a STRICT TIDAL rate limit (429 on big lists). False = TV
+        # (4N3n6Q1x95LL5K7p): LOSSLESS 16-bit but lenient. The download command
+        # sets this from config `hires_client` + the requested -q. Default True
+        # for back-compat (auth/other commands keep using the primary token).
+        self.prefer_hires = True
 
     def _build_api(
         self, auth_file: Path, lock_name: str, cache_name: str, require: bool
@@ -98,16 +104,31 @@ class ContextObject:
     @property
     def api(self) -> TidalAPI:
         if self._api is None:
-            self._api = self._build_api(
-                AUTH_DATA_FILE, "auth_refresh.lock", "api_cache", require=True
-            )
+            if self.prefer_hires:
+                # HiRes client (fX2Jxdmnt) — 24-bit, strict rate limit.
+                self._api = self._build_api(
+                    AUTH_DATA_FILE, "auth_refresh.lock", "api_cache", require=True
+                )
+            else:
+                # TV client (4N3n6Q1x95LL5K7p) — LOSSLESS, lenient rate limit
+                # (no 429 on big lists). Falls back to the HiRes token only if
+                # the TV token was never set up.
+                self._api = self._build_api(
+                    AUTH_FALLBACK_FILE, "auth_refresh_fallback.lock",
+                    "api_cache_fallback", require=False,
+                ) or self._build_api(
+                    AUTH_DATA_FILE, "auth_refresh.lock", "api_cache", require=True
+                )
         assert self._api is not None
         return self._api
 
     @property
     def fallback_api(self) -> TidalAPI | None:
-        """Cliente TV (lossless) para el modo hibrido. None si no se configuro
-        (`tiddl auth login-fallback`)."""
+        """LOSSLESS re-request client, used only in HiRes mode: the HiRes client
+        degrades some lossless-only tracks to 320, and this TV token fixes them.
+        In TV-primary mode the primary already yields LOSSLESS, so no fallback."""
+        if not self.prefer_hires:
+            return None
         if not self._fallback_built:
             self._fallback_built = True
             self._fallback_api = self._build_api(

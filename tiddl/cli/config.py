@@ -55,6 +55,13 @@ class Config(BaseModel):
 
     class DownloadConfig(BaseModel):
         track_quality: TRACK_QUALITY_LITERAL = "high"
+        # Which client_id backs the requests, by quality. The HiRes client
+        # (fX2Jxdmnt) gives 24-bit but has a STRICT TIDAL rate limit (429s on
+        # big lists); the TV client (4N3n6Q1x95LL5K7p) tops out at LOSSLESS
+        # 16-bit but is lenient. "auto" = HiRes only for -q max, TV otherwise
+        # (avoids 429 on LOSSLESS runs). "always" = HiRes always. "never" = TV
+        # always. Needs both tokens (`tiddl auth login`).
+        hires_client: Literal["auto", "always", "never"] = "auto"
         video_quality: VIDEO_QUALITY_LITERAL = "fhd"
         skip_existing: bool = True
         threads_count: int = 1
