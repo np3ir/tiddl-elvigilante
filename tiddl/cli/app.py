@@ -44,10 +44,36 @@ def _installed_commit() -> str:
     return ""
 
 
+def _commit_datetime(commit: str) -> str:
+    """When the commit was pushed, via the GitHub API (local time). Empty if
+    offline / not found. Only called on `--version`, with a short timeout."""
+    if not commit:
+        return ""
+    try:
+        import urllib.request
+        import json
+        from datetime import datetime, timezone
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/np3ir/tiddl-elvigilante/commits/{commit}",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "tiddl"},
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.load(resp)
+        iso = data["commit"]["committer"]["date"]  # e.g. 2026-07-28T08:00:00Z
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ""
+
+
 def version_callback(value: bool):
     if value:
         commit = _installed_commit()
-        print("elvigilante-julio-2026" + (f" ({commit})" if commit else ""))
+        out = "elvigilante-julio-2026"
+        if commit:
+            when = _commit_datetime(commit)
+            out += f" ({commit}" + (f", {when}" if when else "") + ")"
+        print(out)
         raise typer.Exit()
 
 
