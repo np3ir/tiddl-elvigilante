@@ -526,6 +526,8 @@ class Downloader:
         Returns:
             True if download was successful and validated, False if failed after all retries
         """
+        from tiddl.core.cancel import is_cancelled
+
         tmp_path = None
         task.status = DownloadStatus.DOWNLOADING
 
@@ -541,6 +543,7 @@ class Downloader:
 
                 # Download — shared session, per-request headers
                 session = self._get_http_session()
+                cancelled = False
                 async with aiofiles.open(tmp_path, "wb") as f:
                     for url in urls:
                         async with session.get(url, headers=headers) as resp:
@@ -567,11 +570,27 @@ class Downloader:
                                     raise Exception(f"Invalid Content-Type '{content_type}'")
 
                             async for chunk in resp.content.iter_chunked(CHUNK_SIZE):
+                                if is_cancelled():
+                                    cancelled = True
+                                    break
                                 await f.write(chunk)
                                 task.bytes_downloaded += len(chunk)
                                 self.rich_output.download_advance(
                                     task_id, size=len(chunk)
                                 )
+                        if cancelled:
+                            break
+
+                # Cancelled mid-download (in-process GUI use): drop the partial
+                # file and bail WITHOUT retrying so the CURRENT track stops now.
+                if cancelled:
+                    task.status = DownloadStatus.FAILED
+                    if tmp_path and tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except Exception:
+                            pass
+                    return False
 
                 # Move temporary file to destination with retry logic
                 # This fixes WinError 32 on network shares where file close is not instant
