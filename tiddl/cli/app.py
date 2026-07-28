@@ -29,9 +29,25 @@ app = typer.Typer(name="tiddl", no_args_is_help=True, rich_markup_mode="rich")
 register_commands(app)
 
 
+def _installed_commit() -> str:
+    """Short git commit of the installed tiddl-elvigilante (empty if unknown).
+    Read from the pip direct_url.json written for git installs; works both for
+    the CLI and the flet-bundled GUI (the dist-info ships in the bundle)."""
+    try:
+        import importlib.metadata as _md
+        import json
+        raw = _md.distribution("tiddl-elvigilante").read_text("direct_url.json")
+        if raw:
+            return (json.loads(raw).get("vcs_info") or {}).get("commit_id", "")[:8]
+    except Exception:
+        pass
+    return ""
+
+
 def version_callback(value: bool):
     if value:
-        print("elvigilante-julio-2026")
+        commit = _installed_commit()
+        print("elvigilante-julio-2026" + (f" ({commit})" if commit else ""))
         raise typer.Exit()
 
 
