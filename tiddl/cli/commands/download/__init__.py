@@ -14,6 +14,7 @@ from requests import HTTPError
 from typing_extensions import Annotated
 from typing import Union, Optional
 
+from tiddl.core.cancel import is_cancelled
 from tiddl.core.metadata import add_track_metadata, add_video_metadata, Cover
 from tiddl.core.api import ApiError
 from tiddl.core.api.models import Album, Track, Video, AlbumItemsCredits
@@ -442,6 +443,12 @@ def download_callback(
                 source_type: str = "ALBUM",
                 source_id: Optional[str] = None,
             ) -> tuple[Union[Path, None], Union[Track, Video]]:
+                # Cooperative cancel (in-process GUI): every download task funnels
+                # through here. Bailing at the top makes the whole queue of
+                # already-scheduled tasks drain instantly instead of downloading.
+                from tiddl.core.cancel import is_cancelled
+                if is_cancelled():
+                    return Path(""), item
                 log.debug(f"{item.id=}, {file_path=}")
                 rich_output.total_increment()
 
@@ -606,6 +613,12 @@ def download_callback(
                 with the previous track's in-flight download instead of adding
                 dead time after it finishes.
                 """
+                # Cooperative cancel: skip the human-pacing sleep entirely once
+                # cancelled, so the dispatch loop races to the end (draining the
+                # queue of no-op tasks) instead of sleeping TRACK_DELAY per item.
+                from tiddl.core.cancel import is_cancelled
+                if is_cancelled():
+                    return
                 if TRACK_DELAY <= 0:
                     return
                 # 85% del tiempo: pausa corta (comportamiento normal)
@@ -640,6 +653,8 @@ def download_callback(
                 # is already fully downloaded can bail out before paying for any
                 # of that overhead.
                 while True:
+                    if is_cancelled():
+                        break
                     album_items = None
                     for attempt in range(3):
                         try:
@@ -817,6 +832,8 @@ def download_callback(
                 # m3u complete.
                 skipped_with_path: list[tuple] = []
                 for album_item in all_album_items:
+                    if is_cancelled():
+                        break
                     item = album_item.item
                     if item.id in present:
                         existing_path = present[item.id]
@@ -968,6 +985,8 @@ def download_callback(
                 ctx.obj.console.print(f"[dim]Fetching tracks...[/]\n")
 
                 while True:
+                    if is_cancelled():
+                        break
                     try:
                         mix_items = await asyncio.to_thread(
                             ctx.obj.api.get_mix_items, mix_id, offset=offset
@@ -980,6 +999,8 @@ def download_callback(
                         [mi.item for mi in mix_items.items], ctx.obj.api
                     )
                     for mix_item in mix_items.items:
+                        if is_cancelled():
+                            break
                         item_file_path = format_template(
                             template=resolve_template("", CONFIG.templates.mix),
                             item=mix_item.item,
@@ -1115,6 +1136,8 @@ def download_callback(
                     ctx.obj.console.print(f"[dim]Fetching {display_type}...[/]")
 
                     while True:
+                        if is_cancelled():
+                            break
                         artist_albums = None
                         for attempt in range(3):
                             try:
@@ -1151,6 +1174,8 @@ def download_callback(
                     ctx.obj.console.print(f"[dim]Fetching videos...[/]")
 
                     while True:
+                        if is_cancelled():
+                            break
                         try:
                             artist_videos = await asyncio.to_thread(
                                 ctx.obj.api.get_artist_videos,
@@ -1158,6 +1183,8 @@ def download_callback(
                             )
 
                             for video in artist_videos.items:
+                                if is_cancelled():
+                                    break
                                 artist_stats['total_videos'] += 1
                                 video_file_path = format_template(
                                     template=resolve_template(VIDEO_TEMPLATE, CONFIG.templates.video),
@@ -1275,6 +1302,8 @@ def download_callback(
                     )
                 )
                 for album in albums_to_download:
+                    if is_cancelled():
+                        break
                     if album.id not in seen_album_ids:
                         seen_album_ids.add(album.id)
                         futures.append(album)  # store album, not task
@@ -1296,6 +1325,8 @@ def download_callback(
                 try:
                     if ARTIST_CONCURRENCY == 1:
                         for album in futures:
+                            if is_cancelled():
+                                break
                             await download_album_throttled(album)
                     else:
                         tasks = [asyncio.create_task(download_album_throttled(a)) for a in futures]
@@ -1347,6 +1378,8 @@ def download_callback(
                 ctx.obj.console.print(f"[dim]Fetching tracks...[/]")
 
                 while True:
+                    if is_cancelled():
+                        break
                     playlist_items = await asyncio.to_thread(
                         ctx.obj.api.get_playlist_items,
                         playlist_uuid=resource.id, offset=offset,
@@ -1356,6 +1389,8 @@ def download_callback(
                         [pi.item for pi in playlist_items.items], ctx.obj.api
                     )
                     for playlist_item in playlist_items.items:
+                        if is_cancelled():
+                            break
                         playlist_index += 1
                         template = resolve_template(PLAYLIST_TEMPLATE, CONFIG.templates.playlist)
 
@@ -1473,6 +1508,12 @@ def download_callback(
         ):
 
             async def wrapper(r: TidalResource):
+                # Cooperative cancel: on a multi-URL batch, skip every remaining
+                # resource the moment the user cancels instead of processing the
+                # whole pasted list.
+                from tiddl.core.cancel import is_cancelled
+                if is_cancelled():
+                    return
                 try:
                     await handle_resource(r)
                 except HTTPError as e:

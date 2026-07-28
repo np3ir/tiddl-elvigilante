@@ -532,6 +532,10 @@ class Downloader:
         task.status = DownloadStatus.DOWNLOADING
 
         while task.can_retry:
+            # Cooperative cancel (in-process GUI): stop retrying at once so a
+            # cancelled track doesn't burn its whole retry budget with sleeps.
+            if is_cancelled():
+                return False
             task.increment_attempt()
             attempt = task.attempts
 
@@ -903,6 +907,10 @@ class Downloader:
                 attempt_qualities = [q for q in attempt_qualities if quality_score.get(q, 0) <= max_score]
 
                 for _qi, q in enumerate(attempt_qualities):
+                    # Cooperative cancel: don't try the next quality tier if the
+                    # user cancelled while the previous tier was being fetched.
+                    if is_cancelled():
+                        return None, False
                     try:
                         # Use asyncio.to_thread to prevent blocking the event loop during retries (sleep)
                         stream = await asyncio.to_thread(self.api.get_track_stream, track_id=item.id, quality=q)
