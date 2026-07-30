@@ -1606,7 +1606,16 @@ def download_callback(
                 expand_total = len(ctx.obj.resources)
 
                 async def wrapper_limited(r: TidalResource, idx: int):
+                    # Cooperative cancel: bail BEFORE the heartbeat print so a
+                    # cancelled run doesn't flood the log with a burst of
+                    # "[idx/total] type/id" lines for every remaining resource
+                    # (on a big expanded batch that's thousands of lines, which
+                    # reads as "still working" even though nothing downloads).
+                    if is_cancelled():
+                        return
                     async with expand_sem:
+                        if is_cancelled():
+                            return
                         # Steady per-resource heartbeat: complete albums are
                         # skipped silently, so without this the output can go
                         # quiet for minutes on largely-downloaded expansions.
