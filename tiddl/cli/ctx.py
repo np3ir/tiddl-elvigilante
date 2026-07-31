@@ -3,6 +3,12 @@ import typer
 from time import time
 from pathlib import Path
 
+# Top-level (not lazy inside _build_api): a lazy `from filelock import FileLock`
+# is invisible to static import analysis, so bundlers that prune unreferenced
+# packages (serious_python on macOS, PyInstaller) drop filelock and the app
+# dies at download time with "No module named 'filelock'". Import it up here so
+# every packager sees the dependency.
+from filelock import FileLock
 from rich.console import Console
 
 from tiddl.core.api import TidalClientImproved, TidalAPI
@@ -61,7 +67,6 @@ class ContextObject:
 
         auth_api = AuthAPI(client=get_auth_client_for(auth_data.client_id))
 
-        from filelock import FileLock
         refresh_lock = FileLock(APP_PATH / lock_name)
 
         def on_token_expiry(force_refresh: bool = False, min_validity: int = 60) -> tuple[str, int, str | None] | None:
