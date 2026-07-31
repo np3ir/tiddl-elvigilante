@@ -1,6 +1,11 @@
 from __future__ import annotations
 import subprocess
+import sys
 from pathlib import Path
+
+# On Windows a GUI app has no console, so every ffmpeg subprocess would flash
+# its own console window. CREATE_NO_WINDOW suppresses it. No-op elsewhere.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 def _ffmpeg_path(p: Path) -> str:
@@ -21,8 +26,14 @@ def _ffmpeg_path(p: Path) -> str:
 
 
 def run(cmd: list[str]):
-    """Run process without printing to terminal"""
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """Run process without printing to terminal (and, on Windows, without
+    flashing a console window on each call)."""
+    subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=_NO_WINDOW,
+    )
 
 
 def is_ffmpeg_installed() -> bool:
