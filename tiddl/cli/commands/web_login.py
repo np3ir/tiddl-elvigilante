@@ -272,6 +272,15 @@ async def auto_refresh_if_needed(threshold_minutes: int = 30) -> bool:
     if not auth.token:
         return False
 
+    # Device-flow tokens carry a refresh_token and are renewed automatically by
+    # the API client. The CDP/Playwright web-refresh below only applies to the
+    # short-lived web-login token (which has no refresh_token). Without this
+    # guard, device-token users saw a misleading "Token expira en -N min —
+    # refrescando..." on every download (and a failed web-refresh) while the
+    # real refresh happened silently elsewhere.
+    if getattr(auth, "refresh_token", None):
+        return False
+
     minutes_left = (auth.expires_at - time.time()) / 60
     if minutes_left > threshold_minutes:
         return False
