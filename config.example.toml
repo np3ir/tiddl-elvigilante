@@ -1,63 +1,63 @@
 # =============================================================================
-# tiddl (ElVigilante Edition) — configuracion de ejemplo COMPLETA
+# tiddl (ElVigilante Edition) — COMPLETE example configuration
 # -----------------------------------------------------------------------------
-# Copia este archivo a:
-#   Windows : %USERPROFILE%\.tiddl\config.toml
+# Copy this file to:
+#   Windows  : %USERPROFILE%\.tiddl\config.toml
 #   Linux/Mac: ~/.tiddl/config.toml
-#   Portable: carpeta 'config' junto al ejecutable
-#   (o define la variable de entorno TIDDL_PATH apuntando a la carpeta que lo contiene)
+#   Portable : a 'config' folder next to the executable
+#   (or set the TIDDL_PATH environment variable to the folder that holds it)
 #
-# Todos los valores mostrados son los DEFAULT del programa. Puedes borrar
-# cualquier linea: si falta, tiddl usa el default indicado en el comentario.
+# Every value shown is the program DEFAULT. You can delete any line: when a key
+# is missing, tiddl falls back to the default noted in the comment.
 # =============================================================================
 
-# Cachea respuestas de la API (listas de albumes/tracks) para no repetir
-# llamadas en la misma sesion. Acelera y reduce riesgo de rate-limit (429).
+# Cache API responses (album/track listings) to avoid repeating calls in the
+# same session. Faster and lowers the risk of rate-limiting (429).
 enable_cache = true            # default: true
 
-# Logs verbosos (nivel DEBUG) para diagnosticar problemas. Ruidoso.
+# Verbose logs (DEBUG level) for troubleshooting. Noisy.
 debug = false                  # default: false
 
 
 # =============================================================================
-# [metadata] — que tags/etiquetas se escriben DENTRO del archivo de audio
+# [metadata] — which tags are written INSIDE the audio file
 # =============================================================================
 [metadata]
-# Escribir tags en general (titulo, artista, album, numero, ISRC, creditos...).
-# Si lo pones en false, el audio se baja "pelado", sin etiquetas.
+# Write tags at all (title, artist, album, number, ISRC, credits, ...).
+# If set to false, audio is downloaded "bare", with no tags.
 enable = true                  # default: true
 
-# Incrustar la letra SINCRONIZADA dentro del archivo (tag LYRICS).
+# Embed SYNCED lyrics inside the file (LYRICS tag).
 embed_lyrics = false           # default: false
 
-# Guardar la letra como archivo .lrc suelto junto a la cancion.
+# Save lyrics as a separate .lrc file next to the track.
 save_lyrics = false            # default: false
 
-# Incrustar la CARATULA (portada) DENTRO del .flac/.m4a. Esta es la imagen
-# que ves en el reproductor / VirtualDJ / RadioBoss. (Distinto de [cover] save,
-# que guarda un .jpg aparte). Recomendado: true.
+# Embed the COVER art INSIDE the .flac/.m4a. This is the image shown by your
+# player / VirtualDJ / RadioBoss. (Different from [cover] save, which writes a
+# standalone .jpg.) Recommended: true.
 cover = false                  # default: false
 
-# Incrustar la resena/review del album (texto) en el tag COMMENT.
+# Embed the album review (text) into the COMMENT tag.
 album_review = false           # default: false
 
 
 # =============================================================================
-# [cover] — guardar la portada como ARCHIVO .jpg SUELTO (aparte del audio)
-# Nota: para incrustar la portada DENTRO del audio usa [metadata] cover = true.
+# [cover] — save the cover as a STANDALONE .jpg FILE (separate from the audio)
+# Note: to embed the cover INSIDE the audio use [metadata] cover = true.
 # =============================================================================
 [cover]
-# Activar el guardado del .jpg suelto.
+# Enable saving the standalone .jpg.
 save = false                   # default: false
 
-# Tamano en pixeles del lado (cuadrada). Maximo permitido por TIDAL: 1280.
+# Square side length in pixels. Maximum allowed by TIDAL: 1280.
 size = 1280                    # default: 1280  (max: 1280)
 
-# Para que tipos de descarga se guarda el .jpg. Lista; vacia = ninguno.
-allowed = []                   # default: []  — opciones: ["track", "album", "playlist"]
+# Which download types get the .jpg. A list; empty = none.
+allowed = []                   # default: []  — options: ["track", "album", "playlist"]
 
-# Plantillas de ruta/nombre del .jpg (vacio = junto al audio, nombre por defecto).
-# Usa los mismos tokens que [templates] (ver abajo).
+# Path/name templates for the .jpg (empty = next to the audio, default name).
+# Uses the same tokens as [templates] (see below).
 [cover.templates]
 track = ""                     # default: ""
 album = ""                     # default: ""
@@ -65,88 +65,89 @@ playlist = ""                  # default: ""
 
 
 # =============================================================================
-# [download] — calidad, rutas, ritmo y filtros de descarga
+# [download] — quality, paths, pacing and filters
 # =============================================================================
 [download]
-# Calidad de audio:
+# Audio quality:
 #   "low"      = AAC 96k        "high"     = AAC 320k
 #   "lossless" = FLAC 16-bit    "hires"    = FLAC 24-bit (HiRes / MQA)
 track_quality = "high"         # default: "high"
 
-# Que client_id respalda cada peticion, segun la calidad. El client HiRes
-# (fX2Jxdmnt) entrega 24-bit pero TIDAL le aplica un rate-limit ESTRICTO (429
-# en listas grandes); el client TV llega solo a LOSSLESS 16-bit pero es
-# tolerante. Requiere ambos tokens (`tiddl auth login`).
-#   "auto"   = HiRes solo cuando pides -q max; TV para el resto (evita 429)  <- recomendado
-#   "always" = HiRes siempre (max calidad, mas riesgo de 429)
-#   "never"  = TV siempre (nunca 24-bit, maxima tolerancia)
+# Which client_id backs each request, depending on quality. The HiRes client
+# (fX2Jxdmnt) delivers 24-bit but TIDAL applies a STRICT rate limit to it (429s
+# on big lists); the TV client tops out at LOSSLESS 16-bit but is lenient.
+# Needs both tokens (`tiddl auth login`).
+#   "auto"   = HiRes only when you ask for -q max; TV otherwise (avoids 429)  <- recommended
+#   "always" = HiRes always (max quality, higher 429 risk)
+#   "never"  = TV always (never 24-bit, most lenient)
 hires_client = "auto"          # default: "auto"
 
-# Calidad de video: "audio" (solo pista de audio), "360","480","720","1080","fhd"
+# Video quality: "audio" (audio track only), "360", "480", "720", "1080", "fhd".
 video_quality = "fhd"          # default: "fhd"
 
-# Saltar archivos que ya existen en disco (no re-descargar).
+# Skip files already present on disk (don't re-download).
 skip_existing = true           # default: true
 
-# Descargas concurrentes por album. 1 = serial/silencioso, 2 = balanceado,
-# 4+ = agresivo (mas rapido pero mas detectable / mas 429).
+# Concurrent downloads per album. 1 = serial/quiet, 2 = balanced,
+# 4+ = aggressive (faster but more detectable / more 429).
 threads_count = 1              # default: 1
 
-# Tope de llamadas a la API por minuto. 20 = ritmo "humano", 50 = normal,
-# 80+ = agresivo. Bajar si te dan 429.
+# Cap on API calls per minute. 20 = "human" pace, 50 = normal,
+# 80+ = aggressive. Lower it if you get 429s.
 requests_per_minute = 20       # default: 20
 
-# Carpeta destino de las descargas. Si se omite: ~/Music/tiddl
-# (Windows admite rutas con \\ escapado o /, y unidades de red como "Z:\\")
+# Destination folder for downloads. If omitted: ~/Music/tiddl
+# (Windows accepts paths with escaped \\ or /, and network drives like "Z:\\")
 # download_path = "~/Music/tiddl"
 
-# Carpeta que se escanea para saber que ya tienes (normalmente = download_path).
-# Si se omite y cambias download_path, scan_path lo hereda automaticamente.
+# Folder scanned to detect what you already have (usually = download_path).
+# If omitted and you change download_path, scan_path inherits it automatically.
 # scan_path = "~/Music/tiddl"
 
-# Carpeta separada para los videos. Si se omite: usa download_path.
+# Separate folder for videos. If omitted: uses download_path.
 # video_download_path = "~/Videos/tiddl"
 
-# Al bajar un ARTISTA, que hacer con los sencillos (singles/EP):
-#   "none" = solo albumes    "only" = solo singles    "include" = albumes + singles
+# When downloading an ARTIST, what to do with singles/EPs:
+#   "none" = albums only    "only" = singles only    "include" = albums + singles
 singles_filter = "none"        # default: "none"
 
-# Que hacer con los videos al bajar albumes/artistas:
-#   "none" = ignorar videos   "only" = solo videos   "allow" = audio + videos
+# What to do with videos when downloading albums/artists:
+#   "none" = ignore videos   "only" = videos only   "allow" = audio + videos
 videos_filter = "none"         # default: "none"
 
-# Ajustar la fecha de modificacion (mtime) del archivo a la fecha de lanzamiento.
+# Set the file modified time (mtime) to the release date.
 update_mtime = false           # default: false
 
-# Reescribir metadata en archivos que YA existen (util tras cambiar tags/plantilla
-# o activar [metadata] cover). Con skip_existing, re-etiqueta sin re-descargar.
+# Rewrite metadata on files that ALREADY exist (useful after changing tags/
+# template or enabling [metadata] cover). With skip_existing it re-tags without
+# re-downloading.
 rewrite_metadata = false       # default: false
 
-# Albumes en paralelo al bajar un ARTISTA. 1 = serial (recomendado, discreto).
+# Albums in parallel when downloading an ARTIST. 1 = serial (recommended, quiet).
 artist_concurrency = 1         # default: 1
 
-# Pausa maxima aleatoria (segundos) ANTES de cada album del artista (simula humano).
+# Max random delay (seconds) BEFORE each album of an artist (human-like).
 artist_delay = 8.0             # default: 8.0
 
-# Pausa maxima aleatoria (segundos) entre pistas. ~15% de probabilidad de
-# multiplicarla x2-x6 (simula una "distraccion").
+# Max random delay (seconds) between tracks. ~15% chance of multiplying it by
+# 2x-6x (simulates a "distraction").
 track_delay = 3.0              # default: 3.0
 
-# Maximo de tracks por sesion de ejecucion. 0 = sin limite.
+# Max tracks per run. 0 = unlimited.
 max_tracks_per_session = 0     # default: 0
 
 
 # =============================================================================
-# [m3u] — generar listas de reproduccion .m3u
+# [m3u] — generate .m3u playlists
 # =============================================================================
 [m3u]
-# Activar la creacion de archivos .m3u.
+# Enable creating .m3u files.
 save = false                   # default: false
 
-# Para que recursos se crea el .m3u. Lista; vacia = ninguno.
-allowed = []                   # default: []  — opciones: ["album", "playlist", "mix"]
+# Which resources get an .m3u. A list; empty = none.
+allowed = []                   # default: []  — options: ["album", "playlist", "mix"]
 
-# Plantillas de ruta/nombre del .m3u (usa los tokens de [templates]).
+# Path/name templates for the .m3u (uses the [templates] tokens).
 [m3u.templates]
 album = ""                     # default: ""
 playlist = ""                  # default: ""
@@ -154,13 +155,13 @@ mix = ""                       # default: ""
 
 
 # =============================================================================
-# [templates] — como se nombran carpetas y archivos
+# [templates] — how folders and files are named
 # -----------------------------------------------------------------------------
-# 'default' se usa para todo lo que no tenga plantilla especifica. Los campos
-# vacios (track/video/album/playlist/mix) HEREDAN de 'default'.
-# Usa "/" como separador de carpetas (en Windows tambien vale, se convierte).
+# 'default' is used for anything without a specific template. Empty fields
+# (track/video/album/playlist/mix) INHERIT from 'default'.
+# Use "/" as the folder separator (works on Windows too; it is converted).
 #
-# TOKENS DISPONIBLES (entre llaves, p.ej. {item.title}):
+# AVAILABLE TOKENS (inside braces, e.g. {item.title}):
 #
 #   item.*    (track/video)
 #     id, title, safe_title, title_version, number, volume, version,
@@ -175,31 +176,32 @@ mix = ""                       # default: ""
 #   playlist.*
 #     uuid, title, index, created, updated
 #
-#   ATAJOS (aliases, sin prefijo):
-#     title, artist, albumartist, artist_initials (letra inicial del artista
-#     para agrupar A/B/C...), release_date, quality, now
+#   SHORTCUTS (aliases, no prefix):
+#     title, artist, albumartist, artist_initials (first letter of the artist,
+#     to group A/B/C...), release_date, quality, now
 #
-#   FORMATO ESPECIAL:
-#     Fechas (datetime) admiten strftime:      {album.date:%Y}        -> 2024
-#     Numero con relleno de ceros:             {item.number:02}       -> 05
-#     explicit (solo aparece si el track lo es):
+#   SPECIAL FORMATTING:
+#     Dates (datetime) accept strftime:        {album.date:%Y}        -> 2024
+#     Number with zero-padding:                {item.number:02}       -> 05
+#     explicit (only appears if the track is explicit):
 #       {item.explicit:shortparens} -> " (explicit)"
 #       {item.explicit:parens}      -> " (Explicit)"
 #       {item.explicit:upperlong}   -> "EXPLICIT"
 #       {item.explicit:upper}       -> "E"
 #       {item.explicit:long}        -> "explicit"
 #       {item.explicit}             -> "E"
-#     master / dolby (UserFormat): imprimen el texto que pongas solo si aplica,
-#       p.ej. {album.master:MQA} -> "MQA" cuando el album es master, si no "".
+#     master / dolby (UserFormat): print the text you write only when it
+#       applies, e.g. {album.master:MQA} -> "MQA" when the album is master, else "".
 # =============================================================================
 [templates]
-default = "{album.artist}/{album.title}/{item.title}"   # default de fabrica
-track = ""                     # hereda de default si vacio
-video = ""                     # hereda de default si vacio
-album = ""                     # hereda de default si vacio
-playlist = ""                  # hereda de default si vacio
-mix = ""                       # hereda de default si vacio
+default = "{album.artist}/{album.title}/{item.title}"   # built-in default
+track = ""                     # inherits from default if empty
+video = ""                     # inherits from default if empty
+album = ""                     # inherits from default if empty
+playlist = ""                  # inherits from default if empty
+mix = ""                       # inherits from default if empty
 
-# Separador cuando hay varios artistas. VirtualDJ/RadioBoss NO leen tags
-# multivaluados, por eso el default une todo en un solo valor con " / ".
-artist_separator = " / "       # default: " / "  — otros: ", ", " & ", "; "
+# Separator when there are multiple artists. VirtualDJ/RadioBoss do NOT read
+# multi-valued tags, which is why the default joins everything into a single
+# value with " / ".
+artist_separator = " / "       # default: " / "  — others: ", ", " & ", "; "
