@@ -139,11 +139,6 @@ artist_separator = " / "
 - **Default**: 0 (no limit)
 - Stop after downloading this many tracks in a single `tiddl download` run. Restart the command to continue.
 
-### `download_start_hour` / `download_end_hour`
-- **Type**: integer (0–23)
-- **Default**: 0 / 0 (no restriction — both at 0 means the window check is disabled)
-- Restrict downloads to only run within this hour range (24h, local time).
-
 ### `artist_concurrency`
 - **Type**: integer
 - **Default**: 1

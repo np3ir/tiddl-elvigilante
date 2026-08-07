@@ -12,7 +12,7 @@ from rich.live import Live
 
 from requests import HTTPError
 from typing_extensions import Annotated
-from typing import Union, Optional
+from typing import Union, Optional, List
 
 from tiddl.core.cancel import is_cancelled
 from tiddl.core.metadata import add_track_metadata, add_video_metadata, Cover
@@ -289,6 +289,102 @@ def download_callback(
             help="Save an .lrc lyrics file next to each track (overrides config).",
         ),
     ] = None,
+    COVER: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--cover/--no-cover",
+            help="Embed cover art in the file tags (overrides config).",
+        ),
+    ] = None,
+    ALBUM_REVIEW: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--album-review/--no-album-review",
+            help="Embed the album review into the comment tag (overrides config).",
+        ),
+    ] = None,
+    SAVE_COVER: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--save-cover/--no-save-cover",
+            help="Save a standalone cover.jpg next to downloads (overrides config).",
+        ),
+    ] = None,
+    COVER_SIZE: Annotated[
+        Optional[int],
+        typer.Option(
+            "--cover-size",
+            help="Cover art size in pixels (max 1280).",
+            min=1,
+        ),
+    ] = None,
+    COVER_FOR: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "--cover-for",
+            help="Resource types to save cover.jpg for: track/album/playlist (repeatable).",
+        ),
+    ] = None,
+    HIRES_CLIENT: Annotated[
+        Optional[str],
+        typer.Option(
+            "--hires-client",
+            help="Which client_id backs requests: auto/always/never (overrides config).",
+        ),
+    ] = None,
+    REQUESTS_PER_MINUTE: Annotated[
+        Optional[int],
+        typer.Option(
+            "--rpm",
+            "--requests-per-minute",
+            help="Max API requests per minute (overrides config).",
+            min=0,
+        ),
+    ] = None,
+    UPDATE_MTIME: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--update-mtime/--no-update-mtime",
+            help="Set file modified-time to the release date (overrides config).",
+        ),
+    ] = None,
+    MAX_TRACKS: Annotated[
+        Optional[int],
+        typer.Option(
+            "--max-tracks",
+            help="Stop after N tracks this run. 0 = unlimited (overrides config).",
+            min=0,
+        ),
+    ] = None,
+    SAVE_M3U: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--m3u/--no-m3u",
+            help="Generate .m3u playlist files (overrides config).",
+        ),
+    ] = None,
+    M3U_FOR: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "--m3u-for",
+            help="Resource types to generate .m3u for: album/playlist/mix (repeatable).",
+        ),
+    ] = None,
+    MIX_TEMPLATE: Annotated[
+        str,
+        typer.Option(
+            "--mix-template",
+            "--mtf",
+            help="Template for mix folders.",
+        ),
+    ] = "",
+    ARTIST_SEPARATOR: Annotated[
+        Optional[str],
+        typer.Option(
+            "--artist-separator",
+            help="Separator joining multiple artists in names/tags (overrides config).",
+        ),
+    ] = None,
 ):
     """
     Download Tidal resources.
@@ -296,6 +392,51 @@ def download_callback(
 
     if sum([EXPAND_ALBUMS, EXPAND_ARTISTS, EXPAND_TRACKS]) > 1:
         raise typer.BadParameter("Use only one of --albums, --artists or --tracks.")
+
+    # --- CLI flags override config per run (GUI parity) --------------------
+    # None/"" means "leave the config value untouched". These are read from
+    # CONFIG at runtime by the download flow (not bound as typer defaults), so
+    # setting them here BEFORE the hires read + refresh below is what makes the
+    # override take effect this run — mirrors the lyrics flags.
+    if COVER is not None:
+        CONFIG.metadata.cover = COVER
+    if ALBUM_REVIEW is not None:
+        CONFIG.metadata.album_review = ALBUM_REVIEW
+    if SAVE_COVER is not None:
+        CONFIG.cover.save = SAVE_COVER
+    if COVER_SIZE is not None:
+        CONFIG.cover.size = COVER_SIZE
+    if COVER_FOR is not None:
+        _bad = [v for v in COVER_FOR if v not in ("track", "album", "playlist")]
+        if _bad:
+            raise typer.BadParameter(
+                f"--cover-for: invalid {_bad}; allowed: track, album, playlist."
+            )
+        CONFIG.cover.allowed = COVER_FOR
+    if HIRES_CLIENT is not None:
+        if HIRES_CLIENT not in ("auto", "always", "never"):
+            raise typer.BadParameter(
+                "--hires-client must be auto, always or never."
+            )
+        CONFIG.download.hires_client = HIRES_CLIENT
+    if REQUESTS_PER_MINUTE is not None:
+        CONFIG.download.requests_per_minute = REQUESTS_PER_MINUTE
+    if UPDATE_MTIME is not None:
+        CONFIG.download.update_mtime = UPDATE_MTIME
+    if MAX_TRACKS is not None:
+        CONFIG.download.max_tracks_per_session = MAX_TRACKS
+    if SAVE_M3U is not None:
+        CONFIG.m3u.save = SAVE_M3U
+    if M3U_FOR is not None:
+        _bad = [v for v in M3U_FOR if v not in ("album", "playlist", "mix")]
+        if _bad:
+            raise typer.BadParameter(
+                f"--m3u-for: invalid {_bad}; allowed: album, playlist, mix."
+            )
+        CONFIG.m3u.allowed = M3U_FOR
+    if ARTIST_SEPARATOR is not None:
+        CONFIG.templates.artist_separator = ARTIST_SEPARATOR
+    # -----------------------------------------------------------------------
 
     # Select which client_id backs ALL requests this run, from config
     # `hires_client` + the requested -q. The HiRes client has a strict TIDAL
@@ -1002,7 +1143,7 @@ def download_callback(
                         if is_cancelled():
                             break
                         item_file_path = format_template(
-                            template=resolve_template("", CONFIG.templates.mix),
+                            template=resolve_template(MIX_TEMPLATE, CONFIG.templates.mix),
                             item=mix_item.item,
                             mix_id=mix_id,
                             quality=get_item_quality(mix_item.item),

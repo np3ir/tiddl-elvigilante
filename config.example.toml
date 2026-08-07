@@ -1,59 +1,205 @@
-# Example configuration file for tiddl
-# Copy this file to %USERPROFILE%\.tiddl\config.toml or alongside the executable in the 'config' folder
+# =============================================================================
+# tiddl (ElVigilante Edition) — configuracion de ejemplo COMPLETA
+# -----------------------------------------------------------------------------
+# Copia este archivo a:
+#   Windows : %USERPROFILE%\.tiddl\config.toml
+#   Linux/Mac: ~/.tiddl/config.toml
+#   Portable: carpeta 'config' junto al ejecutable
+#   (o define la variable de entorno TIDDL_PATH apuntando a la carpeta que lo contiene)
+#
+# Todos los valores mostrados son los DEFAULT del programa. Puedes borrar
+# cualquier linea: si falta, tiddl usa el default indicado en el comentario.
+# =============================================================================
 
-enable_cache = true
-debug = false
+# Cachea respuestas de la API (listas de albumes/tracks) para no repetir
+# llamadas en la misma sesion. Acelera y reduce riesgo de rate-limit (429).
+enable_cache = true            # default: true
 
+# Logs verbosos (nivel DEBUG) para diagnosticar problemas. Ruidoso.
+debug = false                  # default: false
+
+
+# =============================================================================
+# [metadata] — que tags/etiquetas se escriben DENTRO del archivo de audio
+# =============================================================================
 [metadata]
-enable = true
-embed_lyrics = false
-save_lyrics = false
-cover = false
-album_review = false
+# Escribir tags en general (titulo, artista, album, numero, ISRC, creditos...).
+# Si lo pones en false, el audio se baja "pelado", sin etiquetas.
+enable = true                  # default: true
 
+# Incrustar la letra SINCRONIZADA dentro del archivo (tag LYRICS).
+embed_lyrics = false           # default: false
+
+# Guardar la letra como archivo .lrc suelto junto a la cancion.
+save_lyrics = false            # default: false
+
+# Incrustar la CARATULA (portada) DENTRO del .flac/.m4a. Esta es la imagen
+# que ves en el reproductor / VirtualDJ / RadioBoss. (Distinto de [cover] save,
+# que guarda un .jpg aparte). Recomendado: true.
+cover = false                  # default: false
+
+# Incrustar la resena/review del album (texto) en el tag COMMENT.
+album_review = false           # default: false
+
+
+# =============================================================================
+# [cover] — guardar la portada como ARCHIVO .jpg SUELTO (aparte del audio)
+# Nota: para incrustar la portada DENTRO del audio usa [metadata] cover = true.
+# =============================================================================
 [cover]
-save = false
-size = 1280
-allowed = [] # ["track", "album", "playlist"]
+# Activar el guardado del .jpg suelto.
+save = false                   # default: false
 
+# Tamano en pixeles del lado (cuadrada). Maximo permitido por TIDAL: 1280.
+size = 1280                    # default: 1280  (max: 1280)
+
+# Para que tipos de descarga se guarda el .jpg. Lista; vacia = ninguno.
+allowed = []                   # default: []  — opciones: ["track", "album", "playlist"]
+
+# Plantillas de ruta/nombre del .jpg (vacio = junto al audio, nombre por defecto).
+# Usa los mismos tokens que [templates] (ver abajo).
 [cover.templates]
-track = ""
-album = ""
-playlist = ""
+track = ""                     # default: ""
+album = ""                     # default: ""
+playlist = ""                  # default: ""
 
+
+# =============================================================================
+# [download] — calidad, rutas, ritmo y filtros de descarga
+# =============================================================================
 [download]
-track_quality = "high" # "low", "high", "lossless", "hires"
-video_quality = "fhd"  # "audio", "360", "480", "720", "1080", "fhd"
-skip_existing = true
-threads_count = 1            # Descargas concurrentes (1=serial/silencioso, 2=balanceado, 4+=agresivo)
-requests_per_minute = 20     # Llamadas API por minuto (20=humano, 50=normal, 80+=agresivo)
-track_delay = 3.0            # Pausa máxima aleatoria (seg) entre pistas. 15% chance de 2x-6x (distracción)
-artist_concurrency = 1       # Álbumes en paralelo al bajar un artista (1=serial)
-artist_delay = 8.0           # Pausa máxima aleatoria (seg) antes de cada álbum del artista
-max_tracks_per_session = 0   # Máximo de tracks por sesión (0 = sin límite)
-download_start_hour = 8      # Hora inicio permitida (0-23). 0 = sin restricción horaria
-download_end_hour = 23       # Hora fin permitida (0-23)
+# Calidad de audio:
+#   "low"      = AAC 96k        "high"     = AAC 320k
+#   "lossless" = FLAC 16-bit    "hires"    = FLAC 24-bit (HiRes / MQA)
+track_quality = "high"         # default: "high"
+
+# Que client_id respalda cada peticion, segun la calidad. El client HiRes
+# (fX2Jxdmnt) entrega 24-bit pero TIDAL le aplica un rate-limit ESTRICTO (429
+# en listas grandes); el client TV llega solo a LOSSLESS 16-bit pero es
+# tolerante. Requiere ambos tokens (`tiddl auth login`).
+#   "auto"   = HiRes solo cuando pides -q max; TV para el resto (evita 429)  <- recomendado
+#   "always" = HiRes siempre (max calidad, mas riesgo de 429)
+#   "never"  = TV siempre (nunca 24-bit, maxima tolerancia)
+hires_client = "auto"          # default: "auto"
+
+# Calidad de video: "audio" (solo pista de audio), "360","480","720","1080","fhd"
+video_quality = "fhd"          # default: "fhd"
+
+# Saltar archivos que ya existen en disco (no re-descargar).
+skip_existing = true           # default: true
+
+# Descargas concurrentes por album. 1 = serial/silencioso, 2 = balanceado,
+# 4+ = agresivo (mas rapido pero mas detectable / mas 429).
+threads_count = 1              # default: 1
+
+# Tope de llamadas a la API por minuto. 20 = ritmo "humano", 50 = normal,
+# 80+ = agresivo. Bajar si te dan 429.
+requests_per_minute = 20       # default: 20
+
+# Carpeta destino de las descargas. Si se omite: ~/Music/tiddl
+# (Windows admite rutas con \\ escapado o /, y unidades de red como "Z:\\")
 # download_path = "~/Music/tiddl"
+
+# Carpeta que se escanea para saber que ya tienes (normalmente = download_path).
+# Si se omite y cambias download_path, scan_path lo hereda automaticamente.
 # scan_path = "~/Music/tiddl"
-singles_filter = "none" # "none", "only", "include"
-videos_filter = "none"  # "none", "only", "allow"
-update_mtime = false
-rewrite_metadata = false
 
+# Carpeta separada para los videos. Si se omite: usa download_path.
+# video_download_path = "~/Videos/tiddl"
+
+# Al bajar un ARTISTA, que hacer con los sencillos (singles/EP):
+#   "none" = solo albumes    "only" = solo singles    "include" = albumes + singles
+singles_filter = "none"        # default: "none"
+
+# Que hacer con los videos al bajar albumes/artistas:
+#   "none" = ignorar videos   "only" = solo videos   "allow" = audio + videos
+videos_filter = "none"         # default: "none"
+
+# Ajustar la fecha de modificacion (mtime) del archivo a la fecha de lanzamiento.
+update_mtime = false           # default: false
+
+# Reescribir metadata en archivos que YA existen (util tras cambiar tags/plantilla
+# o activar [metadata] cover). Con skip_existing, re-etiqueta sin re-descargar.
+rewrite_metadata = false       # default: false
+
+# Albumes en paralelo al bajar un ARTISTA. 1 = serial (recomendado, discreto).
+artist_concurrency = 1         # default: 1
+
+# Pausa maxima aleatoria (segundos) ANTES de cada album del artista (simula humano).
+artist_delay = 8.0             # default: 8.0
+
+# Pausa maxima aleatoria (segundos) entre pistas. ~15% de probabilidad de
+# multiplicarla x2-x6 (simula una "distraccion").
+track_delay = 3.0              # default: 3.0
+
+# Maximo de tracks por sesion de ejecucion. 0 = sin limite.
+max_tracks_per_session = 0     # default: 0
+
+
+# =============================================================================
+# [m3u] — generar listas de reproduccion .m3u
+# =============================================================================
 [m3u]
-save = false
-allowed = [] # ["album", "playlist", "mix"]
+# Activar la creacion de archivos .m3u.
+save = false                   # default: false
 
+# Para que recursos se crea el .m3u. Lista; vacia = ninguno.
+allowed = []                   # default: []  — opciones: ["album", "playlist", "mix"]
+
+# Plantillas de ruta/nombre del .m3u (usa los tokens de [templates]).
 [m3u.templates]
-album = ""
-playlist = ""
-mix = ""
+album = ""                     # default: ""
+playlist = ""                  # default: ""
+mix = ""                       # default: ""
 
+
+# =============================================================================
+# [templates] — como se nombran carpetas y archivos
+# -----------------------------------------------------------------------------
+# 'default' se usa para todo lo que no tenga plantilla especifica. Los campos
+# vacios (track/video/album/playlist/mix) HEREDAN de 'default'.
+# Usa "/" como separador de carpetas (en Windows tambien vale, se convierte).
+#
+# TOKENS DISPONIBLES (entre llaves, p.ej. {item.title}):
+#
+#   item.*    (track/video)
+#     id, title, safe_title, title_version, number, volume, version,
+#     copyright, bpm, isrc, quality, artist, safe_artist, artists,
+#     safe_artists, features, artists_with_features, explicit, genre,
+#     dolby, releaseDate, streamStartDate
+#
+#   album.*
+#     id, title, safe_title, artist, safe_artist, artists, safe_artists,
+#     date, explicit, master, release
+#
+#   playlist.*
+#     uuid, title, index, created, updated
+#
+#   ATAJOS (aliases, sin prefijo):
+#     title, artist, albumartist, artist_initials (letra inicial del artista
+#     para agrupar A/B/C...), release_date, quality, now
+#
+#   FORMATO ESPECIAL:
+#     Fechas (datetime) admiten strftime:      {album.date:%Y}        -> 2024
+#     Numero con relleno de ceros:             {item.number:02}       -> 05
+#     explicit (solo aparece si el track lo es):
+#       {item.explicit:shortparens} -> " (explicit)"
+#       {item.explicit:parens}      -> " (Explicit)"
+#       {item.explicit:upperlong}   -> "EXPLICIT"
+#       {item.explicit:upper}       -> "E"
+#       {item.explicit:long}        -> "explicit"
+#       {item.explicit}             -> "E"
+#     master / dolby (UserFormat): imprimen el texto que pongas solo si aplica,
+#       p.ej. {album.master:MQA} -> "MQA" cuando el album es master, si no "".
+# =============================================================================
 [templates]
-default = "{album.artist}/{album.title}/{item.title}"
-track = ""
-video = ""
-album = ""
-playlist = ""
-mix = ""
-artist_separator = " / "  # Separator for multiple artists: " / ", ", ", " & ", "; "
+default = "{album.artist}/{album.title}/{item.title}"   # default de fabrica
+track = ""                     # hereda de default si vacio
+video = ""                     # hereda de default si vacio
+album = ""                     # hereda de default si vacio
+playlist = ""                  # hereda de default si vacio
+mix = ""                       # hereda de default si vacio
+
+# Separador cuando hay varios artistas. VirtualDJ/RadioBoss NO leen tags
+# multivaluados, por eso el default une todo en un solo valor con " / ".
+artist_separator = " / "       # default: " / "  — otros: ", ", " & ", "; "

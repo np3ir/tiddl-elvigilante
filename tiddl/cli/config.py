@@ -77,8 +77,6 @@ class Config(BaseModel):
         artist_delay: float = 8.0
         track_delay: float = 3.0
         max_tracks_per_session: int = 0      # 0 = sin límite
-        download_start_hour: int = 0         # hora inicio (0-23), 0 = sin restricción
-        download_end_hour: int = 0           # hora fin (0-23)
 
         @validator("download_path", "scan_path", "video_download_path", pre=True, always=True)
         def str_to_path(cls, v):
