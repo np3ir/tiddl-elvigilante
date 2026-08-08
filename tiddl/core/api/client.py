@@ -152,7 +152,12 @@ class TidalClientImproved:
                 if new_refresh_token:
                     self._refresh_token = new_refresh_token
                 self._refresh_blocked = False
-                log.info(f"Token refreshed successfully. Expires at: {new_expiry}")
+                # Silent background op: debug only, so it doesn't spam the
+                # console mid-download (and the hybrid HiRes+fallback clients
+                # would each log it). Human-readable expiry instead of a raw
+                # epoch. Downloads keep working regardless.
+                _exp = time.strftime("%Y-%m-%d %H:%M", time.localtime(new_expiry))
+                log.debug(f"Token refreshed successfully; expires {_exp}")
                 return True
         except HTTPError as e:
             if e.response is not None and 400 <= e.response.status_code < 500:
