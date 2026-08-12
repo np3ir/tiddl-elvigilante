@@ -1795,45 +1795,8 @@ def download_callback(
         # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
         if sys.platform == "win32":
             warnings.filterwarnings("ignore", category=ResourceWarning)
-
-        def _run_on(loop):
-            # asyncio.run() equivalent for an explicitly-provided loop: run the
-            # coroutine, then cancel any stragglers and shut down async gens so a
-            # Ctrl+C (or a cooperative cancel) still lets download_resources' own
-            # finally blocks close the HTTP session cleanly.
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(download_resources())
-            finally:
-                try:
-                    pending = asyncio.all_tasks(loop)
-                    for t in pending:
-                        t.cancel()
-                    if pending:
-                        loop.run_until_complete(
-                            asyncio.gather(*pending, return_exceptions=True)
-                        )
-                    loop.run_until_complete(loop.shutdown_asyncgens())
-                finally:
-                    asyncio.set_event_loop(None)
-                    loop.close()
-
         try:
-            if sys.platform == "win32":
-                # aiohttp on the default Windows ProactorEventLoop surfaces a
-                # mid-transfer TIDAL CDN connection reset as "[Errno 22] Invalid
-                # argument" instead of a clear network error, failing an otherwise
-                # fine track (the filename/character is NOT the cause). The
-                # SelectorEventLoop doesn't have that overlapped-socket bug. Build
-                # the loop explicitly — instead of set_event_loop_policy — so the
-                # switch stays scoped to this one download run and never leaks to
-                # the Playwright (needs Proactor for its subprocess driver) or Flet
-                # loops living elsewhere in the process (the GUI runs tiddl
-                # in-process). Playwright auto-refresh is isolated back onto a
-                # Proactor loop by web_login._capture_under_proactor.
-                _run_on(asyncio.SelectorEventLoop())
-            else:
-                asyncio.run(download_resources())
+            asyncio.run(download_resources())
         except KeyboardInterrupt:
             ctx.obj.console.print("\n[yellow]Download interrupted by user.[/]")
         except Exception as e:

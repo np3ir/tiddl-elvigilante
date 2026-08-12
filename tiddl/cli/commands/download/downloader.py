@@ -296,8 +296,21 @@ class Downloader:
 
     def _get_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None or self._http_session.closed:
+            connector = None
+            if sys.platform == "win32":
+                # aiohttp defaults to the aiodns/c-ares AsyncResolver whenever
+                # aiodns is installed. On Windows c-ares queries the configured DNS
+                # servers directly over UDP, bypassing the Windows DNS Client (its
+                # cache, per-adapter failover and retry). On flaky links or
+                # multi-WAN setups a dropped UDP packet then yields "Timeout while
+                # contacting DNS servers" — which aiohttp surfaces on the first
+                # attempt as the cryptic "[Errno 22] Invalid argument", failing an
+                # otherwise-fine track. ThreadedResolver uses the OS getaddrinfo()
+                # (the full Windows resolution path), which is far more robust here.
+                connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
             self._http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120)
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120),
+                connector=connector,
             )
         return self._http_session
 
