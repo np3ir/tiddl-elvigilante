@@ -258,6 +258,43 @@ _refresh_lock = asyncio.Lock()
 _last_refresh_attempt: float = 0.0
 
 
+async def _capture_under_proactor(factory):
+    """Run a Playwright/CDP capture on a ProactorEventLoop even when the caller's
+    loop is a SelectorEventLoop.
+
+    The download command runs its asyncio loop as a SelectorEventLoop on Windows
+    to dodge the aiohttp "[Errno 22] Invalid argument" Proactor socket bug (a
+    mid-transfer CDN connection reset surfaces there as EINVAL). But the Playwright
+    driver is spawned as a subprocess, which a Windows SelectorEventLoop cannot do
+    (raises NotImplementedError). When we detect that combination, run the capture
+    in a dedicated thread owning a fresh ProactorEventLoop; otherwise just await it
+    in place. `factory` is a zero-arg callable returning a fresh coroutine, so the
+    coroutine is created inside whichever loop ends up running it."""
+    import sys
+    if sys.platform != "win32":
+        return await factory()
+    loop = asyncio.get_running_loop()
+    if isinstance(loop, asyncio.ProactorEventLoop):
+        return await factory()
+
+    box: dict = {}
+
+    def _worker():
+        proactor = asyncio.ProactorEventLoop()
+        asyncio.set_event_loop(proactor)
+        try:
+            box["result"] = proactor.run_until_complete(factory())
+        finally:
+            try:
+                proactor.run_until_complete(proactor.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                proactor.close()
+
+    await asyncio.to_thread(_worker)
+    return box.get("result")
+
+
 async def auto_refresh_if_needed(threshold_minutes: int = 30) -> bool:
     """
     Called automatically before downloads.
@@ -312,14 +349,16 @@ async def auto_refresh_if_needed(threshold_minutes: int = 30) -> bool:
             if _is_chrome_debugging_available():
                 ensure_watchdog_running()
                 log.debug("Auto-refresh via CDP...")
-                auth_data = await _capture_via_cdp()
+                auth_data = await _capture_under_proactor(_capture_via_cdp)
         except Exception as e:
             log.debug(f"CDP refresh failed: {e}")
 
         if not auth_data and _session_exists():
             log.debug("CDP failed or unavailable, trying Playwright...")
             try:
-                auth_data = await _capture_via_playwright(silent=True)
+                auth_data = await _capture_under_proactor(
+                    lambda: _capture_via_playwright(silent=True)
+                )
             except Exception as e:
                 log.debug(f"Playwright refresh failed: {e}")
 
