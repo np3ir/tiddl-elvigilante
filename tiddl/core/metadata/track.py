@@ -138,14 +138,14 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
     ruta lleva el prefijo \\?\, un caracter fullwidth (ej. ？ de un '?' del
     titulo) o esta sobre SMB. En ese caso se copia a un temp LOCAL de ruta ASCII
     limpia, se escriben los tags ahi y se mueve de vuelta (shutil sí maneja esa
-    ruta, igual que la escritura del audio)."""
-    import os
-    try:
-        mutagen = MutagenFLAC(track_path)
-        _apply_flac_tags(mutagen, metadata)
-        mutagen.save()
-    except Exception as e:
-        log.debug(f"Direct FLAC metadata failed ({e}), retrying via temp file...")
+    ruta, igual que la escritura del audio). El move de vuelta al share puede
+    fallar transitoriamente (WinError 59/64, [Errno 22]) cuando el NAS esta
+    saturado de IO, asi que el fallback se reintenta con backoff antes de
+    rendirse; los fallos que NO son de red (p.ej. contenedor equivocado) no se
+    reintentan, para no cambiar el comportamiento anterior."""
+    import os, time
+
+    def _via_local_temp() -> None:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".flac")
         tmp = Path(tmp_path)
         try:
@@ -155,13 +155,33 @@ def add_flac_metadata(track_path: Path, metadata: Metadata) -> None:
             _apply_flac_tags(tmp_mutagen, metadata)
             tmp_mutagen.save()
             shutil.move(str(tmp), str(track_path))
-            log.debug(f"FLAC metadata saved via temp file for {track_path.name}")
-        except Exception as e2:
-            log.warning(f"Could not write FLAC metadata for {track_path.name}: {e2}")
+        finally:
             try:
                 tmp.unlink(missing_ok=True)
             except Exception:
                 pass
+
+    try:
+        mutagen = MutagenFLAC(track_path)
+        _apply_flac_tags(mutagen, metadata)
+        mutagen.save()
+        return
+    except Exception as e:
+        log.debug(f"Direct FLAC metadata failed ({e}), saving via temp file...")
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            _via_local_temp()
+            log.debug(f"FLAC metadata saved via temp file for {track_path.name}")
+            return
+        except Exception as e2:
+            last_err = e2
+            if attempt < 2 and isinstance(e2, OSError):
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            break
+    log.warning(f"Could not write FLAC metadata for {track_path.name}: {last_err}")
 
 
 # =====================
