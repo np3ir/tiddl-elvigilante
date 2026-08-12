@@ -4,6 +4,7 @@ import shutil
 import hashlib
 import uuid
 import sqlite3
+import tempfile
 from logging import getLogger
 from pathlib import Path
 from typing import Optional, Literal, Union
@@ -553,10 +554,24 @@ class Downloader:
             attempt = task.attempts
 
             try:
-                # Create temporary file with unique name to avoid Windows file locking collisions
-                # especially on network shares where handles linger
+                # Stage the download on LOCAL disk, then move it to the final
+                # destination once complete. Writing directly to a network share
+                # (SMB/NAS) across a slow download means hundreds of interleaved
+                # ~1 MB writes; when the NAS is IO-saturated (e.g. a concurrent
+                # rsync/rescan) those intermittently fail with "[Errno 22] Invalid
+                # argument" mid-stream. Staging locally turns it into ONE sequential
+                # copy to the share at the end — covered by the move-retry loop
+                # below — which a busy NAS tolerates. Fall back to a same-directory
+                # temp if the local temp dir can't be used.
                 unique_suffix = f".part.{uuid.uuid4().hex[:8]}"
-                tmp_path = task.output_path.with_suffix(task.output_path.suffix + unique_suffix)
+                try:
+                    tmp_path = Path(tempfile.gettempdir()) / (
+                        f"tiddl-{uuid.uuid4().hex}{task.output_path.suffix}{unique_suffix}"
+                    )
+                except Exception:
+                    tmp_path = task.output_path.with_suffix(
+                        task.output_path.suffix + unique_suffix
+                    )
 
                 # Download — shared session, per-request headers
                 session = self._get_http_session()
