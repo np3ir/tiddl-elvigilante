@@ -1,9 +1,8 @@
 """Tests for Config loading and validator behaviour."""
-import pytest
+import logging
 from pathlib import Path
-from pydantic import ValidationError
 
-from tiddl.cli.config import Config, DEFAULT_DOWNLOAD_PATH
+from tiddl.cli.config import Config, DEFAULT_DOWNLOAD_PATH, DEFAULT_TEMPLATE
 
 
 class TestTemplatesConfig:
@@ -25,10 +24,15 @@ class TestTemplatesConfig:
         assert cfg.templates.track == "tracks/{item.title}"
         assert cfg.templates.video == "custom/{item.title}"
 
-    def test_empty_default_raises_validation_error(self):
-        with pytest.raises(ValidationError) as exc_info:
-            Config.parse_obj({"templates": {"default": ""}})
-        assert "Default template cannot be empty." in str(exc_info.value)
+    def test_empty_default_falls_back_to_builtin(self, caplog):
+        """Contract: an empty default template must NOT crash the CLI. It falls
+        back to the built-in default and logs a warning (end-user-friendly)."""
+        with caplog.at_level(logging.WARNING):
+            cfg = Config.parse_obj({"templates": {"default": ""}})
+        assert cfg.templates.default == DEFAULT_TEMPLATE
+        # specific templates inherit the resolved default, never the empty string
+        assert cfg.templates.track == DEFAULT_TEMPLATE
+        assert any("default" in r.getMessage().lower() for r in caplog.records)
 
     def test_default_template_unchanged_when_not_set(self):
         cfg = Config()

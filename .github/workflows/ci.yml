@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project + dev tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Lint/type checks are informational for now (continue-on-error) and should
+      # be flipped to blocking once the typing/style cleanup lands.
+      - name: Ruff
+        continue-on-error: true
+        run: ruff check .
+
+      - name: Mypy
+        continue-on-error: true
+        run: mypy tiddl
+
+      - name: Pytest (with coverage)
+        run: pytest --cov=tiddl --cov-report=term-missing --cov-report=xml
+
+  build:
+    name: build wheel + clean install smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build wheel + sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install the wheel into a clean venv and smoke-test
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/python -m pip install --upgrade pip
+          /tmp/clean/bin/python -m pip install dist/*.whl
+          # Package imports, config loads, CLI is wired up:
+          /tmp/clean/bin/tiddl --help
+          /tmp/clean/bin/python -c "import tiddl; from tiddl.cli.config import CONFIG; print('config OK')"
+
+      - name: Generate reproducible lockfile (uv)
+        run: |
+          python -m pip install uv
+          uv pip compile pyproject.toml --universal -o requirements.lock
+      - name: Upload artifacts (wheel, sdist, lockfile)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*
+            requirements.lock

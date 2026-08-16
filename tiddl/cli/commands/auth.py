@@ -3,7 +3,6 @@ import typer
 from datetime import datetime
 from pathlib import Path
 from time import time, sleep
-from typing import Optional
 from rich.console import Console
 
 from requests.exceptions import HTTPError
@@ -130,31 +129,78 @@ def mobile_login(
     console.print(f"[bold green]Logged in via Mobile OAuth! User: {auth_data.user_id} ({auth_data.country_code})")
 
 
-@auth_command.command(name="import-orpheus", help="Import TIDAL session from OrpheusDL loginstorage.bin.")
+@auth_command.command(
+    name="import-orpheus",
+    help="Import a TIDAL session from an OrpheusDL loginstorage.bin (requires an explicit --path).",
+)
 def import_orpheus(
-    path: Annotated[Optional[Path], typer.Option("--path", "-p", help="OrpheusDL directory (default: C:/OrpheusDL).")] = None,
+    path: Annotated[
+        Path,
+        typer.Option(
+            "--path", "-p",
+            help="Path to loginstorage.bin, or the OrpheusDL directory containing config/loginstorage.bin.",
+        ),
+    ],
+    trust_pickle: Annotated[
+        bool,
+        typer.Option(
+            "--trust-pickle",
+            help="Fall back to the full (unsafe) pickle loader if the restricted one rejects the file. "
+                 "Only for a file you created yourself.",
+        ),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip the security confirmation prompt."),
+    ] = False,
 ):
     import pickle
+    from tiddl.core.utils.safe_pickle import safe_load
 
-    search_dirs = [path, Path("C:/OrpheusDL"), Path.home() / "OrpheusDL"]
-    bin_path: Optional[Path] = None
-    for d in search_dirs:
-        if d:
-            candidate = d / "config" / "loginstorage.bin"
-            if candidate.exists():
-                bin_path = candidate
-                break
+    # Never auto-discover pickle files: the caller must point at one explicitly.
+    candidate = path
+    if candidate.is_dir():
+        candidate = candidate / "config" / "loginstorage.bin"
+    if not candidate.is_file():
+        console.print(
+            f"[bold red]No loginstorage.bin at '{candidate}'. "
+            "Pass --path to the file or the OrpheusDL directory."
+        )
+        raise typer.Exit(1)
+    bin_path = candidate.resolve()
 
-    if not bin_path:
-        console.print("[bold red]Could not find loginstorage.bin. Use --path to specify the OrpheusDL directory.")
+    # A pickle file can execute arbitrary code when opened with the stdlib loader.
+    # We load it through a restricted unpickler (data types only) and require the
+    # user to confirm the source first.
+    console.print(
+        "[yellow]⚠ Security notice:[/] OrpheusDL session files are Python pickles. "
+        "tiddl reads this one with a restricted loader that blocks code execution.\n"
+        f"  File: [bold]{bin_path}[/]"
+    )
+    if not yes and not typer.confirm("Only continue if you trust the origin of this file. Proceed?"):
         raise typer.Exit(1)
 
     try:
+        storage = safe_load(bin_path)
+    except pickle.UnpicklingError as e:
+        if not trust_pickle:
+            console.print(
+                f"[bold red]Refused to load '{bin_path}': {e}.[/]\n"
+                "The file contains non-data Python objects. If you created it yourself and "
+                "fully trust it, re-run with [bold]--trust-pickle[/] to use the full loader."
+            )
+            raise typer.Exit(1)
+        console.print("[yellow]Restricted loader rejected the file; using full pickle as requested (--trust-pickle).")
         with bin_path.open("rb") as f:
-            storage = pickle.load(f)
-        sessions = storage["modules"]["tidal"]["sessions"]["default"]["custom_data"]["sessions"]
+            storage = pickle.load(f)  # nosec B301 - explicit, user-confirmed opt-in
     except Exception as e:
         console.print(f"[bold red]Failed to read Orpheus session storage: {e}")
+        raise typer.Exit(1)
+
+    try:
+        sessions = storage["modules"]["tidal"]["sessions"]["default"]["custom_data"]["sessions"]
+    except Exception as e:
+        console.print(f"[bold red]Unexpected OrpheusDL storage layout: {e}")
         raise typer.Exit(1)
 
     # Prefer TV session, fallback to MOBILE_DEFAULT
