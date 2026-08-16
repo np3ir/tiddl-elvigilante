@@ -63,23 +63,22 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
-      - name: Install the wheel into a clean venv and smoke-test
+      # requirements.lock is committed to the repo. To regenerate it after
+      # changing dependencies in pyproject.toml, run locally:
+      #   uv pip compile pyproject.toml --universal --python-version 3.10 -o requirements.lock
+      - name: Reproducible clean install from the committed lockfile
         run: |
           python -m venv /tmp/clean
           /tmp/clean/bin/python -m pip install --upgrade pip
-          /tmp/clean/bin/python -m pip install dist/*.whl
-          # Package imports, config loads, CLI is wired up:
+          # Pinned runtime deps come from the committed lock, then the project is
+          # installed without re-resolving — proving the lock produces a working env.
+          /tmp/clean/bin/python -m pip install -r requirements.lock
+          /tmp/clean/bin/python -m pip install --no-deps dist/*.whl
           /tmp/clean/bin/tiddl --help
           /tmp/clean/bin/python -c "import tiddl; from tiddl.cli.config import CONFIG; print('config OK')"
 
-      - name: Generate reproducible lockfile (uv)
-        run: |
-          python -m pip install uv
-          uv pip compile pyproject.toml --universal -o requirements.lock
-      - name: Upload artifacts (wheel, sdist, lockfile)
+      - name: Upload build artifacts (wheel + sdist)
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: |
-            dist/*
-            requirements.lock
+          path: dist/*
