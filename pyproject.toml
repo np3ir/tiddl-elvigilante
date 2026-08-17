@@ -66,7 +66,9 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0",
     "responses>=0.24",
-    "aioresponses>=0.7.6",
+    # NB: aioresponses is intentionally NOT used — it is incompatible with the
+    # pinned aiohttp 3.14 (ClientResponse now requires `stream_writer`). The
+    # downloader tests use a real local aiohttp server instead (tests/test_downloader.py).
     "mypy>=1.0",
     "black>=23.0",
     "ruff>=0.1.0",

@@ -79,6 +79,12 @@ class RichOutput:
     def download_advance(self, task_id: TaskID, size: float):
         self.download_progress.update(task_id=task_id, advance=size, refresh=True)
 
+    def download_reset(self, task_id: TaskID):
+        """Reset a download bar for a retry: reset() (not update(completed=0))
+        also restarts the elapsed-time and transfer-speed calculation, so the
+        retry doesn't inherit the failed attempt's timing."""
+        self.download_progress.reset(task_id, completed=0)
+
     def download_finish(self, task_id: TaskID) -> Task:
         task = self.download_progress._tasks.get(task_id)
 

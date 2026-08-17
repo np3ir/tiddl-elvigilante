@@ -553,6 +553,17 @@ class Downloader:
             task.increment_attempt()
             attempt = task.attempts
 
+            # Per-attempt reset: bytes_downloaded accumulates inside the chunk
+            # loop, so without this a retry keeps the previous attempt's bytes and
+            # reports >100% (e.g. 3000+5000 over a 5000-byte file = 160%). Also
+            # clear the transient error so a task that succeeds after a retry
+            # doesn't keep a stale error_message once it is COMPLETED. The visual
+            # bar only needs resetting on a retry (the first attempt starts clean).
+            task.bytes_downloaded = 0
+            task.error_message = None
+            if attempt > 1:
+                self.rich_output.download_reset(task_id)
+
             try:
                 # Stage the download on LOCAL disk, then move it to the final
                 # destination once complete. Writing directly to a network share
