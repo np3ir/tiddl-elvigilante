@@ -79,6 +79,10 @@ class RichOutput:
     def download_advance(self, task_id: TaskID, size: float):
         self.download_progress.update(task_id=task_id, advance=size, refresh=True)
 
+    def download_reset(self, task_id: TaskID):
+        """Reset a download bar to 0 bytes (used when an attempt is retried)."""
+        self.download_progress.update(task_id=task_id, completed=0, refresh=True)
+
     def download_finish(self, task_id: TaskID) -> Task:
         task = self.download_progress._tasks.get(task_id)
 
