@@ -74,6 +74,20 @@ def _safe_unlink(path: Optional[Path]) -> bool:
         return False
 
 
+def _safe_unlink_warn(path: Path, context: str) -> bool:
+    """`_safe_unlink` plus an honest log warning when an existing file could
+    not be removed. Cleanup here is always best-effort: a failure logged by
+    this helper never turns an otherwise-successful publish into a failure —
+    it only makes an otherwise-silent leftover observable."""
+    ok = _safe_unlink(path)
+    if not ok:
+        log.warning(
+            f"Could not remove leftover destination-side temp file at {path} "
+            f"({context}); left in place (best-effort cleanup)."
+        )
+    return ok
+
+
 def _same_volume(a: Path, b: Path) -> bool:
     """True if paths `a` and `b` live on the same filesystem (st_dev match).
 
@@ -639,8 +653,9 @@ class Downloader:
                                  manually once noticed.
           * ``(False, staging)``  the DESTINATION could not be published; the local
                                   staging is retained (caller must NOT re-download);
-                                  the prior final file and every temp created here
-                                  are left clean.
+                                  the prior final file is untouched, and every temp
+                                  created here has a best-effort delete attempted
+                                  (a failure to remove one is logged, not hidden).
           * ``(False, None)``   the local staging itself is invalid; re-download.
 
         This is a general cross-filesystem safe publish — it protects any
@@ -684,14 +699,14 @@ class Downloader:
             task.output_path.name + f".part.{uuid.uuid4().hex[:8]}"
         )
         for publish_attempt in range(5):
-            _safe_unlink(dest_tmp)
+            _safe_unlink_warn(dest_tmp, "stale temp from a previous attempt")
             try:
                 await asyncio.to_thread(shutil.copy2, str(staging), str(dest_tmp))
                 await asyncio.to_thread(_fsync_path, dest_tmp)  # commit before verifying
             except OSError as e:
                 task.error_message = f"copy to destination failed: {e}"
                 log.warning(f"{task.error_message} (attempt {publish_attempt+1})")
-                _safe_unlink(dest_tmp)
+                _safe_unlink_warn(dest_tmp, "cleanup after a failed copy")
                 if publish_attempt == 4:
                     break
                 await asyncio.sleep(1.0 + publish_attempt)
@@ -727,7 +742,7 @@ class Downloader:
                         task.error_message = f"atomic publish failed: {e}"
                         log.warning(f"{task.error_message} (attempt {replace_attempt+1})")
                         if replace_attempt == 4:
-                            _safe_unlink(dest_tmp)
+                            _safe_unlink_warn(dest_tmp, "replace exhausted its retries")
                             return False, staging  # keep staging; prior final untouched
                         await asyncio.sleep(1.0 + replace_attempt)
 
@@ -735,12 +750,12 @@ class Downloader:
             # Drop it and re-copy from the surviving staging.
             task.error_message = err
             log.warning(f"Destination validation failed (attempt {publish_attempt+1}): {err}")
-            _safe_unlink(dest_tmp)
+            _safe_unlink_warn(dest_tmp, "cleanup after a corrupt destination copy")
             if publish_attempt < 4:
                 await asyncio.sleep(1.0 + publish_attempt)
 
-        # Publish exhausted: clean the dest temp, KEEP the local staging.
-        _safe_unlink(dest_tmp)
+        # Publish exhausted: best-effort clean the dest temp, KEEP the local staging.
+        _safe_unlink_warn(dest_tmp, "cleanup after publish exhausted its retries")
         return False, staging
 
     async def _download_with_retry(

@@ -601,6 +601,44 @@ async def test_publish_success_survives_staging_unlink_failure(
     assert not _dest_leftovers(tmp_path)          # the dest-side .part temp is still cleaned up
 
 
+async def test_dest_tmp_unlink_failure_is_warned_not_fatal(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch, caplog
+):
+    """A best-effort dest-side temp cleanup failure must be observable (a
+    warning) but must never turn an otherwise-successful copy retry into a
+    failure — only the leftover surfaces, nothing silently disappears."""
+    fake, calls = _scripted_copy2(["short", "ok"])  # first copy corrupt, then good
+    monkeypatch.setattr(dlmod.shutil, "copy2", fake)
+    real_unlink = dlmod._safe_unlink
+
+    def flaky_unlink(path):
+        # Fail only the dest-side ".part." cleanup (the corrupt first copy);
+        # everything else (e.g. the local staging drop) behaves normally.
+        if path is not None and os.path.basename(str(path)).startswith("out.bin.part."):
+            return False
+        return real_unlink(path)
+
+    monkeypatch.setattr(dlmod, "_safe_unlink", flaky_unlink)
+
+    server = await _start([("ok", 5000)])
+    dest = tmp_path / "out.bin"
+    caplog.set_level("WARNING")
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, _ = await _download(server, task)
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert calls["n"] == 2                     # corrupt copy, then a good re-copy
+    assert dest.stat().st_size == 5000
+    assert task.status == DownloadStatus.COMPLETED
+    assert any(
+        "Could not remove leftover destination-side temp" in r.message
+        for r in caplog.records
+    )
+
+
 async def test_same_volume_uses_atomic_rename_not_copy(
     tmp_path, fast_sleep, stage_dir, monkeypatch
 ):
