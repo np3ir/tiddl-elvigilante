@@ -509,7 +509,11 @@ def _prepare_long_path(path: str) -> str:
     # UNC Paths: \\Server\Share -> \\?\UNC\Server\Share
     if path.startswith("\\\\"):
         # Removing the leading \\ to append to UNC\
-        return f"\\\\?\\UNC\\{path.lstrip('\\')}"
+        # NB: the backslash-bearing expression is bound to a name first — an
+        # f-string expression part cannot contain a backslash before Python 3.12
+        # (PEP 701), so inlining it breaks the advertised 3.10/3.11 support.
+        stripped = path.lstrip("\\")
+        return f"\\\\?\\UNC\\{stripped}"
     
     # Absolute paths: C:\Foo -> \\?\C:\Foo
     if _DRIVE_RE.match(path[:2]):
