@@ -975,3 +975,145 @@ def test_recovery_converges_via_reconcile_and_cli_if_interrupted_after_publish(
     assert "already converged" in cli_result.output
     assert dest.read_bytes() == content  # untouched by the convergence
     assert reg.read_entries().entries == []
+
+
+# ---------------------------------------------------------------------------
+# Destination-volume identity: REGISTRY_VERSION 1 -> 2, destination_root/
+# destination_anchor_id (PROPOSAL_destination_volume_identity_v2_2.md/
+# v2_3.md §4, kept local/untracked — not part of this diff).
+# ---------------------------------------------------------------------------
+
+
+def test_registry_version_1_parses_cleanly_as_all_legacy_entries():
+    payload = {
+        "version": 1,
+        "entries": [
+            {
+                "id": "abc123",
+                "reason": "publish_pending",
+                "staging_path": "/tmp/x.bin",
+                "output_path": "/mnt/nas/x.bin",
+                "observed_size": 100,
+                "observed_hash": "deadbeef",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    reg.registry_path().parent.mkdir(parents=True, exist_ok=True)
+    reg.registry_path().write_bytes(json.dumps(payload).encode("utf-8"))
+
+    result = reg.read_entries()
+    assert result.status == "valid"
+    assert len(result.entries) == 1
+    assert result.entries[0].destination_root is None
+    assert result.entries[0].destination_anchor_id is None
+
+
+def test_first_mutation_upgrades_a_v1_registry_to_v2_in_place():
+    payload = {
+        "version": 1,
+        "entries": [
+            {
+                "id": "abc123",
+                "reason": "publish_pending",
+                "staging_path": "/tmp/x.bin",
+                "output_path": "/mnt/nas/x.bin",
+                "observed_size": 100,
+                "observed_hash": "deadbeef",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
+    }
+    reg.registry_path().parent.mkdir(parents=True, exist_ok=True)
+    reg.registry_path().write_bytes(json.dumps(payload).encode("utf-8"))
+
+    reg.update_entry("abc123", observed_size=200)
+
+    on_disk = json.loads(reg.registry_path().read_bytes())
+    assert on_disk["version"] == 2
+    assert on_disk["entries"][0]["observed_size"] == 200
+
+
+def test_v2_entry_with_only_one_destination_field_set_is_corrupt():
+    entry = _entry(destination_root="/mnt/nas/music")  # anchor id left unset -> None
+    payload = {"version": 2, "entries": [entry.to_json_dict()]}
+    reg.registry_path().parent.mkdir(parents=True, exist_ok=True)
+    reg.registry_path().write_bytes(json.dumps(payload).encode("utf-8"))
+
+    result = reg.read_entries()
+    assert result.status == "corrupt"
+
+
+def test_v2_entry_with_both_destination_fields_set_parses_cleanly():
+    entry = _entry(destination_root="/mnt/nas/music", destination_anchor_id="deadbeef" * 4)
+    reg.add_entry(entry)
+
+    result = reg.read_entries()
+    assert result.status == "valid"
+    assert result.entries[0].destination_root == "/mnt/nas/music"
+    assert result.entries[0].destination_anchor_id == "deadbeef" * 4
+
+
+def test_an_artificially_future_registry_version_is_unsupported_not_guessed_at():
+    payload = {"version": 3, "entries": []}
+    reg.registry_path().parent.mkdir(parents=True, exist_ok=True)
+    reg.registry_path().write_bytes(json.dumps(payload).encode("utf-8"))
+
+    result = reg.read_entries()
+    assert result.status == "unsupported_version"
+
+    # A read-only listing must not have touched the file.
+    assert json.loads(reg.registry_path().read_bytes())["version"] == 3
+
+
+def test_older_build_mutation_against_a_v2_registry_backs_up_then_resets_active_state():
+    # Simulates an "older build" (REGISTRY_VERSION == 1) encountering a
+    # version-2 registry during a MUTATION — not just a read-only listing.
+    # Confirms the corrected downgrade claim in
+    # PROPOSAL_destination_volume_identity_v2_3.md §4: the older build's own
+    # mutation backs up the v2 content (preserved, not lost outright) but
+    # then writes back a registry containing only ITS OWN change — the
+    # pre-existing v2 entries drop out of the ACTIVE file.
+    v2_entry = _entry(id="v2-entry", destination_root="/r", destination_anchor_id="a" * 32)
+    reg.add_entry(v2_entry)
+    assert json.loads(reg.registry_path().read_bytes())["version"] == 2
+
+    with monkeypatch_module_attr(reg, "REGISTRY_VERSION", 1), monkeypatch_module_attr(
+        reg, "_LEGACY_READABLE_VERSIONS", frozenset()
+    ):
+        new_entry = _entry(id="old-build-entry")
+        reg.add_entry(new_entry)
+
+    on_disk = json.loads(reg.registry_path().read_bytes())
+    assert on_disk["version"] == 1
+    assert [e["id"] for e in on_disk["entries"]] == ["old-build-entry"]
+
+    backups = list(reg.registry_path().parent.glob("*.unsupported_version-*.bak"))
+    assert len(backups) == 1
+    backed_up = json.loads(backups[0].read_bytes())
+    assert backed_up["version"] == 2
+    assert [e["id"] for e in backed_up["entries"]] == ["v2-entry"]
+
+
+class monkeypatch_module_attr:
+    """Tiny context-manager wrapper around setattr/delattr so two module
+    attributes can be patched together in a single `with`, restored on
+    exit regardless of the block's outcome. pytest's `monkeypatch` fixture
+    isn't available inside a plain `with` block outside a test function
+    signature, and this test needs the patch scoped tightly around a single
+    mutation rather than the whole test."""
+
+    _MISSING = object()
+
+    def __init__(self, obj, name, value):
+        self.obj, self.name, self.value = obj, name, value
+        self._original = self._MISSING
+
+    def __enter__(self):
+        self._original = getattr(self.obj, self.name)
+        setattr(self.obj, self.name, self.value)
+        return self
+
+    def __exit__(self, *exc):
+        setattr(self.obj, self.name, self._original)
+        return False
