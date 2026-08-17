@@ -125,31 +125,35 @@ def _no_staging_leftovers(stage_dir) -> bool:
     return not list(stage_dir.glob("tiddl-*.part.*"))
 
 
-async def _download(server: TestServer, task: DownloadTask) -> bool:
+async def _download(server: TestServer, task: DownloadTask):
+    """Returns (ok, stub) so a test can inspect the stub (e.g. visual resets)."""
     url = str(server.make_url("/track"))
     dl = _StubDownloader()
     try:
-        return await dl._download_with_retry(task, [url], task_id=0)
+        ok = await dl._download_with_retry(task, [url], task_id=0)
     finally:
         if dl._http_session is not None:
             await dl._http_session.close()
+    return ok, dl
 
 
 async def test_short_body_is_detected_and_retried(tmp_path, fast_sleep, stage_dir):
     server = await _start([("ok", 3000), ("ok", 5000)])  # short then full
     try:
         task = DownloadTask(url="x", output_path=tmp_path / "out.bin", expected_size=5000)
-        ok = await _download(server, task)
+        ok, dl = await _download(server, task)
     finally:
         await server.close()
 
     assert ok is True
     assert task.attempts == 2
     assert task.status == DownloadStatus.COMPLETED
+    assert task.error_message is None            # transient error cleared on success
     assert (tmp_path / "out.bin").stat().st_size == 5000
     # The per-attempt counter must reset: not 3000 + 5000 = 8000 (160%).
     assert task.bytes_downloaded == 5000
     assert task.progress_percentage == 100
+    assert dl.rich_output.resets == 1            # exactly one visual reset, for the single retry
     assert _no_staging_leftovers(stage_dir)
 
 
@@ -157,13 +161,14 @@ async def test_http_error_is_retried_then_succeeds(tmp_path, fast_sleep, stage_d
     server = await _start([("status", 500), ("ok", 5000)])
     try:
         task = DownloadTask(url="x", output_path=tmp_path / "out.bin", expected_size=5000)
-        ok = await _download(server, task)
+        ok, _ = await _download(server, task)
     finally:
         await server.close()
 
     assert ok is True
     assert task.attempts == 2
     assert task.status == DownloadStatus.COMPLETED
+    assert task.error_message is None
     assert _no_staging_leftovers(stage_dir)
 
 
@@ -171,13 +176,14 @@ async def test_http_error_exhausted_fails(tmp_path, fast_sleep, stage_dir):
     server = await _start([("status", 500)])  # always 500
     try:
         task = DownloadTask(url="x", output_path=tmp_path / "out.bin", expected_size=5000)
-        ok = await _download(server, task)
+        ok, _ = await _download(server, task)
     finally:
         await server.close()
 
     assert ok is False
     assert task.attempts == task.max_attempts == 3
     assert task.status == DownloadStatus.FAILED
+    assert task.error_message  # set to the transient error when attempts are exhausted
     assert not (tmp_path / "out.bin").exists()
     assert _no_staging_leftovers(stage_dir)
 
@@ -188,13 +194,14 @@ async def test_real_truncation_is_cleaned_and_retried(tmp_path, fast_sleep, stag
     server = await _start([("truncate", 5000, 3000), ("ok", 5000)])
     try:
         task = DownloadTask(url="x", output_path=tmp_path / "out.bin", expected_size=5000)
-        ok = await _download(server, task)
+        ok, _ = await _download(server, task)
     finally:
         await server.close()
 
     assert ok is True
     assert task.attempts == 2
     assert task.status == DownloadStatus.COMPLETED
+    assert task.error_message is None
     assert (tmp_path / "out.bin").stat().st_size == 5000
     assert _no_staging_leftovers(stage_dir)
 
@@ -215,7 +222,7 @@ async def test_cancellation_midstream_aborts_without_retry(tmp_path, monkeypatch
         task = DownloadTask(
             url="x", output_path=tmp_path / "out.bin", expected_size=2 * CHUNK_SIZE
         )
-        ok = await _download(server, task)
+        ok, _ = await _download(server, task)
     finally:
         await server.close()
 
