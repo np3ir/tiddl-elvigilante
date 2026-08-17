@@ -47,15 +47,30 @@ jobs:
         run: pytest --cov=tiddl --cov-report=term-missing --cov-report=xml
 
   build:
-    name: build wheel + clean install smoke
-    runs-on: ubuntu-latest
+    name: locked install (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Validate the committed lockfile on BOTH platforms. py3.10 exercises the
+        # tomli marker (python_version < '3.11'); py3.13 is the top of the range.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.13"]
+        include:
+          - os: ubuntu-latest
+            venv_bin: .venv/bin
+          - os: windows-latest
+            venv_bin: .venv/Scripts
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Build wheel + sdist
@@ -63,22 +78,39 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
-      # requirements.lock is committed to the repo. To regenerate it after
-      # changing dependencies in pyproject.toml, run locally:
+      # requirements.lock is committed. Regenerate after dependency changes with:
       #   uv pip compile pyproject.toml --universal --python-version 3.10 -o requirements.lock
-      - name: Reproducible clean install from the committed lockfile
+      - name: Reproducible install from the committed lockfile
         run: |
-          python -m venv /tmp/clean
-          /tmp/clean/bin/python -m pip install --upgrade pip
-          # Pinned runtime deps come from the committed lock, then the project is
-          # installed without re-resolving — proving the lock produces a working env.
-          /tmp/clean/bin/python -m pip install -r requirements.lock
-          /tmp/clean/bin/python -m pip install --no-deps dist/*.whl
-          /tmp/clean/bin/tiddl --help
-          /tmp/clean/bin/python -c "import tiddl; from tiddl.cli.config import CONFIG; print('config OK')"
+          python -m venv .venv
+          # Use the venv's interpreter directly (Scripts on Windows, bin on Linux)
+          # so there is no shell-dependent activation logic.
+          "${{ matrix.venv_bin }}/python" -m pip install --upgrade pip
+          # Pinned runtime deps come from the committed lock; the project is then
+          # installed without re-resolving, and pip check confirms the closure.
+          "${{ matrix.venv_bin }}/python" -m pip install -r requirements.lock
+          "${{ matrix.venv_bin }}/python" -m pip install --no-deps dist/*.whl
+          "${{ matrix.venv_bin }}/python" -m pip check
 
-      - name: Upload build artifacts (wheel + sdist)
-        uses: actions/upload-artifact@v4
+      - name: Smoke-test from OUTSIDE the checkout (import the installed package)
+        run: |
+          venv_bin="$PWD/${{ matrix.venv_bin }}"
+          cd "$RUNNER_TEMP"
+          "$venv_bin/tiddl" --help
+          "$venv_bin/python" -c "import tiddl; from tiddl.cli.config import CONFIG; print('config OK')"
+
+  lock-drift:
+    name: lockfile is in sync with pyproject.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          name: dist
-          path: dist/*
+          python-version: "3.12"
+      # Regenerating with the exact committed command is byte-stable (uv keeps the
+      # existing pins), so a diff means pyproject.toml changed without relocking.
+      - name: Fail if requirements.lock is stale
+        run: |
+          python -m pip install uv
+          uv pip compile pyproject.toml --universal --python-version 3.10 -o requirements.lock
+          git diff --exit-code -- requirements.lock
