@@ -191,8 +191,14 @@ def import_orpheus(
             )
             raise typer.Exit(1)
         console.print("[yellow]Restricted loader rejected the file; using full pickle as requested (--trust-pickle).")
-        with bin_path.open("rb") as f:
-            storage = pickle.load(f)  # nosec B301 - explicit, user-confirmed opt-in
+        try:
+            with bin_path.open("rb") as f:
+                storage = pickle.load(f)  # nosec B301 - explicit, user-confirmed opt-in
+        except Exception as e:
+            # The unsafe fallback can still fail (truncated/corrupt file). Fail
+            # with a controlled message + exit code instead of a raw traceback.
+            console.print(f"[bold red]Full pickle load also failed (file truncated or corrupt): {e}")
+            raise typer.Exit(1)
     except Exception as e:
         console.print(f"[bold red]Failed to read Orpheus session storage: {e}")
         raise typer.Exit(1)
