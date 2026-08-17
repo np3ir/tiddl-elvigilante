@@ -58,6 +58,14 @@ def test_global_callable_reference_is_blocked():
         safe_loads(blob)
 
 
+def test_builtin_outside_allowlist_is_blocked():
+    # `exec` lives in `builtins` but is NOT a data type on the allowlist — the
+    # module==builtins branch must still reject names it does not explicitly allow.
+    blob = pickle.dumps(exec)
+    with pytest.raises(pickle.UnpicklingError):
+        safe_loads(blob)
+
+
 def test_safe_load_from_file(tmp_path):
     p = tmp_path / "loginstorage.bin"
     p.write_bytes(pickle.dumps({"ok": True}))
