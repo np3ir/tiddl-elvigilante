@@ -1,12 +1,13 @@
 from __future__ import annotations
+
 import os
-import tempfile
-from pathlib import Path
 from logging import getLogger
+from pathlib import Path
 
 from tiddl.cli.config import APP_PATH
-from .models import AuthData
+from tiddl.core.utils.fsio import atomic_write_bytes
 
+from .models import AuthData
 
 AUTH_DATA_FILE = APP_PATH / "auth.json"
 # Segundo token para el modo hibrido: cliente TV (lossless) que cubre los tracks
@@ -41,27 +42,17 @@ def save_auth_data(auth_data: AuthData, file: Path = AUTH_DATA_FILE):
     log.debug(f"saving to '{file}'")
 
     payload = auth_data.json()
-    file.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temp file in the same directory, then publish with os.replace()
     # so a crash or full disk mid-write can never leave a truncated auth.json
-    # (which used to wipe the user's session and force a re-login).
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(file.parent), prefix=f".{file.name}.", suffix=".tmp"
+    # (which used to wipe the user's session and force a re-login). These
+    # tokens are secrets — restrict to owner-only on POSIX (chmod_posix=0o600
+    # is a no-op on Windows; ACLs already default to the user profile there).
+    # Extracted into `tiddl.core.utils.fsio.atomic_write_bytes` (same behavior,
+    # now shared with the retained-staging registry) — see that function's
+    # docstring for the exact contract.
+    atomic_write_bytes(
+        file,
+        payload.encode("utf-8"),
+        chmod_posix=0o600 if os.name == "posix" else None,
     )
-    try:
-        # These tokens are secrets — restrict to owner-only on POSIX. On Windows
-        # os.fchmod is unavailable and ACLs already default to the user profile.
-        if os.name == "posix":
-            os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_name, file)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise

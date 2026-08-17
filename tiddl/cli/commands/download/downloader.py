@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio
-import shutil
 import hashlib
 import uuid
 import sqlite3
@@ -31,6 +30,9 @@ from tiddl.core.utils.const import (
 )
 from tiddl.core.utils.ffmpeg import convert_to_mp4, extract_flac, fix_mp4_faststart, is_mp4_container
 from tiddl.core.api.playback import report_playback
+from tiddl.core.utils.fsio import _safe_unlink
+from tiddl.core.utils.publish import publish_verified_file
+from tiddl.core.utils import retained_registry
 
 from .output import RichOutput
 
@@ -54,84 +56,17 @@ def _normalize_dir(path: Path) -> str:
     return os.path.normcase(os.path.normpath(s))
 
 
-def _safe_unlink(path: Optional[Path]) -> bool:
-    """Delete a file if it exists, swallowing OS errors (best-effort cleanup).
-
-    Returns True if `path` is gone once this returns (deleted here, or it never
-    existed) and False if an existing file could NOT be removed (e.g. locked by
-    an antivirus/indexer, or a remote filesystem that rejects the unlink).
-    Callers that must not silently claim "no orphan left behind" — i.e. after a
-    successful publish, when the leftover would otherwise go unreported — should
-    check this return value instead of treating cleanup as unconditional."""
-    if path is None:
-        return True
-    try:
-        Path(path).unlink()
-        return True
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-
-
-def _safe_unlink_warn(path: Path, context: str) -> bool:
-    """`_safe_unlink` plus an honest log warning when an existing file could
-    not be removed. Cleanup here is always best-effort: a failure logged by
-    this helper never turns an otherwise-successful publish into a failure —
-    it only makes an otherwise-silent leftover observable."""
-    ok = _safe_unlink(path)
-    if not ok:
-        log.warning(
-            f"Could not remove leftover destination-side temp file at {path} "
-            f"({context}); left in place (best-effort cleanup)."
-        )
-    return ok
-
-
-def _same_volume(a: Path, b: Path) -> bool:
-    """True if paths `a` and `b` live on the same filesystem (st_dev match).
-
-    Used by the safe-publish step to pick the atomic-rename fast path. Kept as a
-    module-level function so tests can force the cross-filesystem path."""
-    try:
-        return os.stat(a).st_dev == os.stat(b).st_dev
-    except OSError:
-        return False
-
-
-def _fsync_path(path: Path) -> None:
-    """Best-effort flush of a file's data to storage before it is verified.
-
-    shutil.copy2 only closes the file; on a network share the bytes may still sit
-    in a write cache, so an immediate verify could read cache rather than what
-    actually landed. Filesystems that don't support fsync just no-op."""
-    try:
-        fd = os.open(str(path), os.O_RDWR)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
-
-
-def _fsync_dir(path: Path) -> None:
-    """Best-effort fsync of a directory (POSIX only) so a rename into it is
-    durable across a power loss. A no-op on Windows / unsupported filesystems."""
-    if os.name != "posix":
-        return
-    try:
-        fd = os.open(str(path), os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+# `_safe_unlink`, `_safe_unlink_warn`, `_same_volume`, `_fsync_path` and
+# `_fsync_dir` used to be defined here (PR #12). They moved to
+# `tiddl.core.utils.fsio`, and the actual same-volume/cross-volume publish
+# mechanics that used them moved to `tiddl.core.utils.publish` (see
+# `_publish_staged` below) — so the retained-staging registry and the offline
+# `tiddl recover` command can reuse the exact same primitives and publish
+# contract without depending on this module / a full `Downloader`. Only
+# `_safe_unlink` is still called directly here (step 1 of `_publish_staged`,
+# below); tests that used to monkeypatch `dlmod.shutil`/`dlmod.os.replace`/
+# `dlmod._same_volume`/`dlmod._fsync_*` for the publish mechanics now target
+# `tiddl.core.utils.publish` instead — see `tests/test_downloader.py`.
 
 # ====================================================================
 # IMPROVEMENT 1: Enums for download states
@@ -675,88 +610,37 @@ class Downloader:
             _safe_unlink(staging)
             return False, None
 
-        # 2. Same filesystem: a single atomic rename (no bytes copied). Retry only
-        #    transient locks; if it never happens the staging still exists.
-        if _same_volume(staging, task.output_path.parent):
-            for move_attempt in range(5):
-                try:
-                    os.replace(staging, task.output_path)
-                    await asyncio.to_thread(_fsync_dir, task.output_path.parent)
-                    task.error_message = None
-                    return True, None
-                except OSError as e:
-                    task.error_message = f"publish rename failed: {e}"
-                    if move_attempt == 4:
-                        log.warning(f"Failed to publish (rename) after 5 attempts: {e}")
-                        return False, staging
-                    log.warning(f"Publish rename locked (attempt {move_attempt+1}), retrying: {e}")
-                    await asyncio.sleep(1.0 + move_attempt)
-            return False, staging
+        # 2/3. Same-volume atomic rename, or cross-filesystem copy -> fsync ->
+        #      verify -> atomic replace. Extracted to `publish_verified_file`
+        #      (tiddl.core.utils.publish) so the offline `tiddl recover`
+        #      command can reuse the identical contract without a Downloader.
+        async def _reverify(candidate: Path) -> tuple[bool, Optional[str]]:
+            return await self._verify_or_repair(candidate, task)
 
-        # 3. Cross filesystem: copy -> fsync -> verify a dest-side temp, then
-        #    atomically publish it with os.replace().
-        dest_tmp = task.output_path.with_name(
-            task.output_path.name + f".part.{uuid.uuid4().hex[:8]}"
+        def _warn(msg: str) -> None:
+            task.error_message = msg
+
+        published, retained = await publish_verified_file(
+            staging, task.output_path, reverify=_reverify, on_warning=_warn,
         )
-        for publish_attempt in range(5):
-            _safe_unlink_warn(dest_tmp, "stale temp from a previous attempt")
-            try:
-                await asyncio.to_thread(shutil.copy2, str(staging), str(dest_tmp))
-                await asyncio.to_thread(_fsync_path, dest_tmp)  # commit before verifying
-            except OSError as e:
-                task.error_message = f"copy to destination failed: {e}"
-                log.warning(f"{task.error_message} (attempt {publish_attempt+1})")
-                _safe_unlink_warn(dest_tmp, "cleanup after a failed copy")
-                if publish_attempt == 4:
-                    break
-                await asyncio.sleep(1.0 + publish_attempt)
-                continue
-
-            ok, err = await self._verify_or_repair(dest_tmp, task)
-            if ok:
-                # Atomic publish, with its own retry. A failure here must NEVER
-                # delete the prior final file — only a successful os.replace
-                # overwrites it, atomically.
-                for replace_attempt in range(5):
-                    try:
-                        os.replace(dest_tmp, task.output_path)
-                        await asyncio.to_thread(_fsync_dir, task.output_path.parent)
-                        task.error_message = None
-                        # Only now is the local copy safe to drop. This is a
-                        # best-effort delete: report it, don't lie about it — if
-                        # it fails (AV/indexer lock, remote fs), the publish is
-                        # still a success, but the leftover must not go unnoticed.
-                        if await asyncio.to_thread(_safe_unlink, staging):
-                            return True, None
-                        log.warning(
-                            f"Published '{task.track_title}' but could not delete "
-                            f"the local staging copy at {staging}; left in place "
-                            "(best-effort cleanup)."
-                        )
-                        self.rich_output.console.print(
-                            f"[yellow]⚠️  Published, but couldn't remove local "
-                            f"staging copy at {staging}[/] {task.track_title}"
-                        )
-                        return True, staging
-                    except OSError as e:
-                        task.error_message = f"atomic publish failed: {e}"
-                        log.warning(f"{task.error_message} (attempt {replace_attempt+1})")
-                        if replace_attempt == 4:
-                            _safe_unlink_warn(dest_tmp, "replace exhausted its retries")
-                            return False, staging  # keep staging; prior final untouched
-                        await asyncio.sleep(1.0 + replace_attempt)
-
-            # Destination copy is corrupt (e.g. a NAS that corrupts on flush).
-            # Drop it and re-copy from the surviving staging.
-            task.error_message = err
-            log.warning(f"Destination validation failed (attempt {publish_attempt+1}): {err}")
-            _safe_unlink_warn(dest_tmp, "cleanup after a corrupt destination copy")
-            if publish_attempt < 4:
-                await asyncio.sleep(1.0 + publish_attempt)
-
-        # Publish exhausted: best-effort clean the dest temp, KEEP the local staging.
-        _safe_unlink_warn(dest_tmp, "cleanup after publish exhausted its retries")
-        return False, staging
+        if published:
+            task.error_message = None
+            if retained is not None:
+                # Published — output_path is verified and correct — but the
+                # local staging copy could not be deleted (best-effort
+                # cleanup failure). Already logged inside publish_verified_file
+                # via on_warning; surface it to the console too, with the
+                # track title publish_verified_file doesn't know about.
+                log.warning(
+                    f"Published '{task.track_title}' but could not delete "
+                    f"the local staging copy at {retained}; left in place "
+                    "(best-effort cleanup)."
+                )
+                self.rich_output.console.print(
+                    f"[yellow]⚠️  Published, but couldn't remove local "
+                    f"staging copy at {retained}[/] {task.track_title}"
+                )
+        return published, retained
 
     async def _download_with_retry(
         self,
@@ -883,6 +767,20 @@ class Downloader:
                     # None unless _publish_staged could not delete the local
                     # staging copy after a successful publish (see its docstring).
                     task.retained_staging = retained
+                    if retained is not None:
+                        # Destination is already correct — only the redundant
+                        # local copy remains. Persist so this survives a
+                        # restart; see tiddl.core.utils.retained_registry.
+                        # `actual_path` reflects the file's real location
+                        # (quarantined or not) even if persistence itself
+                        # failed — task.retained_staging must never point at
+                        # a path the file has already moved away from.
+                        result = await retained_registry.register_retained_file(
+                            retained, task.output_path,
+                            retained_registry.RetainReason.CLEANUP_PENDING,
+                            track_title=task.track_title,
+                        )
+                        task.retained_staging = result.actual_path
                     if attempt > 1:
                         log.info(f"Successfully downloaded '{task.track_title}' on attempt {attempt}")
                         self.rich_output.console.print(
@@ -897,13 +795,24 @@ class Downloader:
                     tmp_path = None  # ownership handed to the retained staging
                     task.status = DownloadStatus.FAILED
                     task.retained_staging = retained
+                    # Destination still needs to be published. Persist so this
+                    # survives a restart; see tiddl.core.utils.retained_registry.
+                    # `actual_path` reflects the file's real location even if
+                    # persistence itself failed — never leave
+                    # task.retained_staging pointing at a moved-away-from path.
+                    result = await retained_registry.register_retained_file(
+                        retained, task.output_path,
+                        retained_registry.RetainReason.PUBLISH_PENDING,
+                        track_title=task.track_title,
+                    )
+                    task.retained_staging = result.actual_path
                     log.error(
                         f"Could not publish '{task.track_title}' to destination; kept "
-                        f"local copy at {retained} ({task.error_message})"
+                        f"local copy at {task.retained_staging} ({task.error_message})"
                     )
                     self.rich_output.console.print(
                         f"[red]❌ Could not publish to destination; kept local copy at "
-                        f"{retained}[/] {task.track_title}"
+                        f"{task.retained_staging}[/] {task.track_title}"
                     )
                     return False
 
