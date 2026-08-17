@@ -138,6 +138,50 @@ def callback(
         api_omit_cache=OMIT_CACHE, console=console, debug_path=debug_path
     )
 
+    # Lightweight, read-only: registry status + entry count only, no hashing,
+    # no destination I/O. Deep verification and any recovery only happen via
+    # the explicit `tiddl recover` command. See
+    # tiddl.core.utils.retained_registry.
+    #
+    # [P2, finding #14] Verified (not just claimed) via a CliRunner check:
+    # this notice runs for ordinary subcommand invocations (e.g. `tiddl
+    # recover`, `tiddl auth`), but NOT for `--help` — Click/Typer treats
+    # `--help` as an eager option that prints help and exits during
+    # parameter processing, before this group callback's body ever runs. An
+    # earlier version of this comment claimed "safe on every invocation
+    # including --help", which was never actually tested and is false.
+    try:
+        from tiddl.core.utils import retained_registry
+        _retained_status = retained_registry.startup_status()
+        if _retained_status.count:
+            console.print(
+                f"[yellow]{_retained_status.count} file(s) retained from a previous "
+                "session's incomplete publish — run [bold]tiddl recover[/] to review.[/]"
+            )
+        elif _retained_status.status in ("corrupt", "unsupported_version"):
+            console.print(
+                f"[yellow]The retained-staging registry is {_retained_status.status} — "
+                "run [bold]tiddl recover[/] for details.[/]"
+            )
+        elif _retained_status.status == "unreadable":
+            # [P2, fourth audit finding #1] 'unreadable' is MORE serious
+            # than 'corrupt'/'unsupported_version' (see
+            # retained_registry.RegistryStatus's docstring: any mutating
+            # `tiddl recover` command will refuse outright until this is
+            # resolved), but an earlier version of this callback only
+            # warned for the two less-serious statuses — a user who never
+            # proactively runs `tiddl recover` would get no signal at all
+            # that persistence is currently inaccessible. This stays
+            # read-only/lightweight, same as the branches above: no deep
+            # verification, no destination I/O, just surfacing what
+            # `startup_status()` (itself lightweight) already found.
+            console.print(
+                "[red]The retained-staging registry could not be read — run "
+                "[bold]tiddl recover[/] for details.[/]"
+            )
+    except Exception as e:
+        log.debug(f"Skipping retained-staging startup notice: {e}")
+
     if not is_ffmpeg_installed:
         ctx.obj.console.print(
             "[yellow]WARNING ffmpeg is not installed, tiddl might not work properly, "

@@ -18,6 +18,9 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 import tiddl.cli.commands.download.downloader as dlmod
+import tiddl.core.utils.fsio as fsiomod
+import tiddl.core.utils.publish as publishmod
+import tiddl.core.utils.retained_registry as registrymod
 from tiddl.cli.commands.download.downloader import (
     CHUNK_SIZE,
     Downloader,
@@ -95,6 +98,13 @@ def _reset_cancel():
     cancel.clear()
     yield
     cancel.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_retained_registry(tmp_path, monkeypatch):
+    """Every test in this module gets its own retained-staging registry +
+    quarantine dir under pytest's tmp_path, never the real ~/.tiddl."""
+    monkeypatch.setattr(registrymod, "APP_PATH", tmp_path / "_app")
 
 
 @pytest.fixture
@@ -249,7 +259,7 @@ async def test_cancellation_midstream_aborts_without_retry(tmp_path, monkeypatch
 
 @pytest.fixture
 def cross_volume(monkeypatch):
-    monkeypatch.setattr(dlmod, "_same_volume", lambda a, b: False)
+    monkeypatch.setattr(publishmod, "_same_volume", lambda a, b: False)
 
 
 def _dest_leftovers(dest_dir):
@@ -321,7 +331,7 @@ async def test_cross_volume_retries_transient_copy_error(
     tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
 ):
     fake, calls = _scripted_copy2(["oserror", "oserror", "ok"])
-    monkeypatch.setattr(dlmod.shutil, "copy2", fake)
+    monkeypatch.setattr(publishmod.shutil, "copy2", fake)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -343,7 +353,7 @@ async def test_cross_volume_bad_copy_is_reverified_and_recopied(
     tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
 ):
     fake, calls = _scripted_copy2(["short", "ok"])   # first copy lands corrupt, second good
-    monkeypatch.setattr(dlmod.shutil, "copy2", fake)
+    monkeypatch.setattr(publishmod.shutil, "copy2", fake)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -366,7 +376,7 @@ async def test_cross_volume_hash_mismatch_is_detected(
 ):
     good_hash = hashlib.md5(b"\x00" * 5000).hexdigest()
     fake, calls = _scripted_copy2(["corrupt-hash", "ok"])  # right size, wrong content, then good
-    monkeypatch.setattr(dlmod.shutil, "copy2", fake)
+    monkeypatch.setattr(publishmod.shutil, "copy2", fake)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -387,7 +397,7 @@ async def test_cross_volume_exhausted_keeps_staging_no_partial_final(
     tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
 ):
     fake, _ = _scripted_copy2(["short"])   # every copy corrupts -> never publishes
-    monkeypatch.setattr(dlmod.shutil, "copy2", fake)
+    monkeypatch.setattr(publishmod.shutil, "copy2", fake)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -401,17 +411,25 @@ async def test_cross_volume_exhausted_keeps_staging_no_partial_final(
     assert task.status == DownloadStatus.FAILED
     assert not dest.exists()              # no incomplete final file
     assert not _dest_leftovers(tmp_path)  # no dest-side .part temp left
-    # The verified local download is RETAINED for recovery, recorded on the task.
-    kept = _staging_leftovers(stage_dir)
-    assert len(kept) == 1
-    assert task.retained_staging == kept[0]
+    # The verified local download is RETAINED for recovery. It is moved out of
+    # the OS temp staging dir into the retained-staging quarantine dir (so it
+    # survives an OS temp cleanup) and recorded on the task + the registry.
+    assert _no_staging_leftovers(stage_dir)
+    assert task.retained_staging is not None
+    assert task.retained_staging.exists()
+    assert task.retained_staging.parent == registrymod.quarantine_dir()
+    report = await registrymod.reconcile()
+    assert len(report.entries) == 1
+    assert report.entries[0].status == "ok"
+    assert report.entries[0].entry.reason == registrymod.RetainReason.PUBLISH_PENDING
+    assert report.entries[0].entry.output_path == str(dest)
 
 
 async def test_cross_volume_replace_retries_then_succeeds(
     tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
 ):
     rfake, rcalls = _scripted_replace(["oserror", "ok"])
-    monkeypatch.setattr(dlmod.os, "replace", rfake)
+    monkeypatch.setattr(publishmod.os, "replace", rfake)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -436,7 +454,7 @@ async def test_cross_volume_replace_exhausted_keeps_prior_final(
     dest = tmp_path / "out.bin"
     dest.write_bytes(b"P" * 4000)          # a prior, valid final file
     rfake, _ = _scripted_replace(["oserror"])   # the atomic publish always fails
-    monkeypatch.setattr(dlmod.os, "replace", rfake)
+    monkeypatch.setattr(publishmod.os, "replace", rfake)
     server = await _start([("ok", 5000)])
     try:
         task = DownloadTask(url="x", output_path=dest, expected_size=5000)
@@ -461,7 +479,7 @@ async def test_corrupt_local_staging_detected_before_copy(
         copy_calls["n"] += 1
         return real(src, dst)
 
-    monkeypatch.setattr(dlmod.shutil, "copy2", counting_copy)
+    monkeypatch.setattr(publishmod.shutil, "copy2", counting_copy)
     server = await _start([("ok", 3000)])   # short download -> local staging invalid (size)
     dest = tmp_path / "out.bin"
     try:
@@ -482,7 +500,7 @@ async def test_publication_order_copy_fsync_verify_replace(
 ):
     order = []
     real_copy = shutil.copy2
-    real_fsync = dlmod._fsync_path
+    real_fsync = publishmod._fsync_path
     real_verify = dlmod.FileIntegrityChecker.verify_file_async
     real_replace = os.replace
 
@@ -502,10 +520,10 @@ async def test_publication_order_copy_fsync_verify_replace(
         order.append("replace")
         return real_replace(src, dst)
 
-    monkeypatch.setattr(dlmod.shutil, "copy2", _copy)
-    monkeypatch.setattr(dlmod, "_fsync_path", _fsync)
+    monkeypatch.setattr(publishmod.shutil, "copy2", _copy)
+    monkeypatch.setattr(publishmod, "_fsync_path", _fsync)
     monkeypatch.setattr(dlmod.FileIntegrityChecker, "verify_file_async", staticmethod(_verify))
-    monkeypatch.setattr(dlmod.os, "replace", _replace)
+    monkeypatch.setattr(publishmod.os, "replace", _replace)
 
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
@@ -523,9 +541,9 @@ async def test_publication_order_copy_fsync_verify_replace(
 async def test_same_volume_replace_retries_then_succeeds(
     tmp_path, fast_sleep, stage_dir, monkeypatch
 ):
-    monkeypatch.setattr(dlmod, "_same_volume", lambda a, b: True)
+    monkeypatch.setattr(publishmod, "_same_volume", lambda a, b: True)
     rfake, rcalls = _scripted_replace(["oserror", "ok"])
-    monkeypatch.setattr(dlmod.os, "replace", rfake)
+    monkeypatch.setattr(publishmod.os, "replace", rfake)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -545,10 +563,10 @@ async def test_same_volume_replace_retries_then_succeeds(
 async def test_same_volume_fsyncs_dest_dir_after_rename(
     tmp_path, fast_sleep, stage_dir, monkeypatch
 ):
-    monkeypatch.setattr(dlmod, "_same_volume", lambda a, b: True)
+    monkeypatch.setattr(publishmod, "_same_volume", lambda a, b: True)
     order = []
     real_replace = os.replace
-    real_fsync_dir = dlmod._fsync_dir
+    real_fsync_dir = publishmod._fsync_dir
 
     def _replace(src, dst, *a, **k):
         order.append("replace")
@@ -558,8 +576,8 @@ async def test_same_volume_fsyncs_dest_dir_after_rename(
         order.append("fsync_dir")
         return real_fsync_dir(p)
 
-    monkeypatch.setattr(dlmod.os, "replace", _replace)
-    monkeypatch.setattr(dlmod, "_fsync_dir", _fsync_dir)
+    monkeypatch.setattr(publishmod.os, "replace", _replace)
+    monkeypatch.setattr(publishmod, "_fsync_dir", _fsync_dir)
 
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
@@ -583,7 +601,7 @@ async def test_publish_success_survives_staging_unlink_failure(
     AV/indexer lock, or a remote filesystem that rejects the unlink). The final
     file must be correct, and the leftover staging must be surfaced via
     task.retained_staging (+ a warning) rather than silently dropped."""
-    monkeypatch.setattr(dlmod, "_safe_unlink", lambda p: False)
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
@@ -608,8 +626,8 @@ async def test_dest_tmp_unlink_failure_is_warned_not_fatal(
     warning) but must never turn an otherwise-successful copy retry into a
     failure — only the leftover surfaces, nothing silently disappears."""
     fake, calls = _scripted_copy2(["short", "ok"])  # first copy corrupt, then good
-    monkeypatch.setattr(dlmod.shutil, "copy2", fake)
-    real_unlink = dlmod._safe_unlink
+    monkeypatch.setattr(publishmod.shutil, "copy2", fake)
+    real_unlink = fsiomod._safe_unlink
 
     def flaky_unlink(path):
         # Fail only the dest-side ".part." cleanup (the corrupt first copy);
@@ -618,7 +636,12 @@ async def test_dest_tmp_unlink_failure_is_warned_not_fatal(
             return False
         return real_unlink(path)
 
-    monkeypatch.setattr(dlmod, "_safe_unlink", flaky_unlink)
+    # `_safe_unlink_warn` (which logs the "Could not remove leftover..."
+    # warning under test) is defined in fsio.py and calls `_safe_unlink` via
+    # fsio's OWN module globals — patch it there, not on `publishmod` (which
+    # only affects publish.py's *direct* `_safe_unlink` call, a different
+    # call site: dropping the local staging copy after a successful publish).
+    monkeypatch.setattr(fsiomod, "_safe_unlink", flaky_unlink)
 
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
@@ -642,12 +665,12 @@ async def test_dest_tmp_unlink_failure_is_warned_not_fatal(
 async def test_same_volume_uses_atomic_rename_not_copy(
     tmp_path, fast_sleep, stage_dir, monkeypatch
 ):
-    monkeypatch.setattr(dlmod, "_same_volume", lambda a, b: True)
+    monkeypatch.setattr(publishmod, "_same_volume", lambda a, b: True)
 
     def _boom(*a, **k):
         raise AssertionError("copy2 must not be called on the same-volume fast path")
 
-    monkeypatch.setattr(dlmod.shutil, "copy2", _boom)
+    monkeypatch.setattr(publishmod.shutil, "copy2", _boom)
     server = await _start([("ok", 5000)])
     dest = tmp_path / "out.bin"
     try:
