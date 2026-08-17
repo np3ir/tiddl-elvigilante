@@ -74,3 +74,6 @@ temp/
 *.bak
 *.bak-*
 *.bak_*
+
+# Portable developer handoff (kept local, not published)
+PROJECT_CONTEXT.md

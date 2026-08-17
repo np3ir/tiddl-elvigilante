@@ -125,9 +125,17 @@ class Config(BaseModel):
         @validator("default", always=True)
         def default_not_empty(cls, v):
             # An empty default (e.g. written by a GUI that saved a blank field)
-            # would otherwise crash tiddl at import for every command. Fall back
-            # to the built-in template instead of raising.
-            return v or DEFAULT_TEMPLATE
+            # would otherwise crash tiddl at import for every command. For an
+            # end-user CLI the right contract is: never break startup over one
+            # bad field — warn and fall back to the built-in default instead.
+            if not v:
+                log.warning(
+                    "Empty 'default' template in config; falling back to the "
+                    "built-in default (%s).",
+                    DEFAULT_TEMPLATE,
+                )
+                return DEFAULT_TEMPLATE
+            return v
 
         @validator("track", "video", "album", "playlist", "mix", always=True)
         def inherit_default(cls, v, values):

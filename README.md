@@ -355,6 +355,6 @@ This tool respects TIDAL's ToS and copyright laws. Users are responsible for ens
 
 ---
 
-**Version:** 1.1.6
+**Version:** 1.1.7
 **Status:** Production Ready ✅
-**Last Updated:** July 3, 2026
+**Last Updated:** August 16, 2026

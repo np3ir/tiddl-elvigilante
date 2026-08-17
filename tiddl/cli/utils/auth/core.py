@@ -1,4 +1,6 @@
 from __future__ import annotations
+import os
+import tempfile
 from pathlib import Path
 from logging import getLogger
 
@@ -38,5 +40,28 @@ def load_auth_data(file: Path = AUTH_DATA_FILE) -> AuthData:
 def save_auth_data(auth_data: AuthData, file: Path = AUTH_DATA_FILE):
     log.debug(f"saving to '{file}'")
 
-    with file.open("w") as f:
-        f.write(auth_data.json())
+    payload = auth_data.json()
+    file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to a temp file in the same directory, then publish with os.replace()
+    # so a crash or full disk mid-write can never leave a truncated auth.json
+    # (which used to wipe the user's session and force a re-login).
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(file.parent), prefix=f".{file.name}.", suffix=".tmp"
+    )
+    try:
+        # These tokens are secrets — restrict to owner-only on POSIX. On Windows
+        # os.fchmod is unavailable and ACLs already default to the user profile.
+        if os.name == "posix":
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, file)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise

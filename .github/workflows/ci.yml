@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project + dev tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Lint/type checks are informational for now (continue-on-error) and should
+      # be flipped to blocking once the typing/style cleanup lands.
+      - name: Ruff
+        continue-on-error: true
+        run: ruff check .
+
+      - name: Mypy
+        continue-on-error: true
+        run: mypy tiddl
+
+      - name: Pytest (with coverage)
+        run: pytest --cov=tiddl --cov-report=term-missing --cov-report=xml
+
+  build:
+    name: locked install (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Validate the committed lockfile on BOTH platforms. py3.10 exercises the
+        # tomli marker (python_version < '3.11'); py3.13 is the top of the range.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.13"]
+        include:
+          - os: ubuntu-latest
+            venv_bin: .venv/bin
+          - os: windows-latest
+            venv_bin: .venv/Scripts
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Build wheel + sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      # requirements.lock is committed. Regenerate after dependency changes with:
+      #   uv pip compile pyproject.toml --universal --python-version 3.10 -o requirements.lock
+      - name: Reproducible install from the committed lockfile
+        run: |
+          python -m venv .venv
+          # Use the venv's interpreter directly (Scripts on Windows, bin on Linux)
+          # so there is no shell-dependent activation logic.
+          "${{ matrix.venv_bin }}/python" -m pip install --upgrade pip
+          # Pinned runtime deps come from the committed lock; the project is then
+          # installed without re-resolving, and pip check confirms the closure.
+          "${{ matrix.venv_bin }}/python" -m pip install -r requirements.lock
+          "${{ matrix.venv_bin }}/python" -m pip install --no-deps dist/*.whl
+          "${{ matrix.venv_bin }}/python" -m pip check
+
+      - name: Smoke-test from OUTSIDE the checkout (import the installed package)
+        run: |
+          venv_bin="$PWD/${{ matrix.venv_bin }}"
+          # Leave the checkout so its source tree can't shadow the installed
+          # package. Stay in POSIX space with `cd ..` instead of $RUNNER_TEMP,
+          # which Git Bash on Windows receives as a backslash path (D:\a\_temp).
+          cd ..
+          "$venv_bin/tiddl" --help
+          "$venv_bin/python" -c "import tiddl; from tiddl.cli.config import CONFIG; print('config OK')"
+
+  lock-drift:
+    name: lockfile is in sync with pyproject.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Regenerating with the exact committed command is byte-stable (uv keeps the
+      # existing pins), so a diff means pyproject.toml changed without relocking.
+      - name: Fail if requirements.lock is stale
+        run: |
+          python -m pip install uv
+          uv pip compile pyproject.toml --universal --python-version 3.10 -o requirements.lock
+          git diff --exit-code -- requirements.lock

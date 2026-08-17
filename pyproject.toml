@@ -9,10 +9,11 @@ description = "Modern Python 3.10+ compatible TIDAL downloader - Independent for
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "tiddl-elvigilante contributors"}
+    {name = "np3ir"},
+    {name = "tiddl-elvigilante contributors"},
 ]
 maintainers = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "np3ir"},
 ]
 requires-python = ">=3.10"
 keywords = ["tidal", "downloader", "music", "streaming", "python3.10", "tidal-downloader"]
@@ -63,6 +64,7 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0",
     "mypy>=1.0",
     "black>=23.0",
     "ruff>=0.1.0",
