@@ -85,10 +85,15 @@ class TidalAPI:
                 status = None
                 retry_head = None
 
-                if isinstance(e, HTTPError) and getattr(e, "response", None):
-                    status = e.response.status_code
-                    retry_head = e.response.headers.get("Retry-After")
-                
+                # NB: use `is not None`, not truthiness — a real requests.Response
+                # is *falsy* at 4xx/5xx (Response.__bool__ == Response.ok), so a
+                # truthy test would drop status/Retry-After on exactly the errors
+                # we need to classify (429 backoff, 5xx retry, subStatus 4005).
+                response = getattr(e, "response", None)
+                if isinstance(e, HTTPError) and response is not None:
+                    status = response.status_code
+                    retry_head = response.headers.get("Retry-After")
+
                 elif isinstance(e, ApiError):
                     status = e.status
 

@@ -6,9 +6,10 @@ network retries — is exercised deterministically. `sleep`/jitter are patched.
 """
 from __future__ import annotations
 
-from unittest.mock import Mock
+import json
 
 import pytest
+from requests import Response
 from requests.exceptions import ConnectionError as ReqConnectionError
 from requests.exceptions import HTTPError
 
@@ -31,10 +32,16 @@ class _FakeClient:
 
 
 def _http_error(status: int, retry_after=None, sub_status=None) -> HTTPError:
-    resp = Mock()
+    # A REAL requests.Response. Crucially it is *falsy* at 4xx/5xx
+    # (Response.__bool__ == Response.ok), which is exactly the case the
+    # production classifier must handle — a Mock() is always truthy and hides it.
+    resp = Response()
     resp.status_code = status
-    resp.headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
-    resp.json.return_value = {"subStatus": sub_status} if sub_status is not None else {}
+    body = {"subStatus": sub_status} if sub_status is not None else {}
+    resp._content = json.dumps(body).encode()
+    resp.headers["Content-Type"] = "application/json"
+    if retry_after is not None:
+        resp.headers["Retry-After"] = str(retry_after)
     return HTTPError(response=resp)
 
 
