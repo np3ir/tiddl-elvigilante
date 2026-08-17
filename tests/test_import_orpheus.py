@@ -10,16 +10,26 @@ import os
 import pickle
 from collections import OrderedDict
 
+import responses
 from typer.testing import CliRunner
 
 from tiddl.cli.commands.auth import auth_command
+from tiddl.core.auth.client import AUTH_URL, TV_CREDENTIALS
 
 runner = CliRunner()
+
+TOKEN_URL = f"{AUTH_URL}/token"
 
 
 def _layout(sessions: dict) -> dict:
     """Minimal OrpheusDL loginstorage layout wrapping the given sessions dict."""
-    return {"modules": {"tidal": {"sessions": {"default": {"custom_data": {"sessions": sessions}}}}}}
+    return {
+        "modules": {"tidal": {"sessions": {"default": {"custom_data": {"sessions": sessions}}}}}
+    }
+
+
+def _write_pickle(path, obj) -> None:
+    path.write_bytes(pickle.dumps(obj))
 
 
 def _controlled(result) -> bool:
@@ -76,3 +86,64 @@ def test_missing_file_is_controlled(tmp_path):
         auth_command, ["import-orpheus", "--path", str(tmp_path / "nope.bin"), "--yes"]
     )
     assert _controlled(result), f"leaked: {result.exception!r}"
+
+
+@responses.activate
+def test_import_success_refreshes_and_persists(tmp_path, monkeypatch):
+    # Full happy path: valid OrpheusDL TV session -> TV-credential refresh (mocked)
+    # -> AuthData persisted with the refreshed token + imported identity.
+    responses.add(
+        responses.POST, TOKEN_URL,
+        json={"access_token": "new_at", "expires_in": 3600, "refresh_token": "new_rt"},
+        status=200,
+    )
+    saved: list = []
+    monkeypatch.setattr(
+        "tiddl.cli.commands.auth.save_auth_data", lambda ad, *a, **k: saved.append(ad)
+    )
+
+    p = tmp_path / "loginstorage.bin"
+    _write_pickle(p, _layout({"TV": {"refresh_token": "r0", "user_id": 42, "country_code": "US"}}))
+
+    result = runner.invoke(auth_command, ["import-orpheus", "--path", str(p), "--yes"])
+    assert result.exit_code == 0, result.exception
+    assert len(saved) == 1
+    ad = saved[0]
+    assert ad.token == "new_at"
+    assert ad.refresh_token == "new_rt"
+    assert ad.user_id == "42"
+    assert ad.country_code == "US"
+    assert ad.client_id == TV_CREDENTIALS.client_id
+
+
+def test_import_invalid_layout_is_controlled(tmp_path):
+    # Loads fine (plain dict), but the OrpheusDL structure is missing -> controlled exit.
+    p = tmp_path / "loginstorage.bin"
+    _write_pickle(p, {"not": "an orpheus storage"})
+    result = runner.invoke(auth_command, ["import-orpheus", "--path", str(p), "--yes"])
+    assert _controlled(result), f"leaked: {result.exception!r}"
+
+
+@responses.activate
+def test_import_path_as_directory_resolves_bin(tmp_path, monkeypatch):
+    # --path may be the OrpheusDL directory; the command resolves
+    # <dir>/config/loginstorage.bin. A successful persist proves resolution worked.
+    responses.add(
+        responses.POST, TOKEN_URL,
+        json={"access_token": "at", "expires_in": 3600}, status=200,
+    )
+    saved: list = []
+    monkeypatch.setattr(
+        "tiddl.cli.commands.auth.save_auth_data", lambda ad, *a, **k: saved.append(ad)
+    )
+
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    _write_pickle(
+        cfg / "loginstorage.bin",
+        _layout({"TV": {"refresh_token": "r0", "user_id": 7, "country_code": "PR"}}),
+    )
+
+    result = runner.invoke(auth_command, ["import-orpheus", "--path", str(tmp_path), "--yes"])
+    assert result.exit_code == 0, result.exception
+    assert len(saved) == 1 and saved[0].user_id == "7"  # dir -> config/loginstorage.bin resolved

@@ -2,7 +2,7 @@
 import logging
 from pathlib import Path
 
-from tiddl.cli.config import Config, DEFAULT_DOWNLOAD_PATH, DEFAULT_TEMPLATE
+from tiddl.cli.config import DEFAULT_DOWNLOAD_PATH, DEFAULT_TEMPLATE, Config
 
 
 class TestTemplatesConfig:
@@ -32,7 +32,15 @@ class TestTemplatesConfig:
         assert cfg.templates.default == DEFAULT_TEMPLATE
         # specific templates inherit the resolved default, never the empty string
         assert cfg.templates.track == DEFAULT_TEMPLATE
-        assert any("default" in r.getMessage().lower() for r in caplog.records)
+        # A specific WARNING must name the empty default, say it is falling back,
+        # and quote the built-in template it fell back to.
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "Empty 'default' template" in r.getMessage()
+            and "falling back to the built-in default" in r.getMessage()
+            and DEFAULT_TEMPLATE in r.getMessage()
+            for r in warnings
+        )
 
     def test_default_template_unchanged_when_not_set(self):
         cfg = Config()
