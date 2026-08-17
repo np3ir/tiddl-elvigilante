@@ -53,6 +53,86 @@ def _normalize_dir(path: Path) -> str:
         s = s[len("\\\\?\\"):]
     return os.path.normcase(os.path.normpath(s))
 
+
+def _safe_unlink(path: Optional[Path]) -> bool:
+    """Delete a file if it exists, swallowing OS errors (best-effort cleanup).
+
+    Returns True if `path` is gone once this returns (deleted here, or it never
+    existed) and False if an existing file could NOT be removed (e.g. locked by
+    an antivirus/indexer, or a remote filesystem that rejects the unlink).
+    Callers that must not silently claim "no orphan left behind" — i.e. after a
+    successful publish, when the leftover would otherwise go unreported — should
+    check this return value instead of treating cleanup as unconditional."""
+    if path is None:
+        return True
+    try:
+        Path(path).unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+def _safe_unlink_warn(path: Path, context: str) -> bool:
+    """`_safe_unlink` plus an honest log warning when an existing file could
+    not be removed. Cleanup here is always best-effort: a failure logged by
+    this helper never turns an otherwise-successful publish into a failure —
+    it only makes an otherwise-silent leftover observable."""
+    ok = _safe_unlink(path)
+    if not ok:
+        log.warning(
+            f"Could not remove leftover destination-side temp file at {path} "
+            f"({context}); left in place (best-effort cleanup)."
+        )
+    return ok
+
+
+def _same_volume(a: Path, b: Path) -> bool:
+    """True if paths `a` and `b` live on the same filesystem (st_dev match).
+
+    Used by the safe-publish step to pick the atomic-rename fast path. Kept as a
+    module-level function so tests can force the cross-filesystem path."""
+    try:
+        return os.stat(a).st_dev == os.stat(b).st_dev
+    except OSError:
+        return False
+
+
+def _fsync_path(path: Path) -> None:
+    """Best-effort flush of a file's data to storage before it is verified.
+
+    shutil.copy2 only closes the file; on a network share the bytes may still sit
+    in a write cache, so an immediate verify could read cache rather than what
+    actually landed. Filesystems that don't support fsync just no-op."""
+    try:
+        fd = os.open(str(path), os.O_RDWR)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: Path) -> None:
+    """Best-effort fsync of a directory (POSIX only) so a rename into it is
+    durable across a power loss. A no-op on Windows / unsupported filesystems."""
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
 # ====================================================================
 # IMPROVEMENT 1: Enums for download states
 # ====================================================================
@@ -95,6 +175,9 @@ class DownloadTask:
     max_attempts: int = 3
     bytes_downloaded: int = 0
     error_message: Optional[str] = None
+    # Set when the download succeeded but the destination could not be published:
+    # the verified local file is kept here for recovery/re-publish (never deleted).
+    retained_staging: Optional[Path] = None
 
     @property
     def progress_percentage(self) -> float:
@@ -526,6 +609,155 @@ class Downloader:
             return db_path
         return None
 
+    async def _verify_or_repair(self, candidate: Path, task: DownloadTask):
+        """Verify a candidate file (size/hash). On an MP4/M4A container failure,
+        attempt one faststart repair in place and re-verify. Returns (ok, error)."""
+        ok, err = await FileIntegrityChecker.verify_file_async(
+            candidate, expected_size=task.expected_size, expected_hash=task.expected_hash
+        )
+        if ok:
+            return True, None
+        if candidate.suffix.lower() in [".m4a", ".mp4", ".m4v"]:
+            try:
+                repaired = Path(await asyncio.to_thread(fix_mp4_faststart, candidate))
+                ok2, err2 = await FileIntegrityChecker.verify_file_async(repaired)
+                if ok2:
+                    if repaired != candidate:
+                        os.replace(repaired, candidate)
+                    self.rich_output.console.print(
+                        f"[green]✓ Repaired container (moov atom) [/]{task.track_title}"
+                    )
+                    return True, None
+                return False, err2
+            except Exception as repair_exc:
+                log.error(f"Repair failed for '{task.track_title}': {repair_exc}")
+        return False, err
+
+    async def _publish_staged(self, task: DownloadTask, staging: Path):
+        """Publish a downloaded staging file to ``task.output_path``.
+
+        Contract: the final path is only ever replaced atomically by a
+        fully-verified candidate, and the known-good local staging is deleted
+        (best-effort — see the ``(True, staging)`` case below) ONLY after a
+        successful publish. A prior valid final file is never removed by a failed
+        publish.
+
+        Returns ``(published, retained_staging)``:
+          * ``(True, None)``    published; local staging deleted; output_path is
+                                 verified; ``task.error_message`` is cleared.
+          * ``(True, staging)``  published — output_path is verified and correct —
+                                 but the local staging copy could not be deleted
+                                 afterwards (best-effort cleanup failure, e.g. an
+                                 AV/indexer lock or a remote filesystem). Logged as
+                                 a warning; the leftover file is safe to delete
+                                 manually once noticed.
+          * ``(False, staging)``  the DESTINATION could not be published; the local
+                                  staging is retained (caller must NOT re-download);
+                                  the prior final file is untouched, and every temp
+                                  created here has a best-effort delete attempted
+                                  (a failure to remove one is logged, not hidden).
+          * ``(False, None)``   the local staging itself is invalid; re-download.
+
+        This is a general cross-filesystem safe publish — it protects any
+        destination that can fail or write partially mid-publish (NAS/SMB/NFS,
+        USB/external drives, cloud-synced folders, full/quota disks, AV/indexer
+        locks, a crash mid-copy, silent same-size corruption). The NAS is only the
+        most visible consumer. Same-filesystem publishes use an atomic rename.
+        """
+        task.status = DownloadStatus.VERIFYING
+
+        # 1. Verify (and repair) the LOCAL staging ONCE, before touching the
+        #    destination: a corrupt local download must be re-downloaded, not
+        #    copied to the destination five times.
+        ok, err = await self._verify_or_repair(staging, task)
+        if not ok:
+            task.error_message = f"local file invalid: {err}"
+            _safe_unlink(staging)
+            return False, None
+
+        # 2. Same filesystem: a single atomic rename (no bytes copied). Retry only
+        #    transient locks; if it never happens the staging still exists.
+        if _same_volume(staging, task.output_path.parent):
+            for move_attempt in range(5):
+                try:
+                    os.replace(staging, task.output_path)
+                    await asyncio.to_thread(_fsync_dir, task.output_path.parent)
+                    task.error_message = None
+                    return True, None
+                except OSError as e:
+                    task.error_message = f"publish rename failed: {e}"
+                    if move_attempt == 4:
+                        log.warning(f"Failed to publish (rename) after 5 attempts: {e}")
+                        return False, staging
+                    log.warning(f"Publish rename locked (attempt {move_attempt+1}), retrying: {e}")
+                    await asyncio.sleep(1.0 + move_attempt)
+            return False, staging
+
+        # 3. Cross filesystem: copy -> fsync -> verify a dest-side temp, then
+        #    atomically publish it with os.replace().
+        dest_tmp = task.output_path.with_name(
+            task.output_path.name + f".part.{uuid.uuid4().hex[:8]}"
+        )
+        for publish_attempt in range(5):
+            _safe_unlink_warn(dest_tmp, "stale temp from a previous attempt")
+            try:
+                await asyncio.to_thread(shutil.copy2, str(staging), str(dest_tmp))
+                await asyncio.to_thread(_fsync_path, dest_tmp)  # commit before verifying
+            except OSError as e:
+                task.error_message = f"copy to destination failed: {e}"
+                log.warning(f"{task.error_message} (attempt {publish_attempt+1})")
+                _safe_unlink_warn(dest_tmp, "cleanup after a failed copy")
+                if publish_attempt == 4:
+                    break
+                await asyncio.sleep(1.0 + publish_attempt)
+                continue
+
+            ok, err = await self._verify_or_repair(dest_tmp, task)
+            if ok:
+                # Atomic publish, with its own retry. A failure here must NEVER
+                # delete the prior final file — only a successful os.replace
+                # overwrites it, atomically.
+                for replace_attempt in range(5):
+                    try:
+                        os.replace(dest_tmp, task.output_path)
+                        await asyncio.to_thread(_fsync_dir, task.output_path.parent)
+                        task.error_message = None
+                        # Only now is the local copy safe to drop. This is a
+                        # best-effort delete: report it, don't lie about it — if
+                        # it fails (AV/indexer lock, remote fs), the publish is
+                        # still a success, but the leftover must not go unnoticed.
+                        if await asyncio.to_thread(_safe_unlink, staging):
+                            return True, None
+                        log.warning(
+                            f"Published '{task.track_title}' but could not delete "
+                            f"the local staging copy at {staging}; left in place "
+                            "(best-effort cleanup)."
+                        )
+                        self.rich_output.console.print(
+                            f"[yellow]⚠️  Published, but couldn't remove local "
+                            f"staging copy at {staging}[/] {task.track_title}"
+                        )
+                        return True, staging
+                    except OSError as e:
+                        task.error_message = f"atomic publish failed: {e}"
+                        log.warning(f"{task.error_message} (attempt {replace_attempt+1})")
+                        if replace_attempt == 4:
+                            _safe_unlink_warn(dest_tmp, "replace exhausted its retries")
+                            return False, staging  # keep staging; prior final untouched
+                        await asyncio.sleep(1.0 + replace_attempt)
+
+            # Destination copy is corrupt (e.g. a NAS that corrupts on flush).
+            # Drop it and re-copy from the surviving staging.
+            task.error_message = err
+            log.warning(f"Destination validation failed (attempt {publish_attempt+1}): {err}")
+            _safe_unlink_warn(dest_tmp, "cleanup after a corrupt destination copy")
+            if publish_attempt < 4:
+                await asyncio.sleep(1.0 + publish_attempt)
+
+        # Publish exhausted: best-effort clean the dest temp, KEEP the local staging.
+        _safe_unlink_warn(dest_tmp, "cleanup after publish exhausted its retries")
+        return False, staging
+
     async def _download_with_retry(
         self,
         task: DownloadTask,
@@ -561,6 +793,11 @@ class Downloader:
             # bar only needs resetting on a retry (the first attempt starts clean).
             task.bytes_downloaded = 0
             task.error_message = None
+            # A stale retained_staging from an earlier call (e.g. this same
+            # DownloadTask being retried later by an outer caller) must not
+            # survive into a fresh attempt — it's only meaningful as the direct
+            # outcome of THIS attempt's publish.
+            task.retained_staging = None
             if attempt > 1:
                 self.rich_output.download_reset(task_id)
 
@@ -635,117 +872,73 @@ class Downloader:
                             pass
                     return False
 
-                # Move temporary file to destination with retry logic
-                # This fixes WinError 32 on network shares where file close is not instant
-                move_success = False
-                for move_attempt in range(5):
-                    try:
-                        shutil.move(tmp_path, task.output_path)
-                        move_success = True
-                        break
-                    except OSError as e:
-                        # WinError 32: The process cannot access the file...
-                        if move_attempt == 4:
-                            log.warning(f"Failed to move file after 5 attempts: {e}")
-                            raise e
+                # Publish the downloaded staging to its destination. See
+                # _publish_staged for the copy -> fsync -> verify -> atomic-replace
+                # contract and its cross-filesystem rationale.
+                published, retained = await self._publish_staged(task, tmp_path)
 
-                        log.warning(f"File move locked (attempt {move_attempt+1}), retrying: {e}")
-                        await asyncio.sleep(1.0 + move_attempt)
-
-                tmp_path = None  # No longer exists, moved
-
-                # ===================================================================
-                # Critical validation: ensure the file is not corrupt
-                # ===================================================================
-                task.status = DownloadStatus.VERIFYING
-
-                is_valid, error_msg = await FileIntegrityChecker.verify_file_async(
-                    task.output_path,
-                    expected_size=task.expected_size,
-                    expected_hash=task.expected_hash
-                )
-
-                if not is_valid:
-                    task.status = DownloadStatus.CORRUPTED
-                    log.warning(f"File validation failed for '{task.track_title}': {error_msg}")
-
-                    # Attempt to repair MP4/M4A container using ffmpeg faststart remux
-                    if task.output_path.suffix.lower() in [".m4a", ".mp4", ".m4v"]:
-                        try:
-                            repaired_path = await asyncio.to_thread(fix_mp4_faststart, task.output_path)
-                            # Verify again after repair
-                            is_valid_repaired, error_msg_repaired = await FileIntegrityChecker.verify_file_async(repaired_path)
-
-                            if is_valid_repaired:
-                                self.rich_output.console.print(
-                                    f"[green]✓ Repaired container (moov atom) [/]{task.track_title}"
-                                )
-                                task.status = DownloadStatus.COMPLETED
-                                return True
-                            else:
-                                log.warning(f"Repair validation failed: {error_msg_repaired}")
-                        except Exception as repair_exc:
-                            log.error(f"Repair failed for '{task.track_title}': {repair_exc}")
-
-                    if task.can_retry:
-                        log.warning(
-                            f"File validation failed for '{task.track_title}' "
-                            f"(attempt {attempt}/{task.max_attempts}). Retrying..."
-                        )
+                if published:
+                    tmp_path = None  # staging consumed/deleted by the publisher
+                    task.status = DownloadStatus.COMPLETED
+                    # None unless _publish_staged could not delete the local
+                    # staging copy after a successful publish (see its docstring).
+                    task.retained_staging = retained
+                    if attempt > 1:
+                        log.info(f"Successfully downloaded '{task.track_title}' on attempt {attempt}")
                         self.rich_output.console.print(
-                            f"[yellow]⚠️  Corrupt file detected ({error_msg}), retrying... "
-                            f"({attempt}/{task.max_attempts})[/] {task.track_title}"
+                            f"[green]✓ Retry successful![/] {task.track_title}"
                         )
+                    return True
 
-                        # Delete corrupt file
-                        if task.output_path.exists():
-                            task.output_path.unlink()
-
-                        # Wait before retrying
-                        await asyncio.sleep(2)
-                        task.status = DownloadStatus.DOWNLOADING
-                        continue
-                    else:
-                        # Final attempt failed
-                        log.error(
-                            f"File validation failed for '{task.track_title}' "
-                            f"after {task.max_attempts} attempts. File is corrupt."
-                        )
-                        self.rich_output.console.print(
-                            f"[red]❌ File corrupt after {task.max_attempts} attempts: {error_msg}[/] {task.track_title}"
-                        )
-                        if task.output_path.exists():
-                            task.output_path.unlink()
-                        task.status = DownloadStatus.FAILED
-                        return False
-
-                # Successful validation
-                task.status = DownloadStatus.COMPLETED
-                if attempt > 1:
-                    log.info(f"Successfully downloaded '{task.track_title}' on attempt {attempt}")
-                    self.rich_output.console.print(
-                        f"[green]✓ Retry successful![/] {task.track_title}"
+                if retained is not None:
+                    # The download is intact but the DESTINATION could not be
+                    # published. Do NOT re-download: keep the local file so it can be
+                    # recovered / re-published later, and stop.
+                    tmp_path = None  # ownership handed to the retained staging
+                    task.status = DownloadStatus.FAILED
+                    task.retained_staging = retained
+                    log.error(
+                        f"Could not publish '{task.track_title}' to destination; kept "
+                        f"local copy at {retained} ({task.error_message})"
                     )
+                    self.rich_output.console.print(
+                        f"[red]❌ Could not publish to destination; kept local copy at "
+                        f"{retained}[/] {task.track_title}"
+                    )
+                    return False
 
-                return True
+                # The local staging itself was invalid -> re-download.
+                tmp_path = None  # already removed by the publisher
+                task.status = DownloadStatus.CORRUPTED
+                if task.can_retry:
+                    self.rich_output.console.print(
+                        f"[yellow]⚠️  Corrupt download ({task.error_message}), retrying... "
+                        f"({attempt}/{task.max_attempts})[/] {task.track_title}"
+                    )
+                    await asyncio.sleep(2)
+                    task.status = DownloadStatus.DOWNLOADING
+                    continue
+                else:
+                    self.rich_output.console.print(
+                        f"[red]❌ Download corrupt after {task.max_attempts} attempts: "
+                        f"{task.error_message}[/] {task.track_title}"
+                    )
+                    task.status = DownloadStatus.FAILED
+                    return False
 
             except Exception as e:
                 task.error_message = str(e)
                 log.error(f"Download error for '{task.track_title}' (attempt {attempt}): {e}")
 
-                # Clean up temporary file if exists
+                # Clean up the partial local staging from this failed attempt.
                 if tmp_path and tmp_path.exists():
                     try:
                         tmp_path.unlink()
-                    except:
+                    except OSError:
                         pass
-
-                # Clean up destination file if partial
-                if task.output_path.exists():
-                    try:
-                        task.output_path.unlink()
-                    except:
-                        pass
+                # NB: never delete task.output_path here. Download errors happen
+                # before publishing, so a prior valid final file must survive a
+                # failed attempt — only a successful atomic publish replaces it.
 
                 if task.can_retry:
                     self.rich_output.console.print(
