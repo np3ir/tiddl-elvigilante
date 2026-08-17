@@ -54,14 +54,24 @@ def _normalize_dir(path: Path) -> str:
     return os.path.normcase(os.path.normpath(s))
 
 
-def _safe_unlink(path: Optional[Path]) -> None:
-    """Delete a file if it exists, swallowing OS errors (best-effort cleanup)."""
+def _safe_unlink(path: Optional[Path]) -> bool:
+    """Delete a file if it exists, swallowing OS errors (best-effort cleanup).
+
+    Returns True if `path` is gone once this returns (deleted here, or it never
+    existed) and False if an existing file could NOT be removed (e.g. locked by
+    an antivirus/indexer, or a remote filesystem that rejects the unlink).
+    Callers that must not silently claim "no orphan left behind" — i.e. after a
+    successful publish, when the leftover would otherwise go unreported — should
+    check this return value instead of treating cleanup as unconditional."""
     if path is None:
-        return
+        return True
     try:
         Path(path).unlink()
+        return True
+    except FileNotFoundError:
+        return True
     except OSError:
-        pass
+        return False
 
 
 def _same_volume(a: Path, b: Path) -> bool:
@@ -614,11 +624,19 @@ class Downloader:
 
         Contract: the final path is only ever replaced atomically by a
         fully-verified candidate, and the known-good local staging is deleted
-        ONLY after a successful publish. A prior valid final file is never removed
-        by a failed publish.
+        (best-effort — see the ``(True, staging)`` case below) ONLY after a
+        successful publish. A prior valid final file is never removed by a failed
+        publish.
 
         Returns ``(published, retained_staging)``:
-          * ``(True, None)``    published; staging deleted; output_path is verified.
+          * ``(True, None)``    published; local staging deleted; output_path is
+                                 verified; ``task.error_message`` is cleared.
+          * ``(True, staging)``  published — output_path is verified and correct —
+                                 but the local staging copy could not be deleted
+                                 afterwards (best-effort cleanup failure, e.g. an
+                                 AV/indexer lock or a remote filesystem). Logged as
+                                 a warning; the leftover file is safe to delete
+                                 manually once noticed.
           * ``(False, staging)``  the DESTINATION could not be published; the local
                                   staging is retained (caller must NOT re-download);
                                   the prior final file and every temp created here
@@ -648,6 +666,8 @@ class Downloader:
             for move_attempt in range(5):
                 try:
                     os.replace(staging, task.output_path)
+                    await asyncio.to_thread(_fsync_dir, task.output_path.parent)
+                    task.error_message = None
                     return True, None
                 except OSError as e:
                     task.error_message = f"publish rename failed: {e}"
@@ -686,8 +706,23 @@ class Downloader:
                     try:
                         os.replace(dest_tmp, task.output_path)
                         await asyncio.to_thread(_fsync_dir, task.output_path.parent)
-                        _safe_unlink(staging)  # only now is the local copy safe to drop
-                        return True, None
+                        task.error_message = None
+                        # Only now is the local copy safe to drop. This is a
+                        # best-effort delete: report it, don't lie about it — if
+                        # it fails (AV/indexer lock, remote fs), the publish is
+                        # still a success, but the leftover must not go unnoticed.
+                        if await asyncio.to_thread(_safe_unlink, staging):
+                            return True, None
+                        log.warning(
+                            f"Published '{task.track_title}' but could not delete "
+                            f"the local staging copy at {staging}; left in place "
+                            "(best-effort cleanup)."
+                        )
+                        self.rich_output.console.print(
+                            f"[yellow]⚠️  Published, but couldn't remove local "
+                            f"staging copy at {staging}[/] {task.track_title}"
+                        )
+                        return True, staging
                     except OSError as e:
                         task.error_message = f"atomic publish failed: {e}"
                         log.warning(f"{task.error_message} (attempt {replace_attempt+1})")
@@ -743,6 +778,11 @@ class Downloader:
             # bar only needs resetting on a retry (the first attempt starts clean).
             task.bytes_downloaded = 0
             task.error_message = None
+            # A stale retained_staging from an earlier call (e.g. this same
+            # DownloadTask being retried later by an outer caller) must not
+            # survive into a fresh attempt — it's only meaningful as the direct
+            # outcome of THIS attempt's publish.
+            task.retained_staging = None
             if attempt > 1:
                 self.rich_output.download_reset(task_id)
 
@@ -825,6 +865,9 @@ class Downloader:
                 if published:
                     tmp_path = None  # staging consumed/deleted by the publisher
                     task.status = DownloadStatus.COMPLETED
+                    # None unless _publish_staged could not delete the local
+                    # staging copy after a successful publish (see its docstring).
+                    task.retained_staging = retained
                     if attempt > 1:
                         log.info(f"Successfully downloaded '{task.track_title}' on attempt {attempt}")
                         self.rich_output.console.print(

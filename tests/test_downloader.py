@@ -335,6 +335,8 @@ async def test_cross_volume_retries_transient_copy_error(
     assert calls["n"] == 3           # two transient failures, then success
     assert dest.stat().st_size == 5000
     assert not _dest_leftovers(tmp_path)
+    assert task.error_message is None       # a transient copy error must not linger
+    assert task.retained_staging is None    # publish was fully clean
 
 
 async def test_cross_volume_bad_copy_is_reverified_and_recopied(
@@ -356,6 +358,7 @@ async def test_cross_volume_bad_copy_is_reverified_and_recopied(
     assert dest.stat().st_size == 5000
     assert _no_staging_leftovers(stage_dir)
     assert not _dest_leftovers(tmp_path)
+    assert task.error_message is None       # the earlier corrupt-copy error must not linger
 
 
 async def test_cross_volume_hash_mismatch_is_detected(
@@ -423,6 +426,8 @@ async def test_cross_volume_replace_retries_then_succeeds(
     assert dest.stat().st_size == 5000
     assert not _dest_leftovers(tmp_path)
     assert _no_staging_leftovers(stage_dir)
+    assert task.error_message is None       # the transient replace error must not linger
+    assert task.retained_staging is None    # publish was fully clean, nothing retained
 
 
 async def test_cross_volume_replace_exhausted_keeps_prior_final(
@@ -513,6 +518,87 @@ async def test_publication_order_copy_fsync_verify_replace(
     assert ok is True
     # local staging verified first, then copy -> fsync -> destination verify -> atomic replace
     assert order == ["verify", "copy", "fsync", "verify", "replace"]
+
+
+async def test_same_volume_replace_retries_then_succeeds(
+    tmp_path, fast_sleep, stage_dir, monkeypatch
+):
+    monkeypatch.setattr(dlmod, "_same_volume", lambda a, b: True)
+    rfake, rcalls = _scripted_replace(["oserror", "ok"])
+    monkeypatch.setattr(dlmod.os, "replace", rfake)
+    server = await _start([("ok", 5000)])
+    dest = tmp_path / "out.bin"
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, _ = await _download(server, task)
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert task.attempts == 1          # rename retried in place; no re-download
+    assert rcalls["n"] == 2
+    assert task.status == DownloadStatus.COMPLETED
+    assert task.error_message is None  # the transient rename error must not linger
+    assert dest.stat().st_size == 5000
+
+
+async def test_same_volume_fsyncs_dest_dir_after_rename(
+    tmp_path, fast_sleep, stage_dir, monkeypatch
+):
+    monkeypatch.setattr(dlmod, "_same_volume", lambda a, b: True)
+    order = []
+    real_replace = os.replace
+    real_fsync_dir = dlmod._fsync_dir
+
+    def _replace(src, dst, *a, **k):
+        order.append("replace")
+        return real_replace(src, dst)
+
+    def _fsync_dir(p):
+        order.append("fsync_dir")
+        return real_fsync_dir(p)
+
+    monkeypatch.setattr(dlmod.os, "replace", _replace)
+    monkeypatch.setattr(dlmod, "_fsync_dir", _fsync_dir)
+
+    server = await _start([("ok", 5000)])
+    dest = tmp_path / "out.bin"
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, _ = await _download(server, task)
+    finally:
+        await server.close()
+
+    assert ok is True
+    # dir fsync happens right after the rename, same durability contract as
+    # the cross-filesystem path.
+    assert order == ["replace", "fsync_dir"]
+
+
+async def test_publish_success_survives_staging_unlink_failure(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    """A destination publish must not be reported as failed just because the
+    best-effort delete of the now-redundant local staging copy failed (e.g. an
+    AV/indexer lock, or a remote filesystem that rejects the unlink). The final
+    file must be correct, and the leftover staging must be surfaced via
+    task.retained_staging (+ a warning) rather than silently dropped."""
+    monkeypatch.setattr(dlmod, "_safe_unlink", lambda p: False)
+    server = await _start([("ok", 5000)])
+    dest = tmp_path / "out.bin"
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, _ = await _download(server, task)
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert task.status == DownloadStatus.COMPLETED
+    assert dest.stat().st_size == 5000            # the final file IS correct
+    assert task.error_message is None
+    assert task.retained_staging is not None      # leftover staging reported, not hidden
+    assert task.retained_staging.exists()
+    assert not _dest_leftovers(tmp_path)          # the dest-side .part temp is still cleaned up
 
 
 async def test_same_volume_uses_atomic_rename_not_copy(
