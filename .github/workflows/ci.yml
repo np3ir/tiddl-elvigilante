@@ -95,7 +95,10 @@ jobs:
       - name: Smoke-test from OUTSIDE the checkout (import the installed package)
         run: |
           venv_bin="$PWD/${{ matrix.venv_bin }}"
-          cd "$RUNNER_TEMP"
+          # Leave the checkout so its source tree can't shadow the installed
+          # package. Stay in POSIX space with `cd ..` instead of $RUNNER_TEMP,
+          # which Git Bash on Windows receives as a backslash path (D:\a\_temp).
+          cd ..
           "$venv_bin/tiddl" --help
           "$venv_bin/python" -c "import tiddl; from tiddl.cli.config import CONFIG; print('config OK')"
 
