@@ -1,5 +1,7 @@
 # Placeholders de plantillas de tiddl-elvigilante
 
+> [English version](PLACEHOLDERS.md)
+
 Referencia extraída del código actual de `tiddl-elvigilante`, principalmente de `tiddl/core/utils/format.py` y de las variables adicionales proporcionadas por los comandos de descarga.
 
 Los placeholders se escriben entre llaves dentro de una plantilla:

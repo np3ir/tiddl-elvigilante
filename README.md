@@ -247,6 +247,7 @@ artist_separator = " / "
 
 ### 📖 Getting Started
 - **[COMPLETE_COMMAND_REFERENCE.md](COMPLETE_COMMAND_REFERENCE.md)** ⭐ **START HERE** - Complete command and placeholder reference (734 lines)
+- **[PLACEHOLDERS.md](PLACEHOLDERS.md)** - Complete template placeholder reference with formatting rules and examples
 - **[PLACEHOLDERS_ES.md](PLACEHOLDERS_ES.md)** 🇪🇸 - Referencia completa de placeholders para plantillas, con formatos y ejemplos
 - **[QUICK_INDEX.md](QUICK_INDEX.md)** - Quick index and navigation guide
 - **[TUTORIAL_ES.md](TUTORIAL_ES.md)** 🇪🇸 - Guía paso a paso en español (instalación y configuración)
