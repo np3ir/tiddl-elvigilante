@@ -26,7 +26,8 @@ class _FakeClient:
     def fetch(self, *args, **kwargs):
         self.calls += 1
         item = self._script.pop(0)
-        if isinstance(item, BaseException):
+        # Exception, not BaseException: never simulate KeyboardInterrupt/SystemExit.
+        if isinstance(item, Exception):
             raise item
         return item
 
@@ -87,3 +88,32 @@ def test_network_errors_retry_up_to_the_limit(sleeps):
 
     assert client.calls == 11
     assert len(sleeps) == 10
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_server_errors_retry_with_backoff(sleeps, status):
+    # Only 500/502/503/504 are retryable server errors (see api.py). Each does the
+    # full 10 retries and backs off exponentially, capped at max_backoff (60s),
+    # with the jitter patched to 0.
+    client = _FakeClient([_http_error(status) for _ in range(11)])
+    api = TidalAPI(client, "1", "US")
+
+    with pytest.raises(HTTPError):
+        api._fetch_with_retry("Model", "path", {})
+
+    assert client.calls == 11  # 10 retries then give up
+    assert sleeps == [5, 10, 20, 40, 60, 60, 60, 60, 60, 60]
+
+
+def test_401_substatus_4005_is_not_retried(sleeps):
+    # subStatus 4005 ("content not ready/available") arrives on a 401/403 and is
+    # terminal — propagated without retry. (This is the real branch; not the
+    # 400 + 4005 that a review suggestion assumed.)
+    client = _FakeClient([_http_error(401, sub_status=4005)])
+    api = TidalAPI(client, "1", "US")
+
+    with pytest.raises(HTTPError):
+        api._fetch_with_retry("Model", "path", {})
+
+    assert client.calls == 1
+    assert sleeps == []
