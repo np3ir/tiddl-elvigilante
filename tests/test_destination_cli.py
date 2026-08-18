@@ -9,6 +9,7 @@ APP_PATH, matching tests/test_recover_cli.py's own convention.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from typer.testing import CliRunner
@@ -19,6 +20,24 @@ from tiddl.cli.app import app
 
 runner = CliRunner()
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Rich renders styled spans as separate ANSI-wrapped runs, so a run's
+    tail and the next run's head can be split across a word-wrapped line
+    with no literal space between them once escape codes are left in —
+    `_flat()`'s whitespace-flattening alone doesn't fix that. Strip codes
+    FIRST, then flatten whitespace. Same helper as
+    tests/test_recover_cli.py's, added there after an implementation-audit
+    finding (2026-08-18) reproduced two flaky failures here
+    (`test_trust_already_trusted_is_a_no_op_success` and
+    `test_trust_never_touches_registry_or_download_paths`) on a Windows
+    worktree, where the longer `C:\\Users\\...\\AppData\\Local\\Temp\\...`
+    tmp_path embedded in these messages shifts the wrap point versus this
+    sandbox's shorter `/tmp/...` paths."""
+    return _ANSI_RE.sub("", text)
+
 
 def _flat(text: str) -> str:
     """Rich's Console word-wraps long lines at terminal width, which can
@@ -26,7 +45,7 @@ def _flat(text: str) -> str:
     before substring-checking CLI output, same idea as
     tests/test_recover_cli.py's own output assertions avoid by checking
     short fragments — these messages are long enough to need it."""
-    return " ".join(text.split())
+    return " ".join(_strip_ansi(text).split())
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +110,11 @@ def test_trust_already_trusted_is_a_no_op_success(root):
     before = (root / da.MARKER_FILENAME).read_bytes()
     result = runner.invoke(app, ["destination", "trust", str(root), "--confirm-mounted"])
     assert result.exit_code == 0
-    assert "already trusted" in result.output
+    # Implementation-audit finding (2026-08-18): a longer tmp_path (e.g.
+    # Windows' `C:\Users\...\AppData\Local\Temp\...`) shifts Rich's word-wrap
+    # point and can split "already trusted" across a styled-span boundary —
+    # see _flat()'s docstring. Never substring-check raw result.output here.
+    assert "already trusted" in _flat(result.output)
     assert (root / da.MARKER_FILENAME).read_bytes() == before
 
 
@@ -195,11 +218,19 @@ def test_status_warns_on_corrupt_local_state(root):
 def test_trust_never_touches_registry_or_download_paths(root):
     # Sanity: `tiddl destination trust` only writes the marker + local
     # state, nothing else under APP_PATH.
+    #
+    # Implementation-audit finding (2026-08-18): whether FileLock leaves the
+    # `.lock` file behind afterwards is backend/version-dependent — not part
+    # of this feature's contract, just an implementation detail of whichever
+    # lock the `filelock` package picks on a given platform. Require the
+    # state file and allow the lock file as optional, instead of asserting
+    # the exact two-file set.
     before = set((da.APP_PATH).glob("**/*")) if da.APP_PATH.exists() else set()
     runner.invoke(app, ["destination", "trust", str(root), "--confirm-mounted"])
     after = set((da.APP_PATH).glob("**/*"))
     new_files = {p.name for p in (after - before) if p.is_file()}
-    assert new_files == {"destination_anchors.json", "destination_anchors.json.lock"}
+    assert "destination_anchors.json" in new_files
+    assert new_files <= {"destination_anchors.json", "destination_anchors.json.lock"}
 
 
 def test_marker_json_matches_documented_schema(root):
