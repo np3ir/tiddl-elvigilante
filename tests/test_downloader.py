@@ -9,6 +9,7 @@ end to end. Staging is redirected into the test's tmp dir so we can assert no
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import types
@@ -896,3 +897,89 @@ async def test_off_mode_retained_entry_never_carries_identity(
     entries = registrymod.read_entries().entries
     assert entries[0].destination_root is None
     assert entries[0].destination_anchor_id is None
+
+
+def _write_marker(root: Path, anchor_id: str) -> None:
+    """Writes a marker with a SPECIFIC anchor id, bypassing
+    establish_anchor() (which always mints a fresh random one) — used to
+    simulate a destination reappearing intact with its original marker,
+    as opposed to a fresh trust/re-trust."""
+    payload = json.dumps(
+        {"format": da.MARKER_FORMAT, "version": da.MARKER_VERSION, "anchor_id": anchor_id}
+    ).encode("utf-8")
+    da.marker_path(root).write_bytes(payload)
+
+
+async def test_pre_staging_identity_survives_a_publish_time_refusal(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    # Second implementation-audit finding (2026-08-18), P1 #1: identity must
+    # be captured at operations 1/2 (pre-staging), not only at operation 3
+    # (post-staging) — otherwise a root trusted before staging that
+    # disappears mid-download loses its identity entirely, and the
+    # resulting PUBLISH_PENDING entry falls back to legacy under strict
+    # recovery even though it really WAS verified before the download
+    # started.
+    #
+    # Mirrors the real wiring in Downloader.download(): call the real
+    # _guarded_mkdir (operations 1/2's guard) BEFORE staging and capture
+    # its result onto the task, exactly as downloader.py's two call sites
+    # do, then let the download/publish pipeline run with the marker
+    # removed mid-flight — simulating the destination disappearing during
+    # the download.
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    anchor_id = da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    mkdir_check = dlmod._guarded_mkdir(root, dest, "strict")
+    assert mkdir_check.reason == "trusted"
+
+    task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+    task.verified_root_key = da.root_key(root)
+    task.verified_anchor_id = mkdir_check.anchor_id
+
+    # Destination disappears mid-download, before operation 3's publish-
+    # time recheck runs.
+    da.marker_path(root).unlink()
+
+    server = await _start([("ok", 5000)])
+    try:
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is False
+    assert not dest.exists()  # never published
+
+    # THE fix: the pre-staging identity is NOT erased by the publish-time
+    # refusal.
+    assert task.verified_root_key == da.root_key(root)
+    assert task.verified_anchor_id == anchor_id
+
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.PUBLISH_PENDING
+    assert entries[0].destination_root == da.root_key(root)
+    assert entries[0].destination_anchor_id == anchor_id
+
+    # Restore the SAME marker (the destination reappears intact) -> strict
+    # recovery succeeds WITHOUT --bind-root.
+    _write_marker(root, anchor_id)
+    check = da.check_write_allowed(
+        Path(entries[0].destination_root), dest, mode="strict",
+        expected_anchor_id=entries[0].destination_anchor_id,
+    )
+    assert check.allowed is True
+
+    # Forget + re-trust with a DIFFERENT anchor -> refuses.
+    da.forget_anchor(root)
+    da.marker_path(root).unlink()
+    different_anchor_id = da.establish_anchor(root)
+    assert different_anchor_id != anchor_id
+    check2 = da.check_write_allowed(
+        Path(entries[0].destination_root), dest, mode="strict",
+        expected_anchor_id=entries[0].destination_anchor_id,
+    )
+    assert check2.allowed is False

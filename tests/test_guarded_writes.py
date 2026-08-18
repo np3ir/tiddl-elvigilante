@@ -316,3 +316,25 @@ def test_touch_guard_refuses_and_never_touches_when_untrusted(untrusted_root):
 
     assert excinfo.value.check.reason == "unknown_root"
     assert target.stat().st_mtime == 0  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Second implementation-audit finding (2026-08-18), P1 #1: identity must be
+# captured at operations 1/2 (pre-staging), not only at operation 3
+# (post-staging) — a refusal at operation 3 must never erase what 1/2
+# already captured.
+# ---------------------------------------------------------------------------
+
+def test_mkdir_guard_returns_the_trusted_check_for_capture(trusted_root):
+    target = trusted_root / "track.flac"
+    check = _guarded_mkdir(trusted_root, target, "strict")
+    assert check.reason == "trusted"
+    assert check.anchor_id is not None
+    assert check.anchor_id == da.read_marker(trusted_root)[1]
+
+
+def test_mkdir_guard_off_mode_returns_disabled_not_trusted(untrusted_root):
+    target = untrusted_root / "track.flac"
+    check = _guarded_mkdir(untrusted_root, target, "off")
+    assert check.reason == "disabled"
+    assert check.anchor_id is None

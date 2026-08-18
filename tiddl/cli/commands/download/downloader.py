@@ -43,7 +43,7 @@ CHUNK_SIZE = 1024**2
 MAX_RETRIES = 3  # Maximum number of retries for corrupt files
 
 
-def _guarded_mkdir(root: Path, path: Path, mode: str) -> None:
+def _guarded_mkdir(root: Path, path: Path, mode: str) -> "anchor.AnchorCheck":
     """Operations 1/2 (destination-volume identity, v2.2 §1): checked
     immediately before creating this item's directory — a refusal here is
     root-level (every quality attempt would hit the same untrusted root),
@@ -53,9 +53,19 @@ def _guarded_mkdir(root: Path, path: Path, mode: str) -> None:
     in `Downloader.download()`) so it's directly unit-testable without the
     surrounding streaming/quality-retry machinery — see
     tests/test_guarded_writes.py (implementation-audit P2 finding, missing
-    direct coverage for operations 1/2)."""
-    anchor.assert_write_allowed(root, path, mode)
+    direct coverage for operations 1/2).
+
+    Returns the successful `AnchorCheck` (second implementation-audit
+    finding, 2026-08-18, P1 #1): the caller must capture `root_key`/
+    `anchor_id` from THIS check, at this pre-staging moment, into the
+    `DownloadTask` it constructs right after — not re-derive it later from
+    operation 3's check, which runs only after the (possibly long) download
+    has already been staged and can refuse for an unrelated reason (the
+    destination disappearing mid-download), silently losing an identity
+    that WAS genuinely verified before staging began."""
+    check = anchor.assert_write_allowed(root, path, mode)
     path.parent.mkdir(exist_ok=True, parents=True)
+    return check
 
 
 def _normalize_dir(path: Path) -> str:
@@ -139,17 +149,32 @@ class DownloadTask:
     # silent bypass of a real download's guard (both real call sites always
     # set it).
     root: Optional[Path] = None
-    # Captured from the operation-3 guard in _publish_staged() the moment it
-    # passes with reason == "trusted" — i.e. this task's write was actually
-    # verified against a live, currently-trusted anchor, not just "no root
-    # was configured." (Implementation-audit finding, 2026-08-18: these were
-    # never captured, so every retained entry from a real download fell back
-    # to "legacy" under strict recovery regardless of destination_identity.)
+    # Captured at operation 1/2's PRE-STAGING guard (Downloader.download(),
+    # via `_guarded_mkdir`'s returned AnchorCheck), immediately after
+    # construction, the moment that check passes with reason == "trusted" —
+    # i.e. this task's destination was verified against a live,
+    # currently-trusted anchor BEFORE the (possibly long) network download
+    # even started. Operation 3's guard in _publish_staged() may REFRESH
+    # both fields on its own "trusted" pass (the anchor could have been
+    # re-verified, or even legitimately re-established, since staging
+    # began), but a refusal there must never erase this pre-staging value —
+    # _publish_staged()'s except branch never touches these fields, by
+    # construction.
+    #
+    # (Second implementation-audit finding, 2026-08-18, P1 #1: capturing
+    # ONLY at operation 3 was too late — a root trusted before staging that
+    # disappears during the download would refuse at operation 3 with
+    # nothing ever captured, and the resulting PUBLISH_PENDING entry would
+    # be written as legacy despite having been genuinely verified before
+    # staging began. First implementation-audit finding, 2026-08-18: before
+    # that, these fields didn't exist at all, so every retained entry fell
+    # back to "legacy" under strict recovery regardless of
+    # destination_identity.)
+    #
     # Both stay None when: mode == "off" (no anchor I/O happens, so there is
-    # nothing to capture — matches "off never persists identity"); task.root
-    # is None (guard skipped entirely); or the guard refused (in which case
-    # _publish_staged returns before ever reaching publish, so no retained-
-    # registry entry citing a verified anchor is ever created for it).
+    # nothing to capture); task.root is None (guard skipped entirely); or
+    # the operation-1/2 guard itself refused (in which case the item is
+    # aborted before a DownloadTask is even constructed for it).
     verified_root_key: Optional[str] = None
     verified_anchor_id: Optional[str] = None
 
@@ -697,12 +722,16 @@ class Downloader:
                     task.root, task.output_path, self.destination_identity,
                 )
                 if check.reason == "trusted":
-                    # Capture NOW, at the moment identity was actually
-                    # verified — not re-derived later, and not skipped just
-                    # because the publish below might still fail for an
-                    # unrelated I/O reason. A retained entry from that later
-                    # failure is still correctly attributable to this
-                    # verified anchor.
+                    # REFRESH (not the only capture point — see
+                    # DownloadTask.verified_root_key's docstring, second
+                    # implementation-audit finding, P1 #1): operations 1/2
+                    # already captured this pre-staging, at construction
+                    # time. This overwrites with the freshly-reverified
+                    # value here, closer to the actual write — not re-
+                    # derived later, and not skipped just because the
+                    # publish below might still fail for an unrelated I/O
+                    # reason. A retained entry from that later failure is
+                    # still correctly attributable to this verified anchor.
                     task.verified_root_key = anchor.root_key(task.root)
                     task.verified_anchor_id = check.anchor_id
             except anchor.DestinationNotTrusted as e:
@@ -713,6 +742,14 @@ class Downloader:
                 # refusal IS a publish failure, not a new failure mode with
                 # its own recovery mechanics. Distinguishable message so this
                 # is never mistaken for a generic I/O error.
+                #
+                # Deliberately does NOT touch task.verified_root_key/
+                # verified_anchor_id: if operations 1/2 captured a genuinely
+                # verified pre-staging identity, THIS refusal (the
+                # destination disappearing during staging) must never erase
+                # it — the retained PUBLISH_PENDING entry below still cites
+                # the anchor that really was trusted before the download
+                # started (second implementation-audit finding, P1 #1).
                 self.identity_tracker.mark_refused(e.check)
                 task.error_message = f"destination not trusted ({e.check.reason})"
                 _detail = f" ({e.check.detail})" if e.check.detail else ""
@@ -1254,7 +1291,7 @@ class Downloader:
                     # identically at a lower quality, so abort the item
                     # outright rather than retrying.
                     try:
-                        _guarded_mkdir(
+                        mkdir_check = _guarded_mkdir(
                             self.download_path, download_path, self.destination_identity,
                         )
                     except anchor.DestinationNotTrusted as e:
@@ -1277,6 +1314,12 @@ class Downloader:
                         track_title=display_title,
                         max_attempts=MAX_RETRIES
                     )
+                    if mkdir_check.reason == "trusted":
+                        # Capture NOW, pre-staging — see DownloadTask.
+                        # verified_root_key's docstring (second
+                        # implementation-audit finding, P1 #1).
+                        task.verified_root_key = anchor.root_key(self.download_path)
+                        task.verified_anchor_id = mkdir_check.anchor_id
 
                     download_success = await self._download_with_retry(
                         task=task,
@@ -1366,7 +1409,7 @@ class Downloader:
                     # operation 1 above: a refusal here is root-level, so
                     # abort the item instead of trying another video quality.
                     try:
-                        _guarded_mkdir(
+                        mkdir_check = _guarded_mkdir(
                             video_base, download_path, self.destination_identity,
                         )
                     except anchor.DestinationNotTrusted as e:
@@ -1397,6 +1440,12 @@ class Downloader:
                         track_title=display_title,
                         max_attempts=MAX_RETRIES
                     )
+                    if mkdir_check.reason == "trusted":
+                        # Capture NOW, pre-staging — see DownloadTask.
+                        # verified_root_key's docstring (second
+                        # implementation-audit finding, P1 #1).
+                        video_task.verified_root_key = anchor.root_key(video_base)
+                        video_task.verified_anchor_id = mkdir_check.anchor_id
 
                     download_success = await self._download_with_retry(
                         task=video_task,
