@@ -124,6 +124,19 @@ class DownloadTask:
     # silent bypass of a real download's guard (both real call sites always
     # set it).
     root: Optional[Path] = None
+    # Captured from the operation-3 guard in _publish_staged() the moment it
+    # passes with reason == "trusted" — i.e. this task's write was actually
+    # verified against a live, currently-trusted anchor, not just "no root
+    # was configured." (Implementation-audit finding, 2026-08-18: these were
+    # never captured, so every retained entry from a real download fell back
+    # to "legacy" under strict recovery regardless of destination_identity.)
+    # Both stay None when: mode == "off" (no anchor I/O happens, so there is
+    # nothing to capture — matches "off never persists identity"); task.root
+    # is None (guard skipped entirely); or the guard refused (in which case
+    # _publish_staged returns before ever reaching publish, so no retained-
+    # registry entry citing a verified anchor is ever created for it).
+    verified_root_key: Optional[str] = None
+    verified_anchor_id: Optional[str] = None
 
     @property
     def progress_percentage(self) -> float:
@@ -642,9 +655,18 @@ class Downloader:
         # DownloadTask.root's docstring above.
         if task.root is not None:
             try:
-                anchor.assert_write_allowed(
+                check = anchor.assert_write_allowed(
                     task.root, task.output_path, self.destination_identity,
                 )
+                if check.reason == "trusted":
+                    # Capture NOW, at the moment identity was actually
+                    # verified — not re-derived later, and not skipped just
+                    # because the publish below might still fail for an
+                    # unrelated I/O reason. A retained entry from that later
+                    # failure is still correctly attributable to this
+                    # verified anchor.
+                    task.verified_root_key = anchor.root_key(task.root)
+                    task.verified_anchor_id = check.anchor_id
             except anchor.DestinationNotTrusted as e:
                 # Class A (v2.3 §3): the track/video itself did not complete.
                 # Reported and retained via the exact same path an ordinary
@@ -831,6 +853,8 @@ class Downloader:
                             retained, task.output_path,
                             retained_registry.RetainReason.CLEANUP_PENDING,
                             track_title=task.track_title,
+                            destination_root=task.verified_root_key,
+                            destination_anchor_id=task.verified_anchor_id,
                         )
                         task.retained_staging = result.actual_path
                     if attempt > 1:
@@ -856,6 +880,8 @@ class Downloader:
                         retained, task.output_path,
                         retained_registry.RetainReason.PUBLISH_PENDING,
                         track_title=task.track_title,
+                        destination_root=task.verified_root_key,
+                        destination_anchor_id=task.verified_anchor_id,
                     )
                     task.retained_staging = result.actual_path
                     log.error(

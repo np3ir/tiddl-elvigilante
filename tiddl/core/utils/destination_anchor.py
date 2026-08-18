@@ -532,6 +532,16 @@ class AnchorCheck(NamedTuple):
     reason: AnchorCheckReason
     root: Path
     detail: Optional[str] = None
+    #: Set only when reason == "trusted" — the live, verified anchor id
+    #: (i.e. local-state record and on-disk marker already agreed, and
+    #: matched expected_anchor_id when one was given). None for every other
+    #: reason, including "disabled" (off mode never reads it) — a caller
+    #: that wants to persist "this write happened against a verified
+    #: anchor" (e.g. retained_registry.register_retained_file's
+    #: destination_root/destination_anchor_id pair) reads this field
+    #: instead of re-deriving it, added after an audit finding that no
+    #: caller could actually recover this value from a passing check.
+    anchor_id: Optional[str] = None
 
 
 class DestinationNotTrusted(Exception):
@@ -601,7 +611,7 @@ def check_write_allowed(
             "the recorded entry's anchor id does not match the currently live anchor",
         )
 
-    return AnchorCheck(True, "trusted", root)
+    return AnchorCheck(True, "trusted", root, anchor_id=marker_anchor_id)
 
 
 def assert_write_allowed(

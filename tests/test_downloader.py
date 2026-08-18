@@ -109,6 +109,11 @@ def _isolate_retained_registry(tmp_path, monkeypatch):
     """Every test in this module gets its own retained-staging registry +
     quarantine dir under pytest's tmp_path, never the real ~/.tiddl."""
     monkeypatch.setattr(registrymod, "APP_PATH", tmp_path / "_app")
+    # Same isolation for destination_anchor's local state — the identity
+    # tests below call da.establish_anchor()/check_write_allowed() directly,
+    # matching the convention every other test file in this suite already
+    # follows (test_destination_cli.py, test_recover_cli.py, test_m3u.py).
+    monkeypatch.setattr(da, "APP_PATH", tmp_path / "_app")
 
 
 @pytest.fixture
@@ -784,3 +789,73 @@ async def test_publish_task_without_root_skips_the_guard_entirely(
     assert ok is True
     assert dest.stat().st_size == 5000
     assert dl.identity_tracker.any_refused is False
+
+
+async def test_retained_entry_from_a_trusted_publish_carries_the_verified_identity(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    # Implementation-audit finding (2026-08-18): a retained entry from a real
+    # strict-mode download never carried destination_root/destination_anchor_id,
+    # so `tiddl recover` always classified it as legacy and refused until a
+    # manual --bind-root — defeating the point of capturing identity at all.
+    # Reproduced here via the CLEANUP_PENDING path (publish succeeds, the
+    # best-effort staging unlink fails) since it's the simplest way to force
+    # a retained_registry entry while keeping the root genuinely trusted.
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
+
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    anchor_id = da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert task.verified_root_key == da.root_key(root)
+    assert task.verified_anchor_id == anchor_id
+
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.CLEANUP_PENDING
+    assert entries[0].destination_root == da.root_key(root)
+    assert entries[0].destination_anchor_id == anchor_id
+
+    # And recovery picks it up WITHOUT --bind-root, because the identity was
+    # already captured at staging time — this is the actual point of §5.
+    check = da.check_write_allowed(
+        Path(entries[0].destination_root), dest, mode="strict",
+        expected_anchor_id=entries[0].destination_anchor_id,
+    )
+    assert check.allowed is True
+
+
+async def test_off_mode_retained_entry_never_carries_identity(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    # Requirement #4 (audit correction): off mode must never persist
+    # destination_root/destination_anchor_id, even when task.root is set.
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
+
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="off")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert task.verified_root_key is None
+    assert task.verified_anchor_id is None
+    entries = registrymod.read_entries().entries
+    assert entries[0].destination_root is None
+    assert entries[0].destination_anchor_id is None
