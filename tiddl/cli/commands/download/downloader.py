@@ -650,10 +650,33 @@ class Downloader:
         # check closer to the actual write than the directory-creation checks
         # (operations 1/2, in download() below) — narrows the gap between
         # those and the moment bytes actually land, since staging/verification
-        # above takes real time. Skipped entirely (no I/O, per check_write_
-        # allowed's own "off" no-op) when task.root wasn't set — see
-        # DownloadTask.root's docstring above.
-        if task.root is not None:
+        # above takes real time.
+        if task.root is None:
+            # Implementation-audit finding, P1 #2: a task with no configured
+            # root previously bypassed this guard ENTIRELY, including in
+            # strict mode — "no root was given" is not the same thing as
+            # "off mode," and must never silently publish unverified. Both
+            # current production DownloadTask() construction sites always
+            # set root (self.download_path / video_base); this branch exists
+            # only to catch a future constructor, refactor, or plugin that
+            # forgets to, and to fail closed rather than fail open when that
+            # happens under strict mode. Root-less tasks may still proceed
+            # unchecked under "off" — matches check_write_allowed's own
+            # "off" no-op (no anchor I/O either way).
+            if self.destination_identity == "strict":
+                synthetic_check = anchor.AnchorCheck(
+                    False, "no_root_configured", task.output_path,
+                    "task has no configured destination root; refusing in strict mode",
+                )
+                self.identity_tracker.mark_refused(synthetic_check)
+                task.error_message = "destination not trusted (no_root_configured)"
+                log.warning(
+                    f"[destination-identity] refused to publish '{task.track_title}' "
+                    f"to {task.output_path}: no destination root was configured for "
+                    f"this task while running in strict mode"
+                )
+                return False, staging
+        else:
             try:
                 check = anchor.assert_write_allowed(
                     task.root, task.output_path, self.destination_identity,

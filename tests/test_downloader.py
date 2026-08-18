@@ -770,19 +770,56 @@ async def test_publish_off_mode_ignores_an_untrusted_root(tmp_path, fast_sleep, 
     assert dl.identity_tracker.any_refused is False
 
 
-async def test_publish_task_without_root_skips_the_guard_entirely(
+async def test_publish_task_without_root_is_refused_in_strict_mode(
     tmp_path, fast_sleep, stage_dir
 ):
-    # A DownloadTask built without `root` (e.g. every other test in this
-    # file, predating this feature) must behave exactly as before: strict
-    # mode configured on the Downloader is irrelevant if this task never
-    # got a root, per DownloadTask.root's own docstring.
+    # Implementation-audit finding, P1 #2: a DownloadTask built without
+    # `root` used to skip the guard entirely and publish unchecked, even in
+    # strict mode — a fail-OPEN bypass. A future constructor, refactor, or
+    # plugin that forgets to set `root` must fail CLOSED instead: strict
+    # mode's whole promise is that an unverified destination never gets
+    # written to. This replaces the old
+    # test_publish_task_without_root_skips_the_guard_entirely, which
+    # codified the bypass as the intended behavior.
+    dest = tmp_path / "out.bin"
+    tracker = da.IdentityFailureTracker()
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, dl = await _download(
+            server, task, destination_identity="strict", identity_tracker=tracker,
+        )
+    finally:
+        await server.close()
+
+    assert ok is False
+    assert not dest.exists()  # never published
+    assert task.error_message and "no_root_configured" in task.error_message
+    assert tracker.any_refused is True
+    assert tracker.first_refusal.reason == "no_root_configured"
+    # Treated exactly like any other identity refusal: staging retained,
+    # registered PUBLISH_PENDING for later recovery.
+    assert task.retained_staging is not None
+    assert Path(task.retained_staging).exists()
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.PUBLISH_PENDING
+
+
+async def test_publish_task_without_root_still_works_in_off_mode(
+    tmp_path, fast_sleep, stage_dir
+):
+    # Root-less tasks may continue ONLY under mode="off" (v2.4 §1: off
+    # performs zero identity reads regardless of what root information is
+    # or isn't available) — this is the one case the audit explicitly
+    # allows a root-less task to keep publishing.
     dest = tmp_path / "out.bin"
 
     server = await _start([("ok", 5000)])
     try:
         task = DownloadTask(url="x", output_path=dest, expected_size=5000)
-        ok, dl = await _download(server, task, destination_identity="strict")
+        ok, dl = await _download(server, task, destination_identity="off")
     finally:
         await server.close()
 

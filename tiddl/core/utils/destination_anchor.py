@@ -524,6 +524,15 @@ AnchorCheckReason = Literal[
     "marker_unreadable",       # marker could not be physically read (or is a symlink)
     "marker_invalid",          # marker read but structurally wrong
     "id_mismatch",             # local record, marker, and/or expected_anchor_id disagree
+    "no_root_configured",      # strict mode, but the call site had no root to check at
+                                # all (never produced by check_write_allowed/
+                                # assert_write_allowed themselves — those always require
+                                # a root argument; this reason exists for a call site,
+                                # e.g. Downloader._publish_staged, that fails closed when
+                                # its own root-bearing task/config is missing a root
+                                # while running in strict mode. Implementation-audit
+                                # finding, P1 #2: previously such a call site skipped
+                                # the guard entirely instead of refusing).
 ]
 
 
