@@ -9,6 +9,14 @@ from requests.exceptions import RequestException
 log = getLogger(__name__)
 
 
+class CoverDataNotPrefetched(Exception):
+    """Raised by `Cover.write_prefetched()` when called with no data
+    already fetched. `write_prefetched()` must never perform network I/O
+    itself (implementation-audit finding, 2026-08-18, P1 #2) — a caller
+    that needs a guarded, network-free write must fetch first and is
+    expected to check the result before calling this."""
+
+
 class Cover:
     uid: str
     url: str
@@ -74,6 +82,10 @@ class Cover:
         if not self.data:
             self.data = self._get_data()
 
+        if not self.data:
+            log.warning(f"no cover data available, skipping write for {file}")
+            return
+
         self.write_prefetched(path)
 
     def write_prefetched(self, path: Path) -> None:
@@ -85,9 +97,18 @@ class Cover:
         the check-to-write window by however long the fetch's retry backoff
         took (implementation-audit finding, 2026-08-18, P1 #3).
 
-        Assumes `self.data` is already populated (via `_get_data()`); falls
-        back to fetching it here only as a defensive no-op-avoidance, never
-        as the expected path for a guarded caller.
+        This method NEVER performs network I/O — it does not call
+        `_get_data()` under any circumstance. An earlier version had a
+        "defensive" fallback (`if not self.data: self.data =
+        self._get_data()`) that looked harmless but was NOT: `_get_data()`
+        returns `b""` on a network/HTTP failure WITHOUT ever assigning
+        `self.data`, so `not self.data` stayed True and every legitimately-
+        empty first fetch triggered a second network fetch here — silently
+        reopening the exact check-to-write race this split was meant to
+        close (second implementation-audit finding, 2026-08-18, P1 #2).
+        Raises `CoverDataNotPrefetched` instead if `self.data` isn't
+        already a non-empty `bytes` — a programming-error signal to the
+        caller, never a silent no-op or a silent fetch.
         """
         file = path.with_suffix(".jpg")
 
@@ -96,7 +117,12 @@ class Cover:
             return
 
         if not self.data:
-            self.data = self._get_data()
+            raise CoverDataNotPrefetched(
+                "write_prefetched() requires self.data to already be "
+                "populated with a non-empty fetch result — it will not "
+                "fetch it itself. Call _get_data() (or set .data directly) "
+                "and check the result before calling this."
+            )
 
         file.parent.mkdir(parents=True, exist_ok=True)
 

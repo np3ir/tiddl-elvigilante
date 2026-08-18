@@ -38,7 +38,7 @@ from tiddl.cli.commands.download import (
     _write_video_metadata_guarded,
 )
 from tiddl.cli.commands.download.downloader import _guarded_mkdir
-from tiddl.core.metadata import Cover
+from tiddl.core.metadata import Cover, CoverDataNotPrefetched
 
 
 @pytest.fixture(autouse=True)
@@ -316,6 +316,102 @@ def test_touch_guard_refuses_and_never_touches_when_untrusted(untrusted_root):
 
     assert excinfo.value.check.reason == "unknown_root"
     assert target.stat().st_mtime == 0  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Second implementation-audit finding (2026-08-18), P1 #2: write_prefetched()
+# was not actually network-free — a failed first fetch left cover.data
+# falsy, and its own fallback silently fetched AGAIN, after the identity
+# check had already run once (for _guarded_save_cover's guarded write).
+# These tests pin the fixed contract: _get_data() is called AT MOST ONCE by
+# _guarded_save_cover, and write_prefetched() never calls it at all.
+# ---------------------------------------------------------------------------
+
+def test_write_prefetched_never_fetches_and_raises_without_data(tmp_path):
+    cover = Cover("uid-1")
+
+    def _must_not_be_called():
+        pytest.fail("write_prefetched() must never call _get_data()")
+
+    cover._get_data = _must_not_be_called  # type: ignore[method-assign]
+    assert cover.data is None
+
+    with pytest.raises(CoverDataNotPrefetched):
+        cover.write_prefetched(tmp_path / "cover")
+
+    assert not (tmp_path / "cover.jpg").exists()
+
+
+def test_write_prefetched_writes_when_data_already_present(tmp_path):
+    cover = Cover("uid-1")
+    cover.data = b"jpegbytes"
+
+    cover.write_prefetched(tmp_path / "cover")
+
+    assert (tmp_path / "cover.jpg").read_bytes() == b"jpegbytes"
+
+
+async def test_cover_guard_fetches_exactly_once_when_trusted(trusted_root, monkeypatch):
+    cover = Cover("uid-1")
+    calls = []
+
+    def _get_data():
+        calls.append(1)
+        return b"jpegbytes"
+
+    monkeypatch.setattr(cover, "_get_data", _get_data)
+    tracker = da.IdentityFailureTracker()
+    cover_path = trusted_root / "cover"
+
+    await _guarded_save_cover(cover, trusted_root, cover_path, "strict", tracker, "album")
+
+    assert len(calls) == 1  # never fetched twice
+    assert cover_path.with_suffix(".jpg").read_bytes() == b"jpegbytes"
+
+
+async def test_cover_guard_writes_nothing_on_empty_fetch_data(trusted_root, monkeypatch):
+    # A legitimately empty fetch result (network/HTTP failure inside
+    # _get_data, which returns b"" without raising) must skip the write
+    # entirely — no file, no identity check, no second fetch attempt, and
+    # NOT reported as a destination-identity refusal (it's a fetch
+    # failure, unrelated to trust).
+    cover = Cover("uid-1")
+    calls = []
+
+    def _get_data():
+        calls.append(1)
+        return b""
+
+    monkeypatch.setattr(cover, "_get_data", _get_data)
+    tracker = da.IdentityFailureTracker()
+    cover_path = trusted_root / "cover"
+
+    await _guarded_save_cover(cover, trusted_root, cover_path, "strict", tracker, "album")
+
+    assert len(calls) == 1  # exactly one fetch attempt, never a silent retry
+    assert not cover_path.with_suffix(".jpg").exists()
+    assert tracker.any_refused is False
+
+
+async def test_cover_guard_never_fetches_twice_even_when_untrusted(
+    untrusted_root, monkeypatch
+):
+    cover = Cover("uid-1")
+    calls = []
+
+    def _get_data():
+        calls.append(1)
+        return b"jpegbytes"
+
+    monkeypatch.setattr(cover, "_get_data", _get_data)
+    tracker = da.IdentityFailureTracker()
+    cover_path = untrusted_root / "cover"
+
+    await _guarded_save_cover(cover, untrusted_root, cover_path, "strict", tracker, "album")
+
+    assert len(calls) == 1
+    assert not cover_path.with_suffix(".jpg").exists()
+    assert tracker.any_refused is True
 
 
 # ---------------------------------------------------------------------------

@@ -189,15 +189,32 @@ async def _guarded_save_cover(
     gap `Cover.save_to_directory()` used to leave open by fetching AFTER a
     passing pre-dispatch check. The check and the actual file write then run
     together, synchronously, inside one `asyncio.to_thread` dispatch, via
-    `Cover.write_prefetched` (no network I/O in that call). Catches
-    `DestinationNotTrusted` here, on the event loop, and marks `tracker` —
-    the same safeguard-#2 discipline as the metadata helpers above."""
+    `Cover.write_prefetched` (no network I/O in that call — it raises
+    `CoverDataNotPrefetched` rather than fetching if `data` weren't already
+    prefetched, so a second network fetch can never happen from inside the
+    guarded worker). Catches `DestinationNotTrusted` here, on the event
+    loop, and marks `tracker` — the same safeguard-#2 discipline as the
+    metadata helpers above.
+
+    Second implementation-audit finding (2026-08-18), P1 #2: the fetch
+    result is assigned to a local explicitly and checked BEFORE dispatching
+    the guarded write — `cover.data` alone is not trustworthy here (a
+    failed fetch leaves it `None`/falsy, and the old code's implicit
+    reliance on `write_prefetched`'s own now-removed fallback silently
+    re-fetched over the network on every such failure, after the identity
+    check had already run once)."""
     file = path.with_suffix(".jpg")
     if file.exists():
         log.debug(f"cover exists ({file})")
         return
 
-    await asyncio.to_thread(cover._get_data)
+    data = await asyncio.to_thread(cover._get_data)
+    if not data:
+        log.warning(
+            f"[destination-identity] no {label} cover data fetched, skipping write for {path}"
+        )
+        return
+    cover.data = data
 
     def _guarded_write() -> None:
         anchor.assert_write_allowed(root, path, mode)
