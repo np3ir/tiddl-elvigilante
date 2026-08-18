@@ -12,12 +12,14 @@ import hashlib
 import os
 import shutil
 import types
+from pathlib import Path
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 import tiddl.cli.commands.download.downloader as dlmod
+import tiddl.core.utils.destination_anchor as da
 import tiddl.core.utils.fsio as fsiomod
 import tiddl.core.utils.publish as publishmod
 import tiddl.core.utils.retained_registry as registrymod
@@ -52,9 +54,11 @@ class _StubDownloader:
     _publish_staged = Downloader._publish_staged
     _verify_or_repair = Downloader._verify_or_repair
 
-    def __init__(self):
+    def __init__(self, destination_identity="off", identity_tracker=None):
         self._http_session = None
         self.rich_output = _StubOutput()
+        self.destination_identity = destination_identity
+        self.identity_tracker = identity_tracker or da.IdentityFailureTracker()
 
 
 def _scripted_app(script: list) -> web.Application:
@@ -141,10 +145,10 @@ def _no_staging_leftovers(stage_dir) -> bool:
     return not list(stage_dir.glob("tiddl-*.part.*"))
 
 
-async def _download(server: TestServer, task: DownloadTask):
+async def _download(server: TestServer, task: DownloadTask, **stub_kwargs):
     """Returns (ok, stub) so a test can inspect the stub (e.g. visual resets)."""
     url = str(server.make_url("/track"))
-    dl = _StubDownloader()
+    dl = _StubDownloader(**stub_kwargs)
     try:
         ok = await dl._download_with_retry(task, [url], task_id=0)
     finally:
@@ -681,3 +685,102 @@ async def test_same_volume_uses_atomic_rename_not_copy(
 
     assert ok is True                # published via atomic os.replace, no copy
     assert dest.stat().st_size == 5000
+
+
+# ------------------------------------------------------------------
+# Destination-volume identity — operation 3 (media publication), the
+# tightest of the nine guarded writes (see tiddl.core.utils.destination_
+# anchor and PROPOSAL_destination_volume_identity_v2_1..v2_4.md, kept
+# local/untracked). Exercised end to end via _download_with_retry so the
+# real staging -> verify -> guard -> publish chain runs, not a mock of it.
+# ------------------------------------------------------------------
+
+async def test_publish_refused_by_untrusted_root_retains_staging_as_publish_pending(
+    tmp_path, fast_sleep, stage_dir
+):
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    dest = root / "out.bin"
+    tracker = da.IdentityFailureTracker()
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(
+            server, task, destination_identity="strict", identity_tracker=tracker,
+        )
+    finally:
+        await server.close()
+
+    assert ok is False
+    assert not dest.exists()  # never published
+    assert task.error_message and "destination not trusted" in task.error_message
+    assert tracker.any_refused is True
+    # Class A (v2.3 §3): treated exactly like any other publish failure —
+    # the verified local copy is retained, not deleted, and registered for
+    # `tiddl recover` to pick up later once the root is actually trusted.
+    assert task.retained_staging is not None
+    assert Path(task.retained_staging).exists()
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.PUBLISH_PENDING
+    assert entries[0].output_path == str(dest)
+
+
+async def test_publish_succeeds_when_root_is_trusted(tmp_path, fast_sleep, stage_dir):
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert dest.stat().st_size == 5000
+    assert dl.identity_tracker.any_refused is False
+    assert registrymod.read_entries().entries == []
+
+
+async def test_publish_off_mode_ignores_an_untrusted_root(tmp_path, fast_sleep, stage_dir):
+    # "off" performs zero identity reads (v2.4 §1) — root has no anchor and
+    # no local trust record at all, yet the publish proceeds unaffected.
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="off")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert dest.stat().st_size == 5000
+    assert dl.identity_tracker.any_refused is False
+
+
+async def test_publish_task_without_root_skips_the_guard_entirely(
+    tmp_path, fast_sleep, stage_dir
+):
+    # A DownloadTask built without `root` (e.g. every other test in this
+    # file, predating this feature) must behave exactly as before: strict
+    # mode configured on the Downloader is irrelevant if this task never
+    # got a root, per DownloadTask.root's own docstring.
+    dest = tmp_path / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert dest.stat().st_size == 5000
+    assert dl.identity_tracker.any_refused is False

@@ -33,6 +33,7 @@ from tiddl.core.api.playback import report_playback
 from tiddl.core.utils.fsio import _safe_unlink
 from tiddl.core.utils.publish import publish_verified_file
 from tiddl.core.utils import retained_registry
+from tiddl.core.utils import destination_anchor as anchor
 
 from .output import RichOutput
 
@@ -113,6 +114,16 @@ class DownloadTask:
     # Set when the download succeeded but the destination could not be published:
     # the verified local file is kept here for recovery/re-publish (never deleted).
     retained_staging: Optional[Path] = None
+    # The configured destination root this task's output_path must live under
+    # (self.download_path, or video_base for videos) — see
+    # tiddl.core.utils.destination_anchor. Set by both real construction sites
+    # in Downloader.download() below; left None only by hand-constructed
+    # DownloadTask instances (mostly tests) that don't exercise the
+    # destination-identity guard — _publish_staged() skips the check entirely
+    # when this is None, which is exactly pre-feature behavior, never a
+    # silent bypass of a real download's guard (both real call sites always
+    # set it).
+    root: Optional[Path] = None
 
     @property
     def progress_percentage(self) -> float:
@@ -266,6 +277,8 @@ class Downloader:
     download_path: Path
     scan_path: Path
     video_download_path: Optional[Path]
+    destination_identity: Literal["off", "strict"]
+    identity_tracker: "anchor.IdentityFailureTracker"
 
     def __init__(
         self,
@@ -280,6 +293,8 @@ class Downloader:
         scan_path: Path,
         video_download_path: Optional[Path] = None,
         fallback_api: Optional[TidalAPI] = None,
+        destination_identity: Literal["off", "strict"] = "off",
+        identity_tracker: Optional["anchor.IdentityFailureTracker"] = None,
     ) -> None:
         self.api = tidal_api
         # Modo hibrido: cliente TV (lossless) para cuando el primario (HiRes)
@@ -294,6 +309,14 @@ class Downloader:
         self.download_path = download_path
         self.scan_path = scan_path
         self.video_download_path = video_download_path
+        self.destination_identity = destination_identity
+        # One tracker per `tiddl download` invocation, passed explicitly by
+        # the caller (never a module global — v2.4 mandatory safeguard #2).
+        # Falls back to a throwaway instance so a Downloader constructed
+        # without one (tests, or any future caller that doesn't care about
+        # this feature) never hits an AttributeError — its any_refused is
+        # simply never observed by anything outside this instance.
+        self.identity_tracker = identity_tracker or anchor.IdentityFailureTracker()
         self.dir_cache: dict[Path, set[str]] = {}
         # Flat index: stem → set of extensions, para lookup de alternativas sin re-escanear
         self._stem_index: dict[str, set[str]] = {}
@@ -609,6 +632,35 @@ class Downloader:
             task.error_message = f"local file invalid: {err}"
             _safe_unlink(staging)
             return False, None
+
+        # Operation 3 (destination-volume identity, v2.2 §1): a second, tighter
+        # check closer to the actual write than the directory-creation checks
+        # (operations 1/2, in download() below) — narrows the gap between
+        # those and the moment bytes actually land, since staging/verification
+        # above takes real time. Skipped entirely (no I/O, per check_write_
+        # allowed's own "off" no-op) when task.root wasn't set — see
+        # DownloadTask.root's docstring above.
+        if task.root is not None:
+            try:
+                anchor.assert_write_allowed(
+                    task.root, task.output_path, self.destination_identity,
+                )
+            except anchor.DestinationNotTrusted as e:
+                # Class A (v2.3 §3): the track/video itself did not complete.
+                # Reported and retained via the exact same path an ordinary
+                # "destination could not be published" failure already takes
+                # below (retained_registry.PUBLISH_PENDING) — an identity
+                # refusal IS a publish failure, not a new failure mode with
+                # its own recovery mechanics. Distinguishable message so this
+                # is never mistaken for a generic I/O error.
+                self.identity_tracker.mark_refused(e.check)
+                task.error_message = f"destination not trusted ({e.check.reason})"
+                _detail = f" ({e.check.detail})" if e.check.detail else ""
+                log.warning(
+                    f"[destination-identity] refused to publish '{task.track_title}' "
+                    f"to {task.output_path}: {e.check.reason}{_detail}"
+                )
+                return False, staging
 
         # 2/3. Same-volume atomic rename, or cross-filesystem copy -> fsync ->
         #      verify -> atomic replace. Extracted to `publish_verified_file`
@@ -1132,11 +1184,34 @@ class Downloader:
 
                     task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
 
+                    # Operation 1 (destination-volume identity, v2.2 §1): checked
+                    # before this item's own directory even exists. A refusal
+                    # here means every quality attempt would hit the same
+                    # untrusted root, so abort the item outright rather than
+                    # retrying at a lower quality (which _prepare_long_path's
+                    # alias-stripping-aware comparison would refuse identically).
+                    try:
+                        anchor.assert_write_allowed(
+                            self.download_path, download_path, self.destination_identity,
+                        )
+                    except anchor.DestinationNotTrusted as e:
+                        self.identity_tracker.mark_refused(e.check)
+                        self.rich_output.download_finish(task_id=task_id)
+                        log.warning(
+                            f"[destination-identity] refused to create directory for "
+                            f"'{display_title}': {e.check.reason}"
+                        )
+                        self.rich_output.console.print(
+                            f"[red]❌ Destination not trusted ({e.check.reason})[/] {display_title}"
+                        )
+                        return None, False
+
                     download_path.parent.mkdir(exist_ok=True, parents=True)
 
                     task = DownloadTask(
                         url=urls[0] if urls else "",
                         output_path=download_path,
+                        root=self.download_path,
                         track_id=item.id,
                         track_title=display_title,
                         max_attempts=MAX_RETRIES
@@ -1225,6 +1300,24 @@ class Downloader:
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
 
+                    # Operation 2 (destination-volume identity, v2.2 §1) — same
+                    # reasoning as operation 1 above: a refusal here is root-level,
+                    # so abort the item instead of trying another video quality.
+                    try:
+                        anchor.assert_write_allowed(
+                            video_base, download_path, self.destination_identity,
+                        )
+                    except anchor.DestinationNotTrusted as e:
+                        self.identity_tracker.mark_refused(e.check)
+                        log.warning(
+                            f"[destination-identity] refused to create directory for "
+                            f"'{display_title}': {e.check.reason}"
+                        )
+                        self.rich_output.console.print(
+                            f"[red]❌ Destination not trusted ({e.check.reason})[/] {display_title}"
+                        )
+                        return None, False
+
                     download_path.parent.mkdir(exist_ok=True, parents=True)
 
                     # Parse M3U8 to get segment URLs (blocking I/O → thread)
@@ -1239,6 +1332,7 @@ class Downloader:
                     video_task = DownloadTask(
                         url=urls[0] if urls else "",
                         output_path=download_path,
+                        root=video_base,
                         track_id=item.id,
                         track_title=display_title,
                         max_attempts=MAX_RETRIES
