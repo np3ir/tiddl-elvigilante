@@ -19,6 +19,19 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ### ✨ Added
 
+- **Destination-volume identity** (`tiddl/core/utils/destination_anchor.py`, `tiddl destination trust/status/forget`, `tiddl recover --bind-root`)
+  — Opt-in guard (`[download] destination_identity = "strict"`, default `"off"`) against
+  writing to the wrong place when a NAS/USB/network destination is unmounted and the
+  path silently falls back to a local folder that happens to share the same name.
+  `tiddl destination trust <path>` writes a small marker file at the real destination
+  root plus a per-machine local record; every one of the nine places a download or
+  recovery writes to disk (track/video directory creation, media publication, `.lrc`,
+  track/video metadata, M3U, cover, mtime update) refuses in `strict` mode unless the
+  configured root's marker and local record still agree. A refusal never loses data —
+  the verified local copy is retained (`tiddl recover` picks it up once the real
+  destination is trusted again) and the command exits non-zero. `"off"` performs zero
+  extra filesystem reads; existing installs are unaffected until this is turned on.
+
 - **`--embed-lyrics` / `--save-lyrics` per-run overrides** (`tiddl/cli/commands/download/__init__.py`)
   — Lyrics options lived only in `[metadata]` config. The new paired flags
   (`--save-lyrics/--no-save-lyrics`, `--embed-lyrics/--no-embed-lyrics`) override the
