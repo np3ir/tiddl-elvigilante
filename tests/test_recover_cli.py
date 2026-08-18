@@ -539,6 +539,68 @@ def test_bind_root_refuses_an_already_identified_entry(tmp_path):
     assert "already has a destination identity" in result.output
 
 
+def test_bind_root_refuses_if_marker_disappears_during_confirmation(tmp_path, monkeypatch):
+    # Implementation-audit finding (2026-08-18), P1 #4: the original code
+    # re-read the marker independently (`anchor.read_marker(root)`),
+    # uncoordinated with the earlier `check_write_allowed` call, and never
+    # accounted for the confirmation prompt itself taking arbitrary real
+    # time. Simulates the destination disappearing WHILE the user is still
+    # looking at the "Proceed?" prompt — the persisted pair must come from
+    # a check re-run AFTER confirmation, not the stale pre-prompt one.
+    import tiddl.cli.commands.recover as recovermod
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B7")
+    root = dest.parent
+    da.establish_anchor(root)
+
+    def _confirm_then_vanish(*args, **kwargs):
+        da.marker_path(root).unlink()
+        return True
+
+    monkeypatch.setattr(recovermod.typer, "confirm", _confirm_then_vanish)
+
+    result = runner.invoke(app, ["recover", "--bind-root", entry.id[:8], "--root", str(root)])
+    assert result.exit_code == 1
+    normalized = " ".join(_strip_ansi(result.output).split())
+    assert "no longer trusted" in normalized
+    # Byte-for-byte unchanged — never a half-written destination_root/
+    # destination_anchor_id pair (the both-or-neither invariant).
+    unchanged = reg.read_entries().entries[0]
+    assert unchanged.destination_root is None
+    assert unchanged.destination_anchor_id is None
+
+
+def test_bind_root_persists_the_post_confirmation_anchor_when_it_changed(tmp_path, monkeypatch):
+    # The marker can also CHANGE (not just vanish) during confirmation —
+    # e.g. a concurrent forget + re-trust with a new anchor id. The
+    # persisted id must be the fresh, post-confirmation one, never the
+    # stale pre-prompt id that the first check happened to see.
+    import tiddl.cli.commands.recover as recovermod
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B8")
+    root = dest.parent
+    old_anchor_id = da.establish_anchor(root)
+
+    new_anchor_id = None
+
+    def _confirm_then_retrust(*args, **kwargs):
+        nonlocal new_anchor_id
+        da.forget_anchor(root)
+        da.marker_path(root).unlink()
+        new_anchor_id = da.establish_anchor(root)
+        return True
+
+    monkeypatch.setattr(recovermod.typer, "confirm", _confirm_then_retrust)
+
+    result = runner.invoke(app, ["recover", "--bind-root", entry.id[:8], "--root", str(root)])
+    assert result.exit_code == 0
+    assert new_anchor_id is not None and new_anchor_id != old_anchor_id
+    bound = reg.read_entries().entries[0]
+    assert bound.destination_anchor_id == new_anchor_id
+
+
 def test_strict_mode_legacy_entry_refuses_and_names_bind_root(tmp_path, _strict_mode):
     entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S1")
     result = runner.invoke(app, ["recover", "--publish", entry.id[:8]])

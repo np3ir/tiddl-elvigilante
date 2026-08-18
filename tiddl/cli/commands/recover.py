@@ -539,8 +539,6 @@ def recover(
                 )
                 raise typer.Exit(1)
 
-            _, live_anchor_id, _ = anchor.read_marker(root)
-
             console.print(
                 f"About to bind {entry.id[:8]} ({entry.output_path}) to trusted root {root}."
             )
@@ -548,13 +546,39 @@ def recover(
                 console.print("[yellow]Aborted — nothing changed.[/]")
                 raise typer.Exit(1)
 
+            # Implementation-audit finding (2026-08-18), P1 #4: the original
+            # code re-read the marker independently here
+            # (`anchor.read_marker(root)`), uncoordinated with the
+            # `check_write_allowed` call above — the marker could disappear
+            # or change between those two reads, letting a `None`
+            # live_anchor_id pair with a non-None destination_root and
+            # violate the registry's both-or-neither invariant. It also
+            # never accounted for the confirmation prompt itself taking
+            # arbitrary real time, during which the pre-prompt check could
+            # go stale.
+            #
+            # Fix: re-run ONE fresh, structured `check_write_allowed` right
+            # here, after confirmation, and persist the root/id pair from
+            # THAT SAME result — never a second, separate `read_marker()`
+            # call. This never ignores read_marker()'s status: check.reason
+            # is derived directly from it (marker_absent/marker_unreadable/
+            # marker_invalid/trusted), just never re-derived independently.
+            check = anchor.check_write_allowed(root, root, mode="strict")
+            if not check.allowed:
+                console.print(
+                    f"[red]'{root}' is no longer trusted ({check.reason}) — nothing "
+                    "was changed. Re-run 'tiddl destination trust' and try again.[/]"
+                )
+                raise typer.Exit(1)
+
             await asyncio.to_thread(
                 registry.update_entry, entry.id,
                 destination_root=anchor.root_key(root),
-                destination_anchor_id=live_anchor_id,
+                destination_anchor_id=check.anchor_id,
             )
             console.print(
-                f"[green]✓[/] Bound {entry.id[:8]} to {root} (anchor {live_anchor_id[:8]}...)."
+                f"[green]✓[/] Bound {entry.id[:8]} to {root} "
+                f"(anchor {check.anchor_id[:8]}...)."
             )
             return
 
