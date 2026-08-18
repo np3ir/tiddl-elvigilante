@@ -213,6 +213,28 @@ async def _guarded_save_cover(
         )
 
 
+def _write_lrc_guarded(item_root: Path, lrc_path: Path, mode: str, text: str) -> None:
+    """Operation 4. Runs on the event loop, not a worker thread (the write
+    itself is a small synchronous text write, never dispatched to
+    asyncio.to_thread) — check and write are already adjacent statements
+    with no gap to close, unlike operations 5/6/8. Standalone module-level
+    function purely for direct unit-test coverage (implementation-audit P2
+    finding — this operation class had no dedicated test)."""
+    anchor.assert_write_allowed(item_root, lrc_path, mode)
+    lrc_path.write_text(text, encoding="utf-8")
+
+
+def _touch_guarded(item_root: Path, download_path: Path, mode: str) -> None:
+    """Operation 9 (v2.3 §1). Same non-threaded reasoning as
+    `_write_lrc_guarded` above — extracted only for direct unit-test
+    coverage. Unlike operations 4/5/6, a refusal here is COSMETIC: the
+    caller must never treat this as withholding the already-completed
+    `_db_insert` (Class B's documented exception, v2.3 §3) — that
+    distinction is the caller's responsibility, not this function's."""
+    anchor.assert_write_allowed(item_root, download_path, mode)
+    os.utime(download_path, None)
+
+
 @download_command.callback(no_args_is_help=True)
 def download_callback(
     ctx: Context,
@@ -816,11 +838,11 @@ def download_callback(
                                 if fetched_lyrics:
                                     if CONFIG.metadata.save_lyrics and (not lrc_exists or REWRITE_METADATA):
                                         try:
-                                            anchor.assert_write_allowed(
+                                            _write_lrc_guarded(
                                                 item_root, lrc_path,
                                                 CONFIG.download.destination_identity,
+                                                fetched_lyrics,
                                             )
-                                            lrc_path.write_text(fetched_lyrics, encoding="utf-8")
                                         except anchor.DestinationNotTrusted as e:
                                             identity_tracker.mark_refused(e.check)
                                             identity_refused = True
@@ -933,11 +955,10 @@ def download_callback(
 
                 if download_path and CONFIG.download.update_mtime:
                     try:
-                        anchor.assert_write_allowed(
+                        _touch_guarded(
                             item_root, download_path,
                             CONFIG.download.destination_identity,
                         )
-                        os.utime(download_path, None)
                     except anchor.DestinationNotTrusted as e:
                         # Operation 9 (v2.3 §1): unlike 4/5/6 above, this never
                         # sets identity_refused — a stale mtime is cosmetic,

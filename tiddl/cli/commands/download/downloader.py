@@ -43,6 +43,21 @@ CHUNK_SIZE = 1024**2
 MAX_RETRIES = 3  # Maximum number of retries for corrupt files
 
 
+def _guarded_mkdir(root: Path, path: Path, mode: str) -> None:
+    """Operations 1/2 (destination-volume identity, v2.2 §1): checked
+    immediately before creating this item's directory — a refusal here is
+    root-level (every quality attempt would hit the same untrusted root),
+    so the caller aborts the item outright rather than retrying at a lower
+    quality. Raises `DestinationNotTrusted`; the caller catches it, marks
+    the tracker, and returns. Standalone module-level function (not inlined
+    in `Downloader.download()`) so it's directly unit-testable without the
+    surrounding streaming/quality-retry machinery — see
+    tests/test_guarded_writes.py (implementation-audit P2 finding, missing
+    direct coverage for operations 1/2)."""
+    anchor.assert_write_allowed(root, path, mode)
+    path.parent.mkdir(exist_ok=True, parents=True)
+
+
 def _normalize_dir(path: Path) -> str:
     """Canonical form of a directory path for equality checks.
 
@@ -1233,14 +1248,13 @@ class Downloader:
 
                     task_id = self.rich_output.download_start(f"[{vibrant_color}]{display_title} {quality}")
 
-                    # Operation 1 (destination-volume identity, v2.2 §1): checked
-                    # before this item's own directory even exists. A refusal
-                    # here means every quality attempt would hit the same
-                    # untrusted root, so abort the item outright rather than
-                    # retrying at a lower quality (which _prepare_long_path's
-                    # alias-stripping-aware comparison would refuse identically).
+                    # Operation 1 — via the guarded helper (see
+                    # _guarded_mkdir's docstring): _prepare_long_path's
+                    # alias-stripping-aware comparison would refuse
+                    # identically at a lower quality, so abort the item
+                    # outright rather than retrying.
                     try:
-                        anchor.assert_write_allowed(
+                        _guarded_mkdir(
                             self.download_path, download_path, self.destination_identity,
                         )
                     except anchor.DestinationNotTrusted as e:
@@ -1254,8 +1268,6 @@ class Downloader:
                             f"[red]❌ Destination not trusted ({e.check.reason})[/] {display_title}"
                         )
                         return None, False
-
-                    download_path.parent.mkdir(exist_ok=True, parents=True)
 
                     task = DownloadTask(
                         url=urls[0] if urls else "",
@@ -1349,11 +1361,12 @@ class Downloader:
                     if sys.platform == "win32":
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
 
-                    # Operation 2 (destination-volume identity, v2.2 §1) — same
-                    # reasoning as operation 1 above: a refusal here is root-level,
-                    # so abort the item instead of trying another video quality.
+                    # Operation 2 — via the guarded helper (see
+                    # _guarded_mkdir's docstring); same reasoning as
+                    # operation 1 above: a refusal here is root-level, so
+                    # abort the item instead of trying another video quality.
                     try:
-                        anchor.assert_write_allowed(
+                        _guarded_mkdir(
                             video_base, download_path, self.destination_identity,
                         )
                     except anchor.DestinationNotTrusted as e:
@@ -1366,8 +1379,6 @@ class Downloader:
                             f"[red]❌ Destination not trusted ({e.check.reason})[/] {display_title}"
                         )
                         return None, False
-
-                    download_path.parent.mkdir(exist_ok=True, parents=True)
 
                     # Parse M3U8 to get segment URLs (blocking I/O → thread)
                     try:

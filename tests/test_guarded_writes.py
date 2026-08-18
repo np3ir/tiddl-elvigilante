@@ -1,23 +1,30 @@
-"""Coverage for the operation 5/6/8 guarded-write helpers in
-`tiddl.cli.commands.download` — `_write_track_metadata_guarded`,
-`_write_video_metadata_guarded`, `_guarded_save_cover`.
+"""Coverage for the operation 1/2/4/5/6/8/9 guarded-write helpers in
+`tiddl.cli.commands.download` (`__init__.py`) and `.downloader` —
+`_guarded_mkdir`, `_write_lrc_guarded`, `_write_track_metadata_guarded`,
+`_write_video_metadata_guarded`, `_guarded_save_cover`, `_touch_guarded`.
 
-These were extracted from inline closures inside the (untestable-in-
-isolation) `handle_item`/`download_callback` call graph specifically so the
-implementation-audit finding (2026-08-18, P1 #3 — "guards placed before
-asyncio.to_thread are not at the final mutation boundary") has direct,
-targeted regression coverage: the identity check must run INSIDE the same
-unit of work as the mutation, with no await point, sleep, or network I/O
-between "checked" and "written."
+Operations 5/6/8 were extracted from inline closures inside the
+(untestable-in-isolation) `handle_item`/`download_callback` call graph
+specifically so the implementation-audit finding (2026-08-18, P1 #3 —
+"guards placed before asyncio.to_thread are not at the final mutation
+boundary") has direct, targeted regression coverage: the identity check
+must run INSIDE the same unit of work as the mutation, with no await
+point, sleep, or network I/O between "checked" and "written."
 
-Also covers a slice of the P2 finding ("seven guarded operation classes
-lack direct integration evidence") for operations 5, 6 and 8 specifically —
-the other five (1, 2, 4, 7, 9) remain covered only indirectly via
-test_downloader.py/test_destination_anchor.py, which is a real, disclosed
-gap (see the audit response)."""
+Operations 1, 2, 4 and 9 have no such gap (their check and mutation were
+already adjacent statements, never separated by a to_thread dispatch) but
+were extracted the same way purely so each guarded operation class has its
+own direct unit test — implementation-audit P2 finding ("seven guarded
+operation classes lack direct integration evidence"). That leaves only
+operation 3 (media publication — covered end-to-end in
+test_downloader.py) and operation 7 (M3U — covered in test_m3u.py) without
+a dedicated test in *this* file; both already have direct coverage
+elsewhere, matching the audit's own note that those two were the ones NOT
+missing evidence."""
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -25,9 +32,12 @@ import tiddl.cli.commands.download as dlinit
 import tiddl.core.utils.destination_anchor as da
 from tiddl.cli.commands.download import (
     _guarded_save_cover,
+    _touch_guarded,
+    _write_lrc_guarded,
     _write_track_metadata_guarded,
     _write_video_metadata_guarded,
 )
+from tiddl.cli.commands.download.downloader import _guarded_mkdir
 from tiddl.core.metadata import Cover
 
 
@@ -233,3 +243,76 @@ async def test_cover_guard_off_mode_never_checks(untrusted_root, monkeypatch):
 
     assert cover_path.with_suffix(".jpg").read_bytes() == b"jpegbytes"
     assert tracker.any_refused is False
+
+
+# ---------------------------------------------------------------------------
+# Operations 1/2: audio/video directory creation
+# ---------------------------------------------------------------------------
+
+def test_mkdir_guard_creates_the_directory_when_trusted(trusted_root):
+    target = trusted_root / "sub" / "dir" / "track.flac"
+    _guarded_mkdir(trusted_root, target, "strict")
+    assert target.parent.is_dir()
+
+
+def test_mkdir_guard_refuses_and_never_creates_when_untrusted(untrusted_root):
+    target = untrusted_root / "sub" / "dir" / "track.flac"
+    with pytest.raises(da.DestinationNotTrusted) as excinfo:
+        _guarded_mkdir(untrusted_root, target, "strict")
+
+    assert excinfo.value.check.reason == "unknown_root"
+    assert not target.parent.exists()  # the mutation never ran
+
+
+def test_mkdir_guard_off_mode_never_checks(untrusted_root):
+    target = untrusted_root / "sub" / "dir" / "video.ts"
+    _guarded_mkdir(untrusted_root, target, "off")
+    assert target.parent.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# Operation 4: .lrc write
+# ---------------------------------------------------------------------------
+
+def test_lrc_guard_writes_when_trusted(trusted_root):
+    lrc_path = trusted_root / "track.lrc"
+    _write_lrc_guarded(trusted_root, lrc_path, "strict", "[00:01.00]la la la")
+    assert lrc_path.read_text(encoding="utf-8") == "[00:01.00]la la la"
+
+
+def test_lrc_guard_refuses_and_never_writes_when_untrusted(untrusted_root):
+    lrc_path = untrusted_root / "track.lrc"
+    with pytest.raises(da.DestinationNotTrusted) as excinfo:
+        _write_lrc_guarded(untrusted_root, lrc_path, "strict", "[00:01.00]la la la")
+
+    assert excinfo.value.check.reason == "unknown_root"
+    assert not lrc_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Operation 9: utime
+# ---------------------------------------------------------------------------
+
+def test_touch_guard_updates_mtime_when_trusted(trusted_root):
+    target = trusted_root / "track.flac"
+    target.write_bytes(b"x")
+    old_mtime = target.stat().st_mtime
+    # Force a detectable mtime change regardless of filesystem timestamp
+    # resolution by setting it in the past first.
+    os.utime(target, (old_mtime - 1000, old_mtime - 1000))
+
+    _touch_guarded(trusted_root, target, "strict")
+
+    assert target.stat().st_mtime > old_mtime - 1000
+
+
+def test_touch_guard_refuses_and_never_touches_when_untrusted(untrusted_root):
+    target = untrusted_root / "track.flac"
+    target.write_bytes(b"x")
+    os.utime(target, (0, 0))  # a known, ancient mtime
+
+    with pytest.raises(da.DestinationNotTrusted) as excinfo:
+        _touch_guarded(untrusted_root, target, "strict")
+
+    assert excinfo.value.check.reason == "unknown_root"
+    assert target.stat().st_mtime == 0  # untouched
