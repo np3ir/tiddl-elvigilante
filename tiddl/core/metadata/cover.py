@@ -74,6 +74,30 @@ class Cover:
         if not self.data:
             self.data = self._get_data()
 
+        self.write_prefetched(path)
+
+    def write_prefetched(self, path: Path) -> None:
+        """The pure mutation half of `save_to_directory`, split out so a
+        caller that needs to run a check immediately before the write (e.g.
+        a destination-identity guard) can fetch `self.data` well ahead of
+        time and call this with no network I/O in between — a network fetch
+        between a passing check and the actual write would otherwise widen
+        the check-to-write window by however long the fetch's retry backoff
+        took (implementation-audit finding, 2026-08-18, P1 #3).
+
+        Assumes `self.data` is already populated (via `_get_data()`); falls
+        back to fetching it here only as a defensive no-op-avoidance, never
+        as the expected path for a guarded caller.
+        """
+        file = path.with_suffix(".jpg")
+
+        if file.exists():
+            log.debug(f"cover exists ({file})")
+            return
+
+        if not self.data:
+            self.data = self._get_data()
+
         file.parent.mkdir(parents=True, exist_ok=True)
 
         try:

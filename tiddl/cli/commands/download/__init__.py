@@ -105,6 +105,114 @@ register_subcommands(download_command)
 log = getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Guarded write helpers for operations 5/6/8 (destination-volume identity,
+# v2.2 §1). Implementation-audit finding, 2026-08-18, P1 #3: these three
+# writes used to check `assert_write_allowed` once on the event loop and
+# THEN dispatch the actual mutation to `asyncio.to_thread`, possibly after a
+# retry sleep (track metadata) or a multi-second network fetch with backoff
+# (covers) — the protected mount could disappear in that gap between "we
+# checked" and "we wrote," exactly the wrong-volume fallback this feature
+# exists to prevent.
+#
+# Each helper below moves `assert_write_allowed` to run INSIDE the same
+# synchronous unit of work as the mutation itself — the whole helper (check
+# + write) is what gets handed to `asyncio.to_thread`, not just the write —
+# so there is no await point, no sleep, and no network I/O between the
+# check and the write it guards. `DestinationNotTrusted` propagates back
+# through `await asyncio.to_thread(...)` and is caught by the caller on the
+# event loop; none of these helpers touch `identity_tracker` themselves
+# (v2.4 mandatory safeguard #2: no `asyncio.Event` mutation from a
+# `to_thread` worker). Standalone module-level functions (not closures) so
+# they're directly unit-testable without going through the full
+# `handle_item` call graph — see tests/test_guarded_writes.py.
+# ---------------------------------------------------------------------------
+
+def _write_track_metadata_guarded(
+    item_root: Path,
+    download_path: Path,
+    mode: str,
+    *,
+    track,
+    lyrics,
+    album_artist,
+    cover_data,
+    date,
+    credits,
+    comment,
+    genre,
+    artist_separator,
+) -> None:
+    """Operation 5. Callers dispatch this whole function via
+    `asyncio.to_thread`, once per retry attempt, so a destination that
+    disappeared between attempts (e.g. while waiting out a locked-file
+    retry sleep) is caught on the very next attempt instead of writing
+    metadata to a mount that is no longer verified."""
+    anchor.assert_write_allowed(item_root, download_path, mode)
+    add_track_metadata(
+        path=download_path,
+        track=track,
+        lyrics=lyrics,
+        album_artist=album_artist,
+        cover_data=cover_data,
+        date=date,
+        credits=credits,
+        comment=comment,
+        genre=genre,
+        artist_separator=artist_separator,
+    )
+
+
+def _write_video_metadata_guarded(
+    item_root: Path,
+    download_path: Path,
+    mode: str,
+    *,
+    video,
+    artist_separator,
+) -> None:
+    """Operation 6 — see `_write_track_metadata_guarded`'s docstring."""
+    anchor.assert_write_allowed(item_root, download_path, mode)
+    add_video_metadata(path=download_path, video=video, artist_separator=artist_separator)
+
+
+async def _guarded_save_cover(
+    cover: Cover,
+    root: Path,
+    path: Path,
+    mode: str,
+    tracker: "anchor.IdentityFailureTracker",
+    label: str,
+) -> None:
+    """Operation 8. Fetches cover bytes (network I/O, its own retry backoff
+    inside `Cover._get_data`) BEFORE the identity check runs — closing the
+    gap `Cover.save_to_directory()` used to leave open by fetching AFTER a
+    passing pre-dispatch check. The check and the actual file write then run
+    together, synchronously, inside one `asyncio.to_thread` dispatch, via
+    `Cover.write_prefetched` (no network I/O in that call). Catches
+    `DestinationNotTrusted` here, on the event loop, and marks `tracker` —
+    the same safeguard-#2 discipline as the metadata helpers above."""
+    file = path.with_suffix(".jpg")
+    if file.exists():
+        log.debug(f"cover exists ({file})")
+        return
+
+    await asyncio.to_thread(cover._get_data)
+
+    def _guarded_write() -> None:
+        anchor.assert_write_allowed(root, path, mode)
+        cover.write_prefetched(path)
+
+    try:
+        await asyncio.to_thread(_guarded_write)
+    except anchor.DestinationNotTrusted as e:
+        tracker.mark_refused(e.check)
+        log.warning(
+            f"[destination-identity] refused {label} cover write "
+            f"for {path}: {e.check.reason}"
+        )
+
+
 @download_command.callback(no_args_is_help=True)
 def download_callback(
     ctx: Context,
@@ -741,57 +849,64 @@ def download_callback(
                                 track_metadata.cover_data = b""
 
                         if REWRITE_METADATA or was_downloaded:
-                            try:
-                                anchor.assert_write_allowed(
-                                    item_root, download_path,
-                                    CONFIG.download.destination_identity,
-                                )
-                            except anchor.DestinationNotTrusted as e:
-                                identity_tracker.mark_refused(e.check)
-                                identity_refused = True
-                                log.warning(
-                                    f"[destination-identity] refused track metadata "
-                                    f"write for {download_path}: {e.check.reason}"
-                                )
-                            else:
-                                for _attempt in range(3):
-                                    try:
-                                        await asyncio.to_thread(
-                                            add_track_metadata,
-                                            path=download_path,
-                                            track=item,
-                                            lyrics=lyrics_subtitles,
-                                            album_artist=track_metadata.artist,
-                                            cover_data=track_metadata.cover_data,
-                                            date=track_metadata.date,
-                                            credits=track_metadata.credits,
-                                            comment=track_metadata.album_review,
-                                            genre=track_metadata.genre,
-                                            artist_separator=CONFIG.templates.artist_separator,
-                                        )
+                            # Operation 5, moved into a guarded worker helper
+                            # (P1 #3 audit fix) — see _write_track_metadata_
+                            # guarded's docstring. The identity check now runs
+                            # fresh on EVERY attempt, inside the same
+                            # to_thread dispatch as the write itself, instead
+                            # of once before the retry loop even starts.
+                            for _attempt in range(3):
+                                try:
+                                    await asyncio.to_thread(
+                                        _write_track_metadata_guarded,
+                                        item_root, download_path,
+                                        CONFIG.download.destination_identity,
+                                        track=item,
+                                        lyrics=lyrics_subtitles,
+                                        album_artist=track_metadata.artist,
+                                        cover_data=track_metadata.cover_data,
+                                        date=track_metadata.date,
+                                        credits=track_metadata.credits,
+                                        comment=track_metadata.album_review,
+                                        genre=track_metadata.genre,
+                                        artist_separator=CONFIG.templates.artist_separator,
+                                    )
+                                    break
+                                except anchor.DestinationNotTrusted as e:
+                                    identity_tracker.mark_refused(e.check)
+                                    identity_refused = True
+                                    log.warning(
+                                        f"[destination-identity] refused track metadata "
+                                        f"write for {download_path}: {e.check.reason}"
+                                    )
+                                    break  # not a lock — retrying won't change a refusal
+                                except Exception as e:
+                                    # mutagen envuelve el PermissionError del SO (lock de slskd/AV en NAS/SMB)
+                                    # en su propia excepcion, asi que detectamos el lock por tipo O por mensaje.
+                                    _locked = isinstance(e, (PermissionError, OSError)) or "Permission denied" in str(e) or "Errno 13" in str(e) or "WinError 5" in str(e)
+                                    if _locked and _attempt < 2:
+                                        log.warning(f"Metadata write blocked (attempt {_attempt + 1}/3), retrying in 2s: {download_path}")
+                                        await asyncio.sleep(2)
+                                    elif _locked:
+                                        log.warning(f"Could not write metadata after 3 attempts (file locked by another process), skipping: {download_path} — {e}")
                                         break
-                                    except Exception as e:
-                                        # mutagen envuelve el PermissionError del SO (lock de slskd/AV en NAS/SMB)
-                                        # en su propia excepcion, asi que detectamos el lock por tipo O por mensaje.
-                                        _locked = isinstance(e, (PermissionError, OSError)) or "Permission denied" in str(e) or "Errno 13" in str(e) or "WinError 5" in str(e)
-                                        if _locked and _attempt < 2:
-                                            log.warning(f"Metadata write blocked (attempt {_attempt + 1}/3), retrying in 2s: {download_path}")
-                                            await asyncio.sleep(2)
-                                        elif _locked:
-                                            log.warning(f"Could not write metadata after 3 attempts (file locked by another process), skipping: {download_path} — {e}")
-                                            break
-                                        else:
-                                            log.warning(f"Metadata write failed for {download_path}, skipping: {e}")
-                                            break
+                                    else:
+                                        log.warning(f"Metadata write failed for {download_path}, skipping: {e}")
+                                        break
 
                     elif isinstance(item, Video):
                         if REWRITE_METADATA or was_downloaded:
+                            # Operation 6, moved into a guarded worker helper
+                            # (P1 #3 audit fix) — see _write_video_metadata_
+                            # guarded's docstring.
                             try:
-                                anchor.assert_write_allowed(
+                                await asyncio.to_thread(
+                                    _write_video_metadata_guarded,
                                     item_root, download_path,
                                     CONFIG.download.destination_identity,
+                                    video=item,
+                                    artist_separator=CONFIG.templates.artist_separator,
                                 )
-                                await asyncio.to_thread(add_video_metadata, path=download_path, video=item, artist_separator=CONFIG.templates.artist_separator)
                             except anchor.DestinationNotTrusted as e:
                                 identity_tracker.mark_refused(e.check)
                                 identity_refused = True
@@ -1128,28 +1243,13 @@ def download_callback(
                         template=CONFIG.cover.templates.album, album=album,
                         artist_separator=CONFIG.templates.artist_separator,
                     )
-                    # Operation 8 (v2.2 §1): checked synchronously here, BEFORE
-                    # the asyncio.to_thread dispatch below — never inside
-                    # Cover.save_to_directory itself, which runs in a worker
-                    # thread. This is what keeps identity_tracker.mark_refused()
-                    # off any to_thread worker (v2.4 mandatory safeguard #2),
-                    # by construction rather than a catch-after-to_thread
-                    # pattern: if this raises, the thread is never dispatched.
-                    try:
-                        anchor.assert_write_allowed(
-                            DOWNLOAD_PATH, _album_cover_path,
-                            CONFIG.download.destination_identity,
-                        )
-                    except anchor.DestinationNotTrusted as e:
-                        identity_tracker.mark_refused(e.check)
-                        log.warning(
-                            f"[destination-identity] refused album cover write "
-                            f"for {_album_cover_path}: {e.check.reason}"
-                        )
-                    else:
-                        await asyncio.to_thread(
-                            cover.save_to_directory, _album_cover_path,
-                        )
+                    # Operation 8 — via the guarded helper (P1 #3 audit fix);
+                    # see _guarded_save_cover's docstring.
+                    await _guarded_save_cover(
+                        cover, DOWNLOAD_PATH, _album_cover_path,
+                        CONFIG.download.destination_identity,
+                        identity_tracker, "album",
+                    )
 
             # resources should be collected from a distinct function
             # that would yield the resources.
@@ -1193,23 +1293,13 @@ def download_callback(
                         CONFIG.cover.templates.track, item=track, album=album,
                         artist_separator=CONFIG.templates.artist_separator,
                     )
-                    # Operation 8 (v2.2 §1) — see the album cover site above
-                    # for why this check runs before, not inside, to_thread.
-                    try:
-                        anchor.assert_write_allowed(
-                            DOWNLOAD_PATH, _track_cover_path,
-                            CONFIG.download.destination_identity,
-                        )
-                    except anchor.DestinationNotTrusted as e:
-                        identity_tracker.mark_refused(e.check)
-                        log.warning(
-                            f"[destination-identity] refused track cover write "
-                            f"for {_track_cover_path}: {e.check.reason}"
-                        )
-                    else:
-                        await asyncio.to_thread(
-                            _track_cover.save_to_directory, _track_cover_path,
-                        )
+                    # Operation 8 — via the guarded helper (P1 #3 audit fix);
+                    # see _guarded_save_cover's docstring.
+                    await _guarded_save_cover(
+                        _track_cover, DOWNLOAD_PATH, _track_cover_path,
+                        CONFIG.download.destination_identity,
+                        identity_tracker, "track",
+                    )
 
             elif resource_type == "video":
                 video = await asyncio.to_thread(ctx.obj.api.get_video, resource.id)
@@ -1753,23 +1843,13 @@ def download_callback(
                         playlist=playlist,
                         artist_separator=CONFIG.templates.artist_separator,
                     )
-                    # Operation 8 (v2.2 §1) — see the album cover site above
-                    # for why this check runs before, not inside, to_thread.
-                    try:
-                        anchor.assert_write_allowed(
-                            DOWNLOAD_PATH, _pl_cover_path,
-                            CONFIG.download.destination_identity,
-                        )
-                    except anchor.DestinationNotTrusted as e:
-                        identity_tracker.mark_refused(e.check)
-                        log.warning(
-                            f"[destination-identity] refused playlist cover write "
-                            f"for {_pl_cover_path}: {e.check.reason}"
-                        )
-                    else:
-                        await asyncio.to_thread(
-                            _pl_cover.save_to_directory, _pl_cover_path,
-                        )
+                    # Operation 8 — via the guarded helper (P1 #3 audit fix);
+                    # see _guarded_save_cover's docstring.
+                    await _guarded_save_cover(
+                        _pl_cover, DOWNLOAD_PATH, _pl_cover_path,
+                        CONFIG.download.destination_identity,
+                        identity_tracker, "playlist",
+                    )
 
                 ctx.obj.console.print(f"\n[bold green]✅ Playlist download completed:[/] {playlist.title}")
                 ctx.obj.console.print(f"   • Downloaded: {len(tracks_with_path)} items")
