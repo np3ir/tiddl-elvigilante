@@ -252,6 +252,38 @@ def _touch_guarded(item_root: Path, download_path: Path, mode: str) -> None:
     os.utime(download_path, None)
 
 
+def _should_insert_db_record(was_downloaded: bool, identity_refused: bool) -> bool:
+    """Class B (v2.3 §3): a per-item `_db_insert` is withheld exactly when
+    THIS item's own destination-identity refusal happened — operations 4
+    (.lrc), 5 (track metadata) or 6 (video metadata), the only three that
+    set `identity_refused = True`. Operation 9 (utime) deliberately never
+    sets it (a stale mtime is cosmetic, never suppresses an insert that
+    already ran — see `_touch_guarded`'s docstring), and operations 7/8
+    (M3U/cover, Class C) run AFTER this decision and can never un-insert an
+    already-truthful record.
+
+    Standalone pure function so this exact decision has direct unit
+    coverage (implementation-audit P2 finding, second round: outcome-level
+    Class B/C DB semantics lacked a direct test) without needing to invoke
+    the surrounding `handle_item` call graph."""
+    return bool(was_downloaded and not identity_refused)
+
+
+def _download_exit_code(any_identity_refused: bool) -> Optional[int]:
+    """v2.4 §2: the final `tiddl download` exit-code decision, evaluated
+    once after every per-item and per-resource task in the run has
+    completed (`identity_tracker.any_refused`, which is monotonic across
+    however many concurrent tasks refused — see
+    `IdentityFailureTracker.mark_refused`). Returns 1 (non-zero) if any
+    destination-identity check refused a write during the run — a mixed
+    run where some items succeeded and others refused still counts as
+    "one or more refused," per the tracker's own monotonic semantics — or
+    `None` to fall through to Typer's normal 0. Standalone pure function
+    for direct unit coverage of this decision, same audit finding as
+    `_should_insert_db_record` above."""
+    return 1 if any_identity_refused else None
+
+
 @download_command.callback(no_args_is_help=True)
 def download_callback(
     ctx: Context,
@@ -964,7 +996,7 @@ def download_callback(
                 # — identity_refused stays False (a no-op) whenever
                 # CONFIG.download.destination_identity == "off", so this adds
                 # no behavior change for anyone not using the feature.
-                if download_path and was_downloaded and not identity_refused:
+                if download_path and _should_insert_db_record(was_downloaded, identity_refused):
                     if isinstance(item, Track):
                         downloader._db_insert(item.id, download_path, str(item.audioQuality))
                     elif isinstance(item, Video):
@@ -2061,12 +2093,13 @@ def download_callback(
             import traceback
             log.error(traceback.format_exc())
         else:
-            if any_identity_refused:
+            exit_code = _download_exit_code(any_identity_refused)
+            if exit_code is not None:
                 ctx.obj.console.print(
                     "[red]One or more destination-identity checks refused a write "
                     "this run — see the warnings above. Nothing was lost (retryable "
                     "copies were retained where applicable); exiting non-zero.[/]"
                 )
-                sys.exit(1)
+                sys.exit(exit_code)
 
     ctx.call_on_close(run)

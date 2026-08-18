@@ -31,7 +31,9 @@ import pytest
 import tiddl.cli.commands.download as dlinit
 import tiddl.core.utils.destination_anchor as da
 from tiddl.cli.commands.download import (
+    _download_exit_code,
     _guarded_save_cover,
+    _should_insert_db_record,
     _touch_guarded,
     _write_lrc_guarded,
     _write_track_metadata_guarded,
@@ -434,3 +436,100 @@ def test_mkdir_guard_off_mode_returns_disabled_not_trusted(untrusted_root):
     check = _guarded_mkdir(untrusted_root, target, "off")
     assert check.reason == "disabled"
     assert check.anchor_id is None
+
+
+# ---------------------------------------------------------------------------
+# Second implementation-audit finding (2026-08-18), P2: helper-level tests
+# prove individual operations allow/refuse their own mutation, but not that
+# the surrounding call sites preserve the accepted Class B/Class C DB
+# semantics or the final command-level outcome. These pin the three
+# specific outcome behaviors the audit asked for: one Class B path, one
+# Class C path (below, in the cover section, plus test_m3u.py's own
+# addition), and the mixed-refusal exit code.
+# ---------------------------------------------------------------------------
+
+def test_class_b_withholds_db_insert_when_this_items_identity_refused():
+    # Operations 4/5/6 (.lrc, track/video metadata): a refusal sets
+    # identity_refused=True, which must withhold THIS item's _db_insert.
+    assert _should_insert_db_record(was_downloaded=True, identity_refused=True) is False
+
+
+def test_class_b_inserts_normally_when_not_refused():
+    assert _should_insert_db_record(was_downloaded=True, identity_refused=False) is True
+
+
+def test_class_b_never_inserts_for_a_skipped_item_regardless_of_refusal():
+    # was_downloaded=False (skip-existing path) never inserts, identity
+    # refusal or not — this decision doesn't invent a reason to insert.
+    assert _should_insert_db_record(was_downloaded=False, identity_refused=False) is False
+    assert _should_insert_db_record(was_downloaded=False, identity_refused=True) is False
+
+
+async def test_class_c_cover_refusal_never_touches_db_or_registry(untrusted_root, monkeypatch):
+    # Class C (v2.3 §3): operations 7/8 (M3U/cover) run AFTER every
+    # per-track DB insert has already happened, and a refusal there must
+    # never touch an already-truthful record. Spies on retained_registry to
+    # prove a cover refusal calls none of its mutating functions — it only
+    # logs and marks the tracker.
+    import tiddl.core.utils.retained_registry as registrymod
+
+    def _must_not_be_called(*a, **k):
+        pytest.fail("a cover refusal must never touch the retained registry")
+
+    monkeypatch.setattr(registrymod, "register_retained_file", _must_not_be_called)
+    monkeypatch.setattr(registrymod, "update_entry", _must_not_be_called)
+    monkeypatch.setattr(registrymod, "remove_entry", _must_not_be_called)
+
+    cover = Cover("uid-1")
+    monkeypatch.setattr(cover, "_get_data", lambda: b"jpegbytes")
+    tracker = da.IdentityFailureTracker()
+    cover_path = untrusted_root / "cover"
+
+    await _guarded_save_cover(cover, untrusted_root, cover_path, "strict", tracker, "album")
+
+    assert tracker.any_refused is True
+    assert not cover_path.with_suffix(".jpg").exists()
+
+
+def test_exit_code_is_nonzero_when_any_identity_check_refused():
+    assert _download_exit_code(True) == 1
+
+
+def test_exit_code_is_none_when_nothing_refused():
+    # None -> falls through to Typer's normal 0, not an explicit sys.exit(0)
+    # (which would bypass Typer's own post-command handling).
+    assert _download_exit_code(False) is None
+
+
+async def test_mixed_concurrent_success_and_refusal_trips_the_shared_tracker(tmp_path):
+    # "Mixed concurrent success/refusal" end to end: several guarded writes
+    # run concurrently against the SAME IdentityFailureTracker — some
+    # trusted (succeed), one untrusted (refuses) — and the tracker's
+    # monotonic any_refused correctly reflects "at least one refused",
+    # which _download_exit_code above turns into a non-zero exit. Uses the
+    # real _guarded_mkdir helper, not a mock of the tracker itself.
+    tracker = da.IdentityFailureTracker()
+    results = []
+
+    async def _item(root_name, establish):
+        root = tmp_path / root_name
+        root.mkdir()
+        if establish:
+            da.establish_anchor(root)
+        target = root / "track.flac"
+        try:
+            _guarded_mkdir(root, target, "strict")
+            results.append("ok")
+        except da.DestinationNotTrusted as e:
+            tracker.mark_refused(e.check)
+            results.append("refused")
+
+    await asyncio.gather(
+        _item("trusted_a", True),
+        _item("trusted_b", True),
+        _item("untrusted", False),
+    )
+
+    assert sorted(results) == ["ok", "ok", "refused"]
+    assert tracker.any_refused is True
+    assert _download_exit_code(tracker.any_refused) == 1
