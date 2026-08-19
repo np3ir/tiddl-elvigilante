@@ -17,6 +17,10 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+---
+
+## [1.2.1] - 2026-08-19
+
 ### Changed
 
 - **Accurate CLI version output** — `tiddl --version` now reads the installed
