@@ -136,6 +136,16 @@ track_delay = 3.0              # default: 3.0
 # Max tracks per run. 0 = unlimited.
 max_tracks_per_session = 0     # default: 0
 
+# Destination-volume identity: refuse to write if download_path/
+# video_download_path doesn't resolve to the destination you actually meant
+# (e.g. an unmounted NAS/USB drive silently falling back to a local folder
+# with the same path). "off" writes exactly as before, no extra checks.
+# "strict" requires the root to have been explicitly trusted first — see
+# `tiddl destination trust/status/forget --help`. A refusal never loses
+# data: the verified local copy is retained (`tiddl recover` picks it up
+# once the real destination is trusted) and the command exits non-zero.
+destination_identity = "off"   # default: "off"  — options: "off", "strict"
+
 
 # =============================================================================
 # [m3u] — generate .m3u playlists

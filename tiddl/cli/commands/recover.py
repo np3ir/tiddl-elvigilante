@@ -33,7 +33,9 @@ import typer
 from filelock import Timeout as FileLockTimeout
 from typing_extensions import Annotated
 
+from tiddl.cli.config import CONFIG
 from tiddl.cli.ctx import Context
+from tiddl.core.utils import destination_anchor as anchor
 from tiddl.core.utils import retained_registry as registry
 from tiddl.core.utils.publish import publish_verified_file
 
@@ -174,7 +176,7 @@ async def _reverify_against_entry(entry, candidate: Path) -> tuple[bool, Optiona
     return True, None
 
 
-async def _recover_one(console, re) -> bool:
+async def _recover_one(console, re, tracker: "anchor.IdentityFailureTracker") -> bool:
     """[P2, third audit finding #7] Wraps `_recover_one_inner` so a single
     entry's unexpected I/O failure (e.g. a file vanishing mid-hash due to an
     unrelated concurrent process, a transient network-share error) can't
@@ -190,13 +192,13 @@ async def _recover_one(console, re) -> bool:
     didn't fully complete."""
     entry = re.entry
     try:
-        return await _recover_one_inner(console, re)
+        return await _recover_one_inner(console, re, tracker)
     except OSError as e:
         console.print(f"[red]✗[/] {entry.id[:8]}: unexpected I/O error during recovery: {e}")
         return False
 
 
-async def _recover_one_inner(console, re) -> bool:
+async def _recover_one_inner(console, re, tracker: "anchor.IdentityFailureTracker") -> bool:
     entry = re.entry
     warnings: list = []
 
@@ -254,6 +256,38 @@ async def _recover_one_inner(console, re) -> bool:
     # PUBLISH_PENDING
     source = Path(entry.staging_path)
     destination = Path(entry.output_path)
+
+    # Destination-volume identity — triple-identity check (PROPOSAL
+    # v2.1 §7, kept local/untracked): entry.destination_anchor_id must equal
+    # BOTH the root's current local-state anchor id AND the marker actually
+    # on disk right now, not just "is the root currently trusted" — this is
+    # what catches a root that was forget-ten and re-trusted with a
+    # DIFFERENT anchor since the entry was staged/bound. `off` mode performs
+    # no anchor I/O at all (unchanged existing behavior, per
+    # destination_anchor.check_write_allowed's own "off" short-circuit).
+    if CONFIG.download.destination_identity == "strict":
+        if entry.destination_root is None:
+            console.print(
+                f"[red]✗[/] {entry.id[:8]}: no destination identity recorded for this "
+                f"legacy entry — refusing in strict mode. Run 'tiddl recover --bind-root "
+                f"{entry.id[:8]} --root <trusted-root>' first."
+            )
+            tracker.mark_refused(
+                anchor.AnchorCheck(False, "unknown_root", destination, "legacy entry")
+            )
+            return False
+        check = anchor.check_write_allowed(
+            Path(entry.destination_root), destination, mode="strict",
+            expected_anchor_id=entry.destination_anchor_id,
+        )
+        if not check.allowed:
+            console.print(
+                f"[red]✗[/] {entry.id[:8]}: destination identity check failed "
+                f"({check.reason}); refusing to publish to {destination}. Nothing was "
+                "changed — the retained local copy and registry entry are untouched."
+            )
+            tracker.mark_refused(check)
+            return False
 
     def _on_warning(msg: str) -> None:
         warnings.append(msg)
@@ -341,6 +375,28 @@ def recover(
             ),
         ),
     ] = None,
+    do_bind_root: Annotated[
+        Optional[str],
+        typer.Option(
+            "--bind-root",
+            help=(
+                "Bind a legacy retained entry (id or id prefix, no destination identity "
+                "recorded) to an already-trusted destination root. Requires --root; "
+                "the root must already be trusted via 'tiddl destination trust'."
+            ),
+        ),
+    ] = None,
+    bind_root_target: Annotated[
+        Optional[Path],
+        typer.Option("--root", help="The trusted root to bind --bind-root's entry to."),
+    ] = None,
+    bind_confirm: Annotated[
+        bool,
+        typer.Option(
+            "--confirm",
+            help="Skip the confirmation prompt for --bind-root (scripted/unattended use).",
+        ),
+    ] = False,
 ):
     """List retained files from a previous session, or recover/purge them.
 
@@ -353,12 +409,23 @@ def recover(
     recovery attempt already succeeded but crashed before it could update
     the registry — see `retained_registry.reconcile`). `--purge <id>`
     removes one acknowledged `gone`/`corrupt` entry from the registry —
-    never an `ok` or `already_published` one.
+    never an `ok` or `already_published` one. `--bind-root <id> --root
+    <trusted-root>` binds a legacy entry (staged before destination-volume
+    identity existed, or while it was set to "off") to an already-trusted
+    root, so it becomes recoverable under `destination_identity = "strict"`.
     """
     console = ctx.obj.console
+    # One tracker per `tiddl recover` invocation - command-scoped, not a
+    # module global (PROPOSAL_destination_volume_identity_v2_4.md section 2,
+    # kept local/untracked). Only ever touched from this event loop: every
+    # identity check this command performs is a plain synchronous call, not
+    # dispatched to asyncio.to_thread.
+    tracker = anchor.IdentityFailureTracker()
 
     async def _run() -> None:
-        if do_purge is None and do_publish is None and not do_all:
+        if (
+            do_purge is None and do_publish is None and not do_all and do_bind_root is None
+        ):
             # Read-only listing: no mutation, no need for the cross-process
             # recovery lock — reconcile and print against a single snapshot.
             _print_list(console, await registry.reconcile())
@@ -429,6 +496,91 @@ def recover(
 
     async def _run_mutating(console) -> None:
         report = await registry.reconcile()
+
+        if do_bind_root is not None:
+            if bind_root_target is None:
+                console.print("[red]--bind-root requires --root <trusted-root>.[/]")
+                raise typer.Exit(1)
+
+            match = _resolve(do_bind_root, report.entries)
+            if match is None:
+                console.print(f"[red]No unique retained entry matches id '{do_bind_root}'.[/]")
+                raise typer.Exit(1)
+            entry = match.entry
+
+            # v2.2 audit's explicit correction: --bind-root stays
+            # legacy-only in this PR. An already-identified entry (even one
+            # whose triple-identity check would now fail, e.g. after a
+            # forget+re-trust with a different anchor) refuses here, with
+            # no rebind path — deliberate, documented scope for this
+            # release, not a silent gap.
+            if entry.destination_root is not None or entry.destination_anchor_id is not None:
+                console.print(
+                    f"[red]{entry.id[:8]} already has a destination identity recorded "
+                    f"({entry.destination_root}) — refusing to rebind. This release "
+                    "has no rebind command; resolve manually if the recorded identity "
+                    "is genuinely wrong.[/]"
+                )
+                raise typer.Exit(1)
+
+            root = Path(bind_root_target)
+            check = anchor.check_write_allowed(root, root, mode="strict")
+            if not check.allowed:
+                console.print(
+                    f"[red]'{root}' is not currently trusted ({check.reason}). Run "
+                    f"'tiddl destination trust {root}' first.[/]"
+                )
+                raise typer.Exit(1)
+
+            if not anchor.is_contained(root, Path(entry.output_path)):
+                console.print(
+                    f"[red]{entry.output_path} is not contained under {root} — "
+                    "refusing to bind.[/]"
+                )
+                raise typer.Exit(1)
+
+            console.print(
+                f"About to bind {entry.id[:8]} ({entry.output_path}) to trusted root {root}."
+            )
+            if not bind_confirm and not typer.confirm("Proceed?"):
+                console.print("[yellow]Aborted — nothing changed.[/]")
+                raise typer.Exit(1)
+
+            # Implementation-audit finding (2026-08-18), P1 #4: the original
+            # code re-read the marker independently here
+            # (`anchor.read_marker(root)`), uncoordinated with the
+            # `check_write_allowed` call above — the marker could disappear
+            # or change between those two reads, letting a `None`
+            # live_anchor_id pair with a non-None destination_root and
+            # violate the registry's both-or-neither invariant. It also
+            # never accounted for the confirmation prompt itself taking
+            # arbitrary real time, during which the pre-prompt check could
+            # go stale.
+            #
+            # Fix: re-run ONE fresh, structured `check_write_allowed` right
+            # here, after confirmation, and persist the root/id pair from
+            # THAT SAME result — never a second, separate `read_marker()`
+            # call. This never ignores read_marker()'s status: check.reason
+            # is derived directly from it (marker_absent/marker_unreadable/
+            # marker_invalid/trusted), just never re-derived independently.
+            check = anchor.check_write_allowed(root, root, mode="strict")
+            if not check.allowed:
+                console.print(
+                    f"[red]'{root}' is no longer trusted ({check.reason}) — nothing "
+                    "was changed. Re-run 'tiddl destination trust' and try again.[/]"
+                )
+                raise typer.Exit(1)
+
+            await asyncio.to_thread(
+                registry.update_entry, entry.id,
+                destination_root=anchor.root_key(root),
+                destination_anchor_id=check.anchor_id,
+            )
+            console.print(
+                f"[green]✓[/] Bound {entry.id[:8]} to {root} "
+                f"(anchor {check.anchor_id[:8]}...)."
+            )
+            return
 
         if do_purge is not None:
             match = _resolve(do_purge, report.entries)
@@ -514,7 +666,7 @@ def recover(
             # exit non-zero — not just `--all` batches.
             all_ok = True
             for re in targets:
-                ok = await _recover_one(console, re)
+                ok = await _recover_one(console, re, tracker)
                 all_ok = all_ok and ok
             if not all_ok:
                 console.print(

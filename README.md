@@ -96,6 +96,7 @@ At scale — tens of thousands of albums — this means your library reflects th
 - 📝 **Complete Metadata** - Artist, album, cover, lyrics, credits
 - 🌍 **Unicode Support** - CJK, Arabic, Vietnamese, Devanagari
 - 💾 **File Integrity** - Hash verification & corruption detection
+- 🔒 **Destination-Volume Identity** (opt-in) - Refuse to write if a configured NAS/USB destination is unmounted and silently falls back to a same-named local folder — `tiddl destination trust <path>`, then `[download] destination_identity = "strict"`
 - ⚡ **Async Downloads** - Concurrent multi-threaded downloads
 - 🔍 **Smart Quality** - Automatic fallback for unavailable qualities
 - 📦 **M3U8 Export** - Create playlists for media players

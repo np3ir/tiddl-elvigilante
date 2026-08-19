@@ -9,15 +9,18 @@ end to end. Staging is redirected into the test's tmp dir so we can assert no
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import types
+from pathlib import Path
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 import tiddl.cli.commands.download.downloader as dlmod
+import tiddl.core.utils.destination_anchor as da
 import tiddl.core.utils.fsio as fsiomod
 import tiddl.core.utils.publish as publishmod
 import tiddl.core.utils.retained_registry as registrymod
@@ -52,9 +55,11 @@ class _StubDownloader:
     _publish_staged = Downloader._publish_staged
     _verify_or_repair = Downloader._verify_or_repair
 
-    def __init__(self):
+    def __init__(self, destination_identity="off", identity_tracker=None):
         self._http_session = None
         self.rich_output = _StubOutput()
+        self.destination_identity = destination_identity
+        self.identity_tracker = identity_tracker or da.IdentityFailureTracker()
 
 
 def _scripted_app(script: list) -> web.Application:
@@ -105,6 +110,11 @@ def _isolate_retained_registry(tmp_path, monkeypatch):
     """Every test in this module gets its own retained-staging registry +
     quarantine dir under pytest's tmp_path, never the real ~/.tiddl."""
     monkeypatch.setattr(registrymod, "APP_PATH", tmp_path / "_app")
+    # Same isolation for destination_anchor's local state — the identity
+    # tests below call da.establish_anchor()/check_write_allowed() directly,
+    # matching the convention every other test file in this suite already
+    # follows (test_destination_cli.py, test_recover_cli.py, test_m3u.py).
+    monkeypatch.setattr(da, "APP_PATH", tmp_path / "_app")
 
 
 @pytest.fixture
@@ -141,10 +151,10 @@ def _no_staging_leftovers(stage_dir) -> bool:
     return not list(stage_dir.glob("tiddl-*.part.*"))
 
 
-async def _download(server: TestServer, task: DownloadTask):
+async def _download(server: TestServer, task: DownloadTask, **stub_kwargs):
     """Returns (ok, stub) so a test can inspect the stub (e.g. visual resets)."""
     url = str(server.make_url("/track"))
-    dl = _StubDownloader()
+    dl = _StubDownloader(**stub_kwargs)
     try:
         ok = await dl._download_with_retry(task, [url], task_id=0)
     finally:
@@ -681,3 +691,295 @@ async def test_same_volume_uses_atomic_rename_not_copy(
 
     assert ok is True                # published via atomic os.replace, no copy
     assert dest.stat().st_size == 5000
+
+
+# ------------------------------------------------------------------
+# Destination-volume identity — operation 3 (media publication), the
+# tightest of the nine guarded writes (see tiddl.core.utils.destination_
+# anchor and PROPOSAL_destination_volume_identity_v2_1..v2_4.md, kept
+# local/untracked). Exercised end to end via _download_with_retry so the
+# real staging -> verify -> guard -> publish chain runs, not a mock of it.
+# ------------------------------------------------------------------
+
+async def test_publish_refused_by_untrusted_root_retains_staging_as_publish_pending(
+    tmp_path, fast_sleep, stage_dir
+):
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    dest = root / "out.bin"
+    tracker = da.IdentityFailureTracker()
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(
+            server, task, destination_identity="strict", identity_tracker=tracker,
+        )
+    finally:
+        await server.close()
+
+    assert ok is False
+    assert not dest.exists()  # never published
+    assert task.error_message and "destination not trusted" in task.error_message
+    assert tracker.any_refused is True
+    # Class A (v2.3 §3): treated exactly like any other publish failure —
+    # the verified local copy is retained, not deleted, and registered for
+    # `tiddl recover` to pick up later once the root is actually trusted.
+    assert task.retained_staging is not None
+    assert Path(task.retained_staging).exists()
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.PUBLISH_PENDING
+    assert entries[0].output_path == str(dest)
+
+
+async def test_publish_succeeds_when_root_is_trusted(tmp_path, fast_sleep, stage_dir):
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert dest.stat().st_size == 5000
+    assert dl.identity_tracker.any_refused is False
+    assert registrymod.read_entries().entries == []
+
+
+async def test_publish_off_mode_ignores_an_untrusted_root(tmp_path, fast_sleep, stage_dir):
+    # "off" performs zero identity reads (v2.4 §1) — root has no anchor and
+    # no local trust record at all, yet the publish proceeds unaffected.
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="off")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert dest.stat().st_size == 5000
+    assert dl.identity_tracker.any_refused is False
+
+
+async def test_publish_task_without_root_is_refused_in_strict_mode(
+    tmp_path, fast_sleep, stage_dir
+):
+    # Implementation-audit finding, P1 #2: a DownloadTask built without
+    # `root` used to skip the guard entirely and publish unchecked, even in
+    # strict mode — a fail-OPEN bypass. A future constructor, refactor, or
+    # plugin that forgets to set `root` must fail CLOSED instead: strict
+    # mode's whole promise is that an unverified destination never gets
+    # written to. This replaces the old
+    # test_publish_task_without_root_skips_the_guard_entirely, which
+    # codified the bypass as the intended behavior.
+    dest = tmp_path / "out.bin"
+    tracker = da.IdentityFailureTracker()
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, dl = await _download(
+            server, task, destination_identity="strict", identity_tracker=tracker,
+        )
+    finally:
+        await server.close()
+
+    assert ok is False
+    assert not dest.exists()  # never published
+    assert task.error_message and "no_root_configured" in task.error_message
+    assert tracker.any_refused is True
+    assert tracker.first_refusal.reason == "no_root_configured"
+    # Treated exactly like any other identity refusal: staging retained,
+    # registered PUBLISH_PENDING for later recovery.
+    assert task.retained_staging is not None
+    assert Path(task.retained_staging).exists()
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.PUBLISH_PENDING
+
+
+async def test_publish_task_without_root_still_works_in_off_mode(
+    tmp_path, fast_sleep, stage_dir
+):
+    # Root-less tasks may continue ONLY under mode="off" (v2.4 §1: off
+    # performs zero identity reads regardless of what root information is
+    # or isn't available) — this is the one case the audit explicitly
+    # allows a root-less task to keep publishing.
+    dest = tmp_path / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="off")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert dest.stat().st_size == 5000
+    assert dl.identity_tracker.any_refused is False
+
+
+async def test_retained_entry_from_a_trusted_publish_carries_the_verified_identity(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    # Implementation-audit finding (2026-08-18): a retained entry from a real
+    # strict-mode download never carried destination_root/destination_anchor_id,
+    # so `tiddl recover` always classified it as legacy and refused until a
+    # manual --bind-root — defeating the point of capturing identity at all.
+    # Reproduced here via the CLEANUP_PENDING path (publish succeeds, the
+    # best-effort staging unlink fails) since it's the simplest way to force
+    # a retained_registry entry while keeping the root genuinely trusted.
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
+
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    anchor_id = da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert task.verified_root_key == da.root_key(root)
+    assert task.verified_anchor_id == anchor_id
+
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.CLEANUP_PENDING
+    assert entries[0].destination_root == da.root_key(root)
+    assert entries[0].destination_anchor_id == anchor_id
+
+    # And recovery picks it up WITHOUT --bind-root, because the identity was
+    # already captured at staging time — this is the actual point of §5.
+    check = da.check_write_allowed(
+        Path(entries[0].destination_root), dest, mode="strict",
+        expected_anchor_id=entries[0].destination_anchor_id,
+    )
+    assert check.allowed is True
+
+
+async def test_off_mode_retained_entry_never_carries_identity(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    # Requirement #4 (audit correction): off mode must never persist
+    # destination_root/destination_anchor_id, even when task.root is set.
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
+
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    server = await _start([("ok", 5000)])
+    try:
+        task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+        ok, dl = await _download(server, task, destination_identity="off")
+    finally:
+        await server.close()
+
+    assert ok is True
+    assert task.verified_root_key is None
+    assert task.verified_anchor_id is None
+    entries = registrymod.read_entries().entries
+    assert entries[0].destination_root is None
+    assert entries[0].destination_anchor_id is None
+
+
+def _write_marker(root: Path, anchor_id: str) -> None:
+    """Writes a marker with a SPECIFIC anchor id, bypassing
+    establish_anchor() (which always mints a fresh random one) — used to
+    simulate a destination reappearing intact with its original marker,
+    as opposed to a fresh trust/re-trust."""
+    payload = json.dumps(
+        {"format": da.MARKER_FORMAT, "version": da.MARKER_VERSION, "anchor_id": anchor_id}
+    ).encode("utf-8")
+    da.marker_path(root).write_bytes(payload)
+
+
+async def test_pre_staging_identity_survives_a_publish_time_refusal(
+    tmp_path, fast_sleep, stage_dir, cross_volume, monkeypatch
+):
+    # Second implementation-audit finding (2026-08-18), P1 #1: identity must
+    # be captured at operations 1/2 (pre-staging), not only at operation 3
+    # (post-staging) — otherwise a root trusted before staging that
+    # disappears mid-download loses its identity entirely, and the
+    # resulting PUBLISH_PENDING entry falls back to legacy under strict
+    # recovery even though it really WAS verified before the download
+    # started.
+    #
+    # Mirrors the real wiring in Downloader.download(): call the real
+    # _guarded_mkdir (operations 1/2's guard) BEFORE staging and capture
+    # its result onto the task, exactly as downloader.py's two call sites
+    # do, then let the download/publish pipeline run with the marker
+    # removed mid-flight — simulating the destination disappearing during
+    # the download.
+    monkeypatch.setattr(publishmod, "_safe_unlink", lambda p: False)
+    root = tmp_path / "dest_root"
+    root.mkdir()
+    anchor_id = da.establish_anchor(root)
+    dest = root / "out.bin"
+
+    mkdir_check = dlmod._guarded_mkdir(root, dest, "strict")
+    assert mkdir_check.reason == "trusted"
+
+    task = DownloadTask(url="x", output_path=dest, root=root, expected_size=5000)
+    task.verified_root_key = da.root_key(root)
+    task.verified_anchor_id = mkdir_check.anchor_id
+
+    # Destination disappears mid-download, before operation 3's publish-
+    # time recheck runs.
+    da.marker_path(root).unlink()
+
+    server = await _start([("ok", 5000)])
+    try:
+        ok, dl = await _download(server, task, destination_identity="strict")
+    finally:
+        await server.close()
+
+    assert ok is False
+    assert not dest.exists()  # never published
+
+    # THE fix: the pre-staging identity is NOT erased by the publish-time
+    # refusal.
+    assert task.verified_root_key == da.root_key(root)
+    assert task.verified_anchor_id == anchor_id
+
+    entries = registrymod.read_entries().entries
+    assert len(entries) == 1
+    assert entries[0].reason == registrymod.RetainReason.PUBLISH_PENDING
+    assert entries[0].destination_root == da.root_key(root)
+    assert entries[0].destination_anchor_id == anchor_id
+
+    # Restore the SAME marker (the destination reappears intact) -> strict
+    # recovery succeeds WITHOUT --bind-root.
+    _write_marker(root, anchor_id)
+    check = da.check_write_allowed(
+        Path(entries[0].destination_root), dest, mode="strict",
+        expected_anchor_id=entries[0].destination_anchor_id,
+    )
+    assert check.allowed is True
+
+    # Forget + re-trust with a DIFFERENT anchor -> refuses.
+    da.forget_anchor(root)
+    da.marker_path(root).unlink()
+    different_anchor_id = da.establish_anchor(root)
+    assert different_anchor_id != anchor_id
+    check2 = da.check_write_allowed(
+        Path(entries[0].destination_root), dest, mode="strict",
+        expected_anchor_id=entries[0].destination_anchor_id,
+    )
+    assert check2.allowed is False

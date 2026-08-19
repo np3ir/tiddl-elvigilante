@@ -1,8 +1,9 @@
 import os
 from logging import getLogger
 from pathlib import Path
-from pydantic import BaseModel, validator, Field
 from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, validator
 
 # Python 3.11+ has tomllib built-in, but 3.10 needs tomli package
 try:
@@ -73,6 +74,16 @@ class Config(BaseModel):
         videos_filter: VIDEOS_FILTER_LITERAL = "none"
         update_mtime: bool = False
         rewrite_metadata: bool = False
+        # Destination-volume identity (see tiddl.core.utils.destination_anchor).
+        # "off" (default): unchanged pre-existing behavior, no anchor I/O at all.
+        # "strict": every guarded write site must resolve to a currently-trusted
+        # anchor for its configured root, or the write is refused. There is no
+        # "warn" mode — see PROPOSAL_destination_volume_identity_v2_1.md §1 for
+        # why (an unresolved identity-pair ambiguity for roots never actually
+        # trusted). An unrecognized value is a config validation error at load
+        # time, same as any other invalid field here — pydantic enforces this
+        # via the Literal type below, no extra validator needed.
+        destination_identity: Literal["off", "strict"] = "off"
         artist_concurrency: int = 1
         artist_delay: float = 8.0
         track_delay: float = 3.0

@@ -75,7 +75,42 @@ from .fsio import _fsync_dir, _fsync_path, _safe_unlink_warn, _same_volume, atom
 
 log = getLogger(__name__)
 
-REGISTRY_VERSION = 1
+#: Bumped from 1 to 2 by the destination-volume-identity feature (see
+#: PROPOSAL_destination_volume_identity_v2_2.md/v2_3.md §4, kept
+#: local/untracked, not part of this diff) when it added the
+#: `destination_root`/`destination_anchor_id` fields to `RetainedEntry`.
+#: `RetainedEntry.from_json_dict` ends with `RetainedEntry(**d)` against the
+#: FULL unfiltered parsed dict — an OLDER build's dataclass (without those
+#: two fields) would raise `TypeError` on those extra keys the moment it
+#: tried to read a file this build wrote, which `_parse_registry_text`
+#: catches and reports as "the whole registry corrupt". Bumping the version
+#: makes that same older build see `version != REGISTRY_VERSION` first and
+#: report the correct, non-alarming `"unsupported_version"` instead — it
+#: backs the file up before ever risking a write, exactly like every other
+#: unsupported-version case already does, and never touches it on a
+#: read-only listing. A version-1 file (written before this feature
+#: existed) is still read as before — see `_parse_registry_text` — and is
+#: upgraded to version 2 in place the first time anything mutates it
+#: (`_write_entries` always stamps the CURRENT `REGISTRY_VERSION`). Rollback
+#: to a pre-v2 build is unsupported while any version-2-only entries exist:
+#: that older build's OWN mutation would back up the version-2 content and
+#: then write back a version-1 file containing only its own change — the
+#: pre-existing version-2 entries are not lost outright (preserved
+#: byte-for-byte in the timestamped backup, same guarantee
+#: `_preserve_unreadable` already gives for a `"corrupt"` file) but do drop
+#: out of the ACTIVE registry the older build keeps operating on. Finish
+#: outstanding recoveries (drain the registry to empty) before downgrading,
+#: or restore from the backup after re-upgrading if a downgrade already
+#: happened with entries still pending.
+REGISTRY_VERSION = 2
+#: Older registry versions this build still reads (in addition to the
+#: current `REGISTRY_VERSION`) without treating them as unsupported. Every
+#: entry in a version-1 file parses as legacy — `destination_root`/
+#: `destination_anchor_id` simply aren't present in the dict, so both
+#: default to `None`, which trivially satisfies the both-or-neither
+#: invariant `RetainedEntry.from_json_dict` enforces. Any OTHER version
+#: (neither this nor `REGISTRY_VERSION`) is `"unsupported_version"`.
+_LEGACY_READABLE_VERSIONS = frozenset({1})
 DEFAULT_LOCK_TIMEOUT = 10.0
 HASH_ALGORITHM = "sha256"
 #: [P2, third audit finding #5] Schema validation previously accepted ANY
@@ -161,6 +196,18 @@ class RetainedEntry:
     #: `staging_path` is still wherever the caller originally staged it (a
     #: degraded-but-not-lost outcome — see `quarantine_file`).
     quarantined: bool = True
+    #: Destination-volume identity (see tiddl.core.utils.destination_anchor
+    #: and PROPOSAL_destination_volume_identity_v2_1.md §5, kept
+    #: local/untracked). Both-or-neither: `destination_root` is the
+    #: normalized `root_key` (NOT the display path) the live download
+    #: resolved and verified as currently trusted at staging time;
+    #: `destination_anchor_id` is that root's anchor id at that same
+    #: moment. `None`/`None` ("legacy") means either `destination_identity`
+    #: was `"off"` at staging time, or this entry predates the feature
+    #: entirely — see `tiddl recover --bind-root` for how a legacy entry
+    #: becomes recoverable under `"strict"`.
+    destination_root: Optional[str] = None
+    destination_anchor_id: Optional[str] = None
 
     def to_json_dict(self) -> dict:
         d = asdict(self)
@@ -235,8 +282,25 @@ class RetainedEntry:
         if not isinstance(quarantined, bool):
             raise ValueError(f"invalid 'quarantined': {quarantined!r}")
 
+        # Both-or-neither (PROPOSAL v2.1 §5). A version-1 file simply never
+        # has these keys, so both default to None here and this check
+        # passes trivially — legacy entries need no special-casing.
+        dest_root = d.get("destination_root")
+        dest_anchor_id = d.get("destination_anchor_id")
+        if (dest_root is None) != (dest_anchor_id is None):
+            raise ValueError(
+                "'destination_root'/'destination_anchor_id' must be both set or both "
+                f"None: {dest_root!r}, {dest_anchor_id!r}"
+            )
+        if dest_root is not None and not isinstance(dest_root, str):
+            raise ValueError(f"invalid 'destination_root': {dest_root!r}")
+        if dest_anchor_id is not None and not isinstance(dest_anchor_id, str):
+            raise ValueError(f"invalid 'destination_anchor_id': {dest_anchor_id!r}")
+
         d["reason"] = reason
         d["hash_algorithm"] = algorithm
+        d["destination_root"] = dest_root
+        d["destination_anchor_id"] = dest_anchor_id
         return RetainedEntry(**d)
 
 
@@ -296,10 +360,11 @@ def _parse_registry_text(text: str, raw_bytes: bytes) -> ReadResult:
         log.warning(f"Retained-staging registry at {registry_path()} has an unexpected shape: {e}")
         return ReadResult(status="corrupt", entries=[], raw_bytes=raw_bytes)
 
-    if version != REGISTRY_VERSION:
+    if version != REGISTRY_VERSION and version not in _LEGACY_READABLE_VERSIONS:
         log.warning(
             f"Retained-staging registry at {registry_path()} is version {version!r}, "
-            f"this build understands version {REGISTRY_VERSION}. Leaving it untouched."
+            f"this build understands version {REGISTRY_VERSION} (and legacy "
+            f"{sorted(_LEGACY_READABLE_VERSIONS)}). Leaving it untouched."
         )
         return ReadResult(status="unsupported_version", entries=[], raw_bytes=raw_bytes)
 
@@ -762,6 +827,8 @@ async def register_retained_file(
     output_path: Path,
     reason: RetainReason,
     track_title: Optional[str] = None,
+    destination_root: Optional[str] = None,
+    destination_anchor_id: Optional[str] = None,
 ) -> RegisterResult:
     """Quarantine `retained` and record it in the registry. Best-effort end
     to end: a registry-persistence failure is logged and leaves `entry=None`
@@ -770,7 +837,15 @@ async def register_retained_file(
     failure) into an exception for the CURRENT run. `actual_path` on the
     returned result is ALWAYS the file's real current location — even when
     persistence fails after the file has already been (possibly)
-    quarantined — so the caller's own in-process pointer never goes stale."""
+    quarantined — so the caller's own in-process pointer never goes stale.
+
+    `destination_root`/`destination_anchor_id` (both or neither — see
+    `RetainedEntry`): the caller's job to capture from a live
+    `destination_anchor.check_write_allowed(...)` result at the moment this
+    file was staged, per PROPOSAL_destination_volume_identity_v2_1.md §5
+    (kept local/untracked) — this function does not itself know anything
+    about destination-volume identity, matching `publish_verified_file`'s
+    own "stay root-agnostic" design."""
     entry_id = uuid4().hex
     suffix = output_path.suffix or Path(retained).suffix
     retained = Path(retained)
@@ -797,6 +872,8 @@ async def register_retained_file(
             observed_hash=digest,
             track_title=track_title,
             quarantined=quarantined,
+            destination_root=destination_root,
+            destination_anchor_id=destination_anchor_id,
         )
         persisted_entry = await asyncio.to_thread(add_entry, entry)
         return RegisterResult(actual_path=final_path, entry=persisted_entry)

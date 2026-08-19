@@ -9,6 +9,7 @@ command (see cli/commands/recover.py's module docstring).
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,21 @@ import tiddl.core.utils.retained_registry as reg
 from tiddl.cli.app import app
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Rich renders styled spans as separate ANSI-wrapped runs (e.g. the
+    tail of one colored phrase and the head of the next can be split across
+    a word-wrapped line with no literal space between them once codes are
+    left in) — a plain `" ".join(text.split())` flattens *whitespace* but
+    can still leave escape codes sitting inside what should be one
+    contiguous phrase. Strip the codes first, then flatten whitespace, so
+    substring assertions are robust to wherever Rich happens to wrap a
+    given run (which varies with the length of the tmp_path-derived text
+    embedded in these messages, not just the terminal width)."""
+    return _ANSI_RE.sub("", text)
 
 
 @pytest.fixture(autouse=True)
@@ -411,3 +427,258 @@ def test_recover_purge_refuses_on_unreadable_registry_without_crashing(tmp_path,
     # APP_PATH-isolation patch (same fixture instance).
     with open(reg.registry_path(), "rb") as f:
         assert f.read() == original  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Destination-volume identity: --bind-root + the strict-mode triple-identity
+# check (PROPOSAL_destination_volume_identity_v2_1.md sections 6-7, kept
+# local/untracked — not part of this diff).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolated_anchor_app_path(tmp_path, monkeypatch):
+    import tiddl.core.utils.destination_anchor as da
+
+    monkeypatch.setattr(da, "APP_PATH", tmp_path / "_app")
+    return da
+
+
+@pytest.fixture
+def _strict_mode(monkeypatch):
+    from tiddl.cli.config import CONFIG
+
+    monkeypatch.setattr(CONFIG.download, "destination_identity", "strict")
+
+
+def test_bind_root_requires_root_option(tmp_path):
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B1")
+    result = runner.invoke(app, ["recover", "--bind-root", entry.id[:8]])
+    assert result.exit_code == 1
+    assert "--root" in result.output
+
+
+def test_bind_root_refuses_untrusted_root(tmp_path):
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B2")
+    untrusted_root = dest.parent
+    result = runner.invoke(
+        app, ["recover", "--bind-root", entry.id[:8], "--root", str(untrusted_root)]
+    )
+    assert result.exit_code == 1
+    # Rich word-wraps at the detected console width, which can split a
+    # literal phrase across a line break depending on how long the
+    # tmp_path-derived string embedded in the message is (see the
+    # analogous comment above on test_recover_publish_one_missing_dest) —
+    # strip ANSI styling and normalize whitespace before substring-checking.
+    normalized = " ".join(_strip_ansi(result.output).split())
+    assert "not currently trusted" in normalized
+    assert reg.read_entries().entries[0].destination_root is None
+
+
+def test_bind_root_refuses_output_outside_root(tmp_path):
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B3")
+    other_root = tmp_path / "unrelated_root"
+    other_root.mkdir()
+    da.establish_anchor(other_root)
+
+    result = runner.invoke(
+        app, ["recover", "--bind-root", entry.id[:8], "--root", str(other_root), "--confirm"]
+    )
+    assert result.exit_code == 1
+    normalized = " ".join(_strip_ansi(result.output).split())
+    assert "not contained" in normalized
+    assert reg.read_entries().entries[0].destination_root is None
+
+
+def test_bind_root_confirmed_binds_the_entry(tmp_path):
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B4")
+    root = dest.parent
+    anchor_id = da.establish_anchor(root)
+
+    result = runner.invoke(
+        app, ["recover", "--bind-root", entry.id[:8], "--root", str(root), "--confirm"]
+    )
+    assert result.exit_code == 0
+    assert "Bound" in result.output
+
+    bound = reg.read_entries().entries[0]
+    assert bound.destination_root == da.root_key(root)
+    assert bound.destination_anchor_id == anchor_id
+
+
+def test_bind_root_declined_confirmation_changes_nothing(tmp_path):
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B5")
+    root = dest.parent
+    da.establish_anchor(root)
+
+    result = runner.invoke(
+        app, ["recover", "--bind-root", entry.id[:8], "--root", str(root)], input="n\n"
+    )
+    assert result.exit_code == 1
+    assert reg.read_entries().entries[0].destination_root is None
+
+
+def test_bind_root_refuses_an_already_identified_entry(tmp_path):
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B6")
+    root = dest.parent
+    da.establish_anchor(root)
+    reg.update_entry(entry.id, destination_root="/already/set", destination_anchor_id="x" * 32)
+
+    result = runner.invoke(
+        app, ["recover", "--bind-root", entry.id[:8], "--root", str(root), "--confirm"]
+    )
+    assert result.exit_code == 1
+    assert "already has a destination identity" in result.output
+
+
+def test_bind_root_refuses_if_marker_disappears_during_confirmation(tmp_path, monkeypatch):
+    # Implementation-audit finding (2026-08-18), P1 #4: the original code
+    # re-read the marker independently (`anchor.read_marker(root)`),
+    # uncoordinated with the earlier `check_write_allowed` call, and never
+    # accounted for the confirmation prompt itself taking arbitrary real
+    # time. Simulates the destination disappearing WHILE the user is still
+    # looking at the "Proceed?" prompt — the persisted pair must come from
+    # a check re-run AFTER confirmation, not the stale pre-prompt one.
+    import tiddl.cli.commands.recover as recovermod
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B7")
+    root = dest.parent
+    da.establish_anchor(root)
+
+    def _confirm_then_vanish(*args, **kwargs):
+        da.marker_path(root).unlink()
+        return True
+
+    monkeypatch.setattr(recovermod.typer, "confirm", _confirm_then_vanish)
+
+    result = runner.invoke(app, ["recover", "--bind-root", entry.id[:8], "--root", str(root)])
+    assert result.exit_code == 1
+    normalized = " ".join(_strip_ansi(result.output).split())
+    assert "no longer trusted" in normalized
+    # Byte-for-byte unchanged — never a half-written destination_root/
+    # destination_anchor_id pair (the both-or-neither invariant).
+    unchanged = reg.read_entries().entries[0]
+    assert unchanged.destination_root is None
+    assert unchanged.destination_anchor_id is None
+
+
+def test_bind_root_persists_the_post_confirmation_anchor_when_it_changed(tmp_path, monkeypatch):
+    # The marker can also CHANGE (not just vanish) during confirmation —
+    # e.g. a concurrent forget + re-trust with a new anchor id. The
+    # persisted id must be the fresh, post-confirmation one, never the
+    # stale pre-prompt id that the first check happened to see.
+    import tiddl.cli.commands.recover as recovermod
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="B8")
+    root = dest.parent
+    old_anchor_id = da.establish_anchor(root)
+
+    new_anchor_id = None
+
+    def _confirm_then_retrust(*args, **kwargs):
+        nonlocal new_anchor_id
+        da.forget_anchor(root)
+        da.marker_path(root).unlink()
+        new_anchor_id = da.establish_anchor(root)
+        return True
+
+    monkeypatch.setattr(recovermod.typer, "confirm", _confirm_then_retrust)
+
+    result = runner.invoke(app, ["recover", "--bind-root", entry.id[:8], "--root", str(root)])
+    assert result.exit_code == 0
+    assert new_anchor_id is not None and new_anchor_id != old_anchor_id
+    bound = reg.read_entries().entries[0]
+    assert bound.destination_anchor_id == new_anchor_id
+
+
+def test_strict_mode_legacy_entry_refuses_and_names_bind_root(tmp_path, _strict_mode):
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S1")
+    result = runner.invoke(app, ["recover", "--publish", entry.id[:8]])
+    assert result.exit_code != 0
+    assert "--bind-root" in result.output
+    assert dest.exists() is False  # nothing was published
+    assert reg.read_entries().entries[0].id == entry.id  # entry untouched
+
+
+def test_strict_mode_bound_entry_with_matching_anchor_recovers(tmp_path, _strict_mode):
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S2")
+    root = dest.parent
+    anchor_id = da.establish_anchor(root)
+    reg.update_entry(
+        entry.id, destination_root=da.root_key(root), destination_anchor_id=anchor_id
+    )
+
+    result = runner.invoke(app, ["recover", "--publish", entry.id[:8]])
+    assert result.exit_code == 0
+    assert dest.exists()
+    assert reg.read_entries().entries == []
+
+
+def test_strict_mode_forget_and_re_trust_makes_a_previously_valid_entry_refuse(
+    tmp_path, _strict_mode
+):
+    # The v2 audit's triple-identity regression case, exercised end-to-end
+    # through the CLI: an entry bound against an OLD anchor must not
+    # silently pass once the root is re-trusted with a NEW one.
+    import tiddl.core.utils.destination_anchor as da
+
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S3")
+    root = dest.parent
+    old_anchor_id = da.establish_anchor(root)
+    reg.update_entry(
+        entry.id, destination_root=da.root_key(root), destination_anchor_id=old_anchor_id
+    )
+
+    da.forget_anchor(root)
+    (root / da.MARKER_FILENAME).unlink()
+    da.establish_anchor(root)  # new anchor id
+
+    result = runner.invoke(app, ["recover", "--publish", entry.id[:8]])
+    assert result.exit_code != 0
+    assert "id_mismatch" in result.output
+    assert dest.exists() is False
+    assert reg.read_entries().entries[0].id == entry.id  # nothing destroyed on refusal
+
+
+def test_off_mode_legacy_entry_recovers_unchanged(tmp_path):
+    # destination_identity defaults to "off" — existing (pre-feature)
+    # behavior for a legacy entry must be completely unaffected.
+    entry, dest = _make_retained(tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S4")
+    result = runner.invoke(app, ["recover", "--publish", entry.id[:8]])
+    assert result.exit_code == 0
+    assert dest.exists()
+
+
+def test_batch_all_returns_nonzero_if_any_targets_identity_check_fails(tmp_path, _strict_mode):
+    import tiddl.core.utils.destination_anchor as da
+
+    ok_entry, ok_dest = _make_retained(
+        tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S5a"
+    )
+    root = ok_dest.parent
+    anchor_id = da.establish_anchor(root)
+    reg.update_entry(
+        ok_entry.id, destination_root=da.root_key(root), destination_anchor_id=anchor_id
+    )
+
+    legacy_entry, legacy_dest = _make_retained(
+        tmp_path, reg.RetainReason.PUBLISH_PENDING, track_title="S5b"
+    )
+
+    result = runner.invoke(app, ["recover", "--all", "--yes"])
+    assert result.exit_code != 0  # legacy entry's refusal makes the batch non-zero
+    assert ok_dest.exists()  # but the trusted one still succeeded
+    remaining_ids = {e.id for e in reg.read_entries().entries}
+    assert remaining_ids == {legacy_entry.id}  # only the refused one is left

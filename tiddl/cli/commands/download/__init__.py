@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import re
+import sys
 import random
 import typer
 import asyncio
@@ -20,6 +21,7 @@ from tiddl.core.api import ApiError
 from tiddl.core.api.models import Album, Track, Video, AlbumItemsCredits
 from tiddl.core.utils.format import format_template
 from tiddl.core.utils.m3u import save_tracks_to_m3u
+from tiddl.core.utils import destination_anchor as anchor
 from tiddl.cli.config import (
     CONFIG,
     TRACK_QUALITY_LITERAL,
@@ -102,6 +104,226 @@ download_command = typer.Typer(name="download")
 register_subcommands(download_command)
 
 log = getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Guarded write helpers for operations 5/6/8 (destination-volume identity,
+# v2.2 §1). Implementation-audit finding, 2026-08-18, P1 #3: these three
+# writes used to check `assert_write_allowed` once on the event loop and
+# THEN dispatch the actual mutation to `asyncio.to_thread`, possibly after a
+# retry sleep (track metadata) or a multi-second network fetch with backoff
+# (covers) — the protected mount could disappear in that gap between "we
+# checked" and "we wrote," exactly the wrong-volume fallback this feature
+# exists to prevent.
+#
+# Each helper below moves `assert_write_allowed` to run INSIDE the same
+# synchronous unit of work as the mutation itself — the whole helper (check
+# + write) is what gets handed to `asyncio.to_thread`, not just the write —
+# so there is no await point, no sleep, and no network I/O between the
+# check and the write it guards. `DestinationNotTrusted` propagates back
+# through `await asyncio.to_thread(...)` and is caught by the caller on the
+# event loop; none of these helpers touch `identity_tracker` themselves
+# (v2.4 mandatory safeguard #2: no `asyncio.Event` mutation from a
+# `to_thread` worker). Standalone module-level functions (not closures) so
+# they're directly unit-testable without going through the full
+# `handle_item` call graph — see tests/test_guarded_writes.py.
+# ---------------------------------------------------------------------------
+
+def _write_track_metadata_guarded(
+    item_root: Path,
+    download_path: Path,
+    mode: str,
+    *,
+    track,
+    lyrics,
+    album_artist,
+    cover_data,
+    date,
+    credits,
+    comment,
+    genre,
+    artist_separator,
+) -> None:
+    """Operation 5. Callers dispatch this whole function via
+    `asyncio.to_thread`, once per retry attempt, so a destination that
+    disappeared between attempts (e.g. while waiting out a locked-file
+    retry sleep) is caught on the very next attempt instead of writing
+    metadata to a mount that is no longer verified."""
+    anchor.assert_write_allowed(item_root, download_path, mode)
+    add_track_metadata(
+        path=download_path,
+        track=track,
+        lyrics=lyrics,
+        album_artist=album_artist,
+        cover_data=cover_data,
+        date=date,
+        credits=credits,
+        comment=comment,
+        genre=genre,
+        artist_separator=artist_separator,
+    )
+
+
+def _write_video_metadata_guarded(
+    item_root: Path,
+    download_path: Path,
+    mode: str,
+    *,
+    video,
+    artist_separator,
+) -> None:
+    """Operation 6 — see `_write_track_metadata_guarded`'s docstring."""
+    anchor.assert_write_allowed(item_root, download_path, mode)
+    add_video_metadata(path=download_path, video=video, artist_separator=artist_separator)
+
+
+async def _guarded_save_cover(
+    cover: Cover,
+    root: Path,
+    path: Path,
+    mode: str,
+    tracker: "anchor.IdentityFailureTracker",
+    label: str,
+) -> None:
+    """Operation 8. Fetches cover bytes (network I/O, its own retry backoff
+    inside `Cover._get_data`) BEFORE the identity check runs — closing the
+    gap `Cover.save_to_directory()` used to leave open by fetching AFTER a
+    passing pre-dispatch check. The check and the actual file write then run
+    together, synchronously, inside one `asyncio.to_thread` dispatch, via
+    `Cover.write_prefetched` (no network I/O in that call — it raises
+    `CoverDataNotPrefetched` rather than fetching if `data` weren't already
+    prefetched, so a second network fetch can never happen from inside the
+    guarded worker). Catches `DestinationNotTrusted` here, on the event
+    loop, and marks `tracker` — the same safeguard-#2 discipline as the
+    metadata helpers above.
+
+    Second implementation-audit finding (2026-08-18), P1 #2: the fetch
+    result is assigned to a local explicitly and checked BEFORE dispatching
+    the guarded write — `cover.data` alone is not trustworthy here (a
+    failed fetch leaves it `None`/falsy, and the old code's implicit
+    reliance on `write_prefetched`'s own now-removed fallback silently
+    re-fetched over the network on every such failure, after the identity
+    check had already run once)."""
+    file = path.with_suffix(".jpg")
+    if file.exists():
+        log.debug(f"cover exists ({file})")
+        return
+
+    data = await asyncio.to_thread(cover._get_data)
+    if not data:
+        log.warning(
+            f"[destination-identity] no {label} cover data fetched, skipping write for {path}"
+        )
+        return
+    cover.data = data
+
+    def _guarded_write() -> None:
+        anchor.assert_write_allowed(root, path, mode)
+        cover.write_prefetched(path)
+
+    try:
+        await asyncio.to_thread(_guarded_write)
+    except anchor.DestinationNotTrusted as e:
+        tracker.mark_refused(e.check)
+        log.warning(
+            f"[destination-identity] refused {label} cover write "
+            f"for {path}: {e.check.reason}"
+        )
+
+
+def _write_lrc_guarded(item_root: Path, lrc_path: Path, mode: str, text: str) -> None:
+    """Operation 4. Runs on the event loop, not a worker thread (the write
+    itself is a small synchronous text write, never dispatched to
+    asyncio.to_thread) — check and write are already adjacent statements
+    with no gap to close, unlike operations 5/6/8. Standalone module-level
+    function purely for direct unit-test coverage (implementation-audit P2
+    finding — this operation class had no dedicated test)."""
+    anchor.assert_write_allowed(item_root, lrc_path, mode)
+    lrc_path.write_text(text, encoding="utf-8")
+
+
+def _touch_guarded(item_root: Path, download_path: Path, mode: str) -> None:
+    """Operation 9 (v2.3 §1). Same non-threaded reasoning as
+    `_write_lrc_guarded` above — extracted only for direct unit-test
+    coverage. Unlike operations 4/5/6, a refusal here is COSMETIC: the
+    caller must never treat this as withholding the already-completed
+    `_db_insert` (Class B's documented exception, v2.3 §3) — that
+    distinction is the caller's responsibility, not this function's."""
+    anchor.assert_write_allowed(item_root, download_path, mode)
+    os.utime(download_path, None)
+
+
+def _should_insert_db_record(was_downloaded: bool, identity_refused: bool) -> bool:
+    """Class B (v2.3 §3): a per-item `_db_insert` is withheld exactly when
+    THIS item's own destination-identity refusal happened — operations 4
+    (.lrc), 5 (track metadata) or 6 (video metadata), the only three that
+    set `identity_refused = True`. Operation 9 (utime) deliberately never
+    sets it (a stale mtime is cosmetic, never suppresses an insert that
+    already ran — see `_touch_guarded`'s docstring), and operations 7/8
+    (M3U/cover, Class C) run AFTER this decision and can never un-insert an
+    already-truthful record.
+
+    Standalone pure function so this exact decision has direct unit
+    coverage (implementation-audit P2 finding, second round: outcome-level
+    Class B/C DB semantics lacked a direct test) without needing to invoke
+    the surrounding `handle_item` call graph."""
+    return bool(was_downloaded and not identity_refused)
+
+
+def _finalize_db_record(downloader, item, download_path, was_downloaded, identity_refused) -> None:
+    """Class B (v2.3 §3): the COMPLETE per-item DB-insert effect —
+    `handle_item` calls this, not `_should_insert_db_record` +
+    `downloader._db_insert` inline. Implementation-audit finding, third
+    round: a test that only exercises `_should_insert_db_record()` in
+    isolation would keep passing even if `handle_item` stopped calling it,
+    inverted its result, or inserted via a different path — because the
+    helper and the call site were two different pieces of code. Making
+    THIS function the single call site means a test that calls it
+    directly, against a real `Downloader`'s real SQLite-backed
+    `_db_insert`/`_db_lookup`, is exercising the exact same code
+    `handle_item` runs — not a parallel copy of it."""
+    if not download_path or not _should_insert_db_record(was_downloaded, identity_refused):
+        return
+    if isinstance(item, Track):
+        downloader._db_insert(item.id, download_path, str(item.audioQuality))
+    elif isinstance(item, Video):
+        downloader._db_insert(item.id, download_path, "VIDEO")
+
+
+def _download_exit_code(any_identity_refused: bool) -> Optional[int]:
+    """v2.4 §2: the final `tiddl download` exit-code decision, evaluated
+    once after every per-item and per-resource task in the run has
+    completed (`identity_tracker.any_refused`, which is monotonic across
+    however many concurrent tasks refused — see
+    `IdentityFailureTracker.mark_refused`). Returns 1 (non-zero) if any
+    destination-identity check refused a write during the run — a mixed
+    run where some items succeeded and others refused still counts as
+    "one or more refused," per the tracker's own monotonic semantics — or
+    `None` to fall through to Typer's normal 0. Standalone pure function
+    for direct unit coverage of this decision, same audit finding as
+    `_should_insert_db_record` above."""
+    return 1 if any_identity_refused else None
+
+
+def _finish_download_run(console, any_identity_refused: bool) -> None:
+    """v2.4 §2: the COMPLETE final-outcome effect for `tiddl download` —
+    the warning message AND the actual `sys.exit()` — not just the
+    decision. `run()` calls this, not `_download_exit_code()` +
+    `sys.exit()` inline. Implementation-audit finding, third round: a test
+    of `_download_exit_code()` alone doesn't prove `run()`'s closure still
+    calls it, still uses its return value correctly, or still actually
+    exits the process. This function IS what `run()` calls (see
+    `download_callback` below), so a test calling it directly (asserting
+    `SystemExit` via `pytest.raises`) exercises the real call site, not a
+    parallel copy of its logic."""
+    exit_code = _download_exit_code(any_identity_refused)
+    if exit_code is not None:
+        console.print(
+            "[red]One or more destination-identity checks refused a write "
+            "this run — see the warnings above. Nothing was lost (retryable "
+            "copies were retained where applicable); exiting non-zero.[/]"
+        )
+        sys.exit(exit_code)
 
 
 @download_command.callback(no_args_is_help=True)
@@ -461,6 +683,14 @@ def download_callback(
 
     log.debug(f"{ctx.params=}")
 
+    # One IdentityFailureTracker per `tiddl download` invocation (v2.4
+    # mandatory safeguard #2) — download_callback() runs once per command
+    # invocation, so this is the natural home for it: created here, closed
+    # over by every guarded call site below (save_m3u, the cover.save_to_
+    # directory sites, and — via download_resources()/handle_item — the
+    # Downloader itself), never a module global.
+    identity_tracker = anchor.IdentityFailureTracker()
+
     def resolve_template(specific_cli: str, config_template: str) -> str:
         return specific_cli or TEMPLATE or config_template
 
@@ -483,8 +713,15 @@ def download_callback(
 
         log.debug(f"{resource_type=}, {filename=}, {len(tracks_with_existing_paths)=}")
 
+        # Operation 7 (destination-volume identity, v2.2 §1): save_m3u() runs
+        # synchronously on the event loop (never inside asyncio.to_thread), so
+        # it's safe for save_tracks_to_m3u() to touch identity_tracker
+        # directly — no thread-boundary concern here (contrast with the cover
+        # sites below, which dispatch to a thread).
         save_tracks_to_m3u(
-            tracks_with_path=tracks_with_existing_paths, path=DOWNLOAD_PATH / filename
+            tracks_with_path=tracks_with_existing_paths, path=DOWNLOAD_PATH / filename,
+            root=DOWNLOAD_PATH, mode=CONFIG.download.destination_identity,
+            tracker=identity_tracker,
         )
 
     def get_item_quality(item: Union[Track, Video]):
@@ -520,6 +757,10 @@ def download_callback(
         _session_track_count = [0]
         _session_limit = CONFIG.download.max_tracks_per_session
 
+        # identity_tracker: created once in download_callback() above (not
+        # here) — this closure just reuses it, same object save_m3u() and
+        # the cover call sites below already close over.
+
         downloader = Downloader(
             tidal_api=ctx.obj.api,
             threads_count=THREADS_COUNT,
@@ -532,6 +773,8 @@ def download_callback(
             scan_path=SCAN_PATH,
             video_download_path=VIDEO_DOWNLOAD_PATH,
             fallback_api=ctx.obj.fallback_api,
+            destination_identity=CONFIG.download.destination_identity,
+            identity_tracker=identity_tracker,
         )
 
         # Fast-skip shortcuts (whole-album fast exit, up-front present detection,
@@ -620,6 +863,22 @@ def download_callback(
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
 
+                # Destination-volume identity (operations 4/5/6/9, v2.2 §1 /
+                # v2.3 §1): the same root operations 1/2/3 already checked for
+                # this item, in downloader.py. Tracks and videos can have
+                # different configured roots (--video-path overrides --path),
+                # so this is item-type-dependent, computed once and reused.
+                item_root = (
+                    DOWNLOAD_PATH if isinstance(item, Track)
+                    else (VIDEO_DOWNLOAD_PATH or DOWNLOAD_PATH)
+                )
+                # Class B (v2.3 §3): a refusal at the .lrc/metadata level skips
+                # this item's _db_insert below, so a later run's directory-scan
+                # fallback retries it. utime (operation 9) is exempted per its
+                # own outcome rule — never suppresses an insert that already
+                # happened.
+                identity_refused = False
+
                 if (
                     CONFIG.metadata.enable
                     and download_path
@@ -670,7 +929,18 @@ def download_callback(
                                 if fetched_lyrics:
                                     if CONFIG.metadata.save_lyrics and (not lrc_exists or REWRITE_METADATA):
                                         try:
-                                            lrc_path.write_text(fetched_lyrics, encoding="utf-8")
+                                            _write_lrc_guarded(
+                                                item_root, lrc_path,
+                                                CONFIG.download.destination_identity,
+                                                fetched_lyrics,
+                                            )
+                                        except anchor.DestinationNotTrusted as e:
+                                            identity_tracker.mark_refused(e.check)
+                                            identity_refused = True
+                                            log.warning(
+                                                f"[destination-identity] refused .lrc write "
+                                                f"for {lrc_path}: {e.check.reason}"
+                                            )
                                         except Exception as e:
                                             log.error(f"Could not save .lrc file: {e}")
                                     
@@ -692,11 +962,18 @@ def download_callback(
                                 track_metadata.cover_data = b""
 
                         if REWRITE_METADATA or was_downloaded:
+                            # Operation 5, moved into a guarded worker helper
+                            # (P1 #3 audit fix) — see _write_track_metadata_
+                            # guarded's docstring. The identity check now runs
+                            # fresh on EVERY attempt, inside the same
+                            # to_thread dispatch as the write itself, instead
+                            # of once before the retry loop even starts.
                             for _attempt in range(3):
                                 try:
                                     await asyncio.to_thread(
-                                        add_track_metadata,
-                                        path=download_path,
+                                        _write_track_metadata_guarded,
+                                        item_root, download_path,
+                                        CONFIG.download.destination_identity,
                                         track=item,
                                         lyrics=lyrics_subtitles,
                                         album_artist=track_metadata.artist,
@@ -708,6 +985,14 @@ def download_callback(
                                         artist_separator=CONFIG.templates.artist_separator,
                                     )
                                     break
+                                except anchor.DestinationNotTrusted as e:
+                                    identity_tracker.mark_refused(e.check)
+                                    identity_refused = True
+                                    log.warning(
+                                        f"[destination-identity] refused track metadata "
+                                        f"write for {download_path}: {e.check.reason}"
+                                    )
+                                    break  # not a lock — retrying won't change a refusal
                                 except Exception as e:
                                     # mutagen envuelve el PermissionError del SO (lock de slskd/AV en NAS/SMB)
                                     # en su propia excepcion, asi que detectamos el lock por tipo O por mensaje.
@@ -724,23 +1009,54 @@ def download_callback(
 
                     elif isinstance(item, Video):
                         if REWRITE_METADATA or was_downloaded:
-                            await asyncio.to_thread(add_video_metadata, path=download_path, video=item, artist_separator=CONFIG.templates.artist_separator)
+                            # Operation 6, moved into a guarded worker helper
+                            # (P1 #3 audit fix) — see _write_video_metadata_
+                            # guarded's docstring.
+                            try:
+                                await asyncio.to_thread(
+                                    _write_video_metadata_guarded,
+                                    item_root, download_path,
+                                    CONFIG.download.destination_identity,
+                                    video=item,
+                                    artist_separator=CONFIG.templates.artist_separator,
+                                )
+                            except anchor.DestinationNotTrusted as e:
+                                identity_tracker.mark_refused(e.check)
+                                identity_refused = True
+                                log.warning(
+                                    f"[destination-identity] refused video metadata "
+                                    f"write for {download_path}: {e.check.reason}"
+                                )
 
                 # Mark complete in the skip-existing DB only *after* metadata has
                 # been attempted (see downloader.download()'s docstring). If the
                 # process dies before this line, the DB stays clean and a re-run
                 # will find the file via the directory-scan fallback and retry
                 # writing its metadata, instead of silently leaving it untagged
-                # forever.
-                if download_path and was_downloaded:
-                    if isinstance(item, Track):
-                        downloader._db_insert(item.id, download_path, str(item.audioQuality))
-                    elif isinstance(item, Video):
-                        downloader._db_insert(item.id, download_path, "VIDEO")
+                # forever. Class B (v2.3 §3): the same withholding now also
+                # covers a destination-identity refusal at .lrc/metadata above
+                # — identity_refused stays False (a no-op) whenever
+                # CONFIG.download.destination_identity == "off", so this adds
+                # no behavior change for anyone not using the feature.
+                _finalize_db_record(
+                    downloader, item, download_path, was_downloaded, identity_refused
+                )
 
                 if download_path and CONFIG.download.update_mtime:
                     try:
-                        os.utime(download_path, None)
+                        _touch_guarded(
+                            item_root, download_path,
+                            CONFIG.download.destination_identity,
+                        )
+                    except anchor.DestinationNotTrusted as e:
+                        # Operation 9 (v2.3 §1): unlike 4/5/6 above, this never
+                        # sets identity_refused — a stale mtime is cosmetic,
+                        # never suppresses the _db_insert that already ran.
+                        identity_tracker.mark_refused(e.check)
+                        log.warning(
+                            f"[destination-identity] refused mtime update for "
+                            f"{download_path}: {e.check.reason}"
+                        )
                     except Exception:
                         log.warning(f"could not update mtime for {download_path}")
 
@@ -1033,13 +1349,16 @@ def download_callback(
                 )
 
                 if save_cover and cover:
-                    await asyncio.to_thread(
-                        cover.save_to_directory,
-                        DOWNLOAD_PATH
-                        / format_template(
-                            template=CONFIG.cover.templates.album, album=album,
-                            artist_separator=CONFIG.templates.artist_separator,
-                        ),
+                    _album_cover_path = DOWNLOAD_PATH / format_template(
+                        template=CONFIG.cover.templates.album, album=album,
+                        artist_separator=CONFIG.templates.artist_separator,
+                    )
+                    # Operation 8 — via the guarded helper (P1 #3 audit fix);
+                    # see _guarded_save_cover's docstring.
+                    await _guarded_save_cover(
+                        cover, DOWNLOAD_PATH, _album_cover_path,
+                        CONFIG.download.destination_identity,
+                        identity_tracker, "album",
                     )
 
             # resources should be collected from a distinct function
@@ -1080,13 +1399,16 @@ def download_callback(
                     and track.album.cover
                 ):
                     _track_cover = Cover(track.album.cover, size=CONFIG.cover.size)
-                    await asyncio.to_thread(
-                        _track_cover.save_to_directory,
-                        DOWNLOAD_PATH
-                        / format_template(
-                            CONFIG.cover.templates.track, item=track, album=album,
-                            artist_separator=CONFIG.templates.artist_separator,
-                        ),
+                    _track_cover_path = DOWNLOAD_PATH / format_template(
+                        CONFIG.cover.templates.track, item=track, album=album,
+                        artist_separator=CONFIG.templates.artist_separator,
+                    )
+                    # Operation 8 — via the guarded helper (P1 #3 audit fix);
+                    # see _guarded_save_cover's docstring.
+                    await _guarded_save_cover(
+                        _track_cover, DOWNLOAD_PATH, _track_cover_path,
+                        CONFIG.download.destination_identity,
+                        identity_tracker, "track",
                     )
 
             elif resource_type == "video":
@@ -1626,14 +1948,17 @@ def download_callback(
                     and playlist.squareImage
                 ):
                     _pl_cover = Cover(playlist.squareImage, size=max(CONFIG.cover.size, 1080))
-                    await asyncio.to_thread(
-                        _pl_cover.save_to_directory,
-                        DOWNLOAD_PATH
-                        / format_template(
-                            template=CONFIG.cover.templates.playlist,
-                            playlist=playlist,
-                            artist_separator=CONFIG.templates.artist_separator,
-                        ),
+                    _pl_cover_path = DOWNLOAD_PATH / format_template(
+                        template=CONFIG.cover.templates.playlist,
+                        playlist=playlist,
+                        artist_separator=CONFIG.templates.artist_separator,
+                    )
+                    # Operation 8 — via the guarded helper (P1 #3 audit fix);
+                    # see _guarded_save_cover's docstring.
+                    await _guarded_save_cover(
+                        _pl_cover, DOWNLOAD_PATH, _pl_cover_path,
+                        CONFIG.download.destination_identity,
+                        identity_tracker, "playlist",
                     )
 
                 ctx.obj.console.print(f"\n[bold green]✅ Playlist download completed:[/] {playlist.title}")
@@ -1785,23 +2110,29 @@ def download_callback(
 
         rich_output.show_stats()
 
+        # v2.4 §2: checked once, after every per-item and per-resource task
+        # has completed — not by scanning output or counting log lines.
+        return identity_tracker.any_refused
+
     def run():
         # Sin recursos no hay nada que descargar: evita pintar los paneles
         # vacíos de progreso (que entierran el mensaje de error de Click
         # cuando el subcomando falló al parsear sus argumentos).
         if not ctx.obj.resources:
             return
-        import warnings, sys
+        import warnings
         # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
         if sys.platform == "win32":
             warnings.filterwarnings("ignore", category=ResourceWarning)
         try:
-            asyncio.run(download_resources())
+            any_identity_refused = asyncio.run(download_resources())
         except KeyboardInterrupt:
             ctx.obj.console.print("\n[yellow]Download interrupted by user.[/]")
         except Exception as e:
             ctx.obj.console.print(f"\n[red]Unexpected error during download: {e}[/]")
             import traceback
             log.error(traceback.format_exc())
+        else:
+            _finish_download_run(ctx.obj.console, any_identity_refused)
 
     ctx.call_on_close(run)
