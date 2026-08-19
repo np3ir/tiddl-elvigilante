@@ -22,6 +22,8 @@ from tiddl.core.api.models import Album, Track, Video, AlbumItemsCredits
 from tiddl.core.utils.format import format_template
 from tiddl.core.utils.m3u import save_tracks_to_m3u
 from tiddl.core.utils import destination_anchor as anchor
+from tiddl.core.edition_resolver import find_stereo_editions
+from tiddl.core.download_policy import SessionTrackLimit
 from tiddl.cli.config import (
     CONFIG,
     TRACK_QUALITY_LITERAL,
@@ -336,6 +338,43 @@ def download_callback(
             "-q",
         ),
     ] = CONFIG.download.track_quality,
+    AUDIO_MODE: Annotated[
+        str,
+        typer.Option(
+            "--audio-mode",
+            help=(
+                "Audio edition policy: auto keeps supplied IDs; stereo resolves "
+                "album URLs to stereo editions."
+            ),
+        ),
+    ] = "auto",
+    EDITION_MATCH: Annotated[
+        str,
+        typer.Option(
+            "--edition-match",
+            help=(
+                "Stereo replacement policy: ask before changed track lists, "
+                "or best to accept the best match."
+            ),
+        ),
+    ] = "ask",
+    QUALITY_POLICY: Annotated[
+        str,
+        typer.Option(
+            "--quality-policy",
+            help=(
+                "Quality delivery policy: flexible permits normal fallback; "
+                "strict requires the exact requested quality."
+            ),
+        ),
+    ] = "flexible",
+    DRY_RUN: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Resolve stereo editions and show the plan without downloading or changing files.",
+        ),
+    ] = False,
     VIDEO_QUALITY: Annotated[
         VIDEO_QUALITY_LITERAL,
         typer.Option(
@@ -608,6 +647,21 @@ def download_callback(
         ),
     ] = None,
 ):
+    AUDIO_MODE = AUDIO_MODE.casefold()
+    EDITION_MATCH = EDITION_MATCH.casefold()
+    QUALITY_POLICY = QUALITY_POLICY.casefold()
+    if AUDIO_MODE not in ("auto", "stereo"):
+        raise typer.BadParameter("audio mode must be auto or stereo", param_hint="--audio-mode")
+    if EDITION_MATCH not in ("ask", "best"):
+        raise typer.BadParameter("edition match must be ask or best", param_hint="--edition-match")
+    if QUALITY_POLICY not in ("flexible", "strict"):
+        raise typer.BadParameter(
+            "quality policy must be flexible or strict", param_hint="--quality-policy"
+        )
+    if DRY_RUN and AUDIO_MODE != "stereo":
+        raise typer.BadParameter(
+            "dry-run currently requires --audio-mode stereo", param_hint="--dry-run"
+        )
     """
     Download Tidal resources.
     """
@@ -753,9 +807,98 @@ def download_callback(
         from tiddl.cli.commands.web_login import auto_refresh_if_needed
         await auto_refresh_if_needed(threshold_minutes=30)
 
+        if AUDIO_MODE == "stereo":
+            resolved_resources: list[TidalResource] = []
+            for resource in ctx.obj.resources:
+                if resource.type != "album":
+                    ctx.obj.console.print(
+                        f"[yellow]Stereo edition resolution currently applies only to direct "
+                        f"album URLs; keeping {resource.type}/{resource.id} unchanged.[/]"
+                    )
+                    resolved_resources.append(resource)
+                    continue
+
+                result = await asyncio.to_thread(
+                    find_stereo_editions,
+                    ctx.obj.api,
+                    int(resource.id),
+                    TRACK_QUALITY,
+                    0.75,
+                    QUALITY_POLICY,
+                )
+                resolved_quality = result.requested_quality
+                source = result.source
+                if result.source_satisfies_request:
+                    ctx.obj.console.print(
+                        f"[green]Stereo {resolved_quality.upper()} already available:[/] "
+                        f"{source.title} (album/{source.id})"
+                    )
+                    resolved_resources.append(resource)
+                    continue
+
+                candidate = result.best
+                if candidate is None:
+                    ctx.obj.console.print(
+                        f"[red]No matching stereo edition at or below "
+                        f"{TRACK_QUALITY.upper()} found for "
+                        f"{source.title} (album/{source.id}); skipped to avoid downloading "
+                        "the Atmos edition.[/]"
+                    )
+                    continue
+
+                alternate = candidate.album
+                ctx.obj.console.print(
+                    f"[bold cyan]Stereo replacement:[/] album/{source.id} → "
+                    f"album/{alternate.id} ({candidate.score:.1%}, "
+                    f"{candidate.track_overlap:.1%} track overlap, "
+                    f"catalog tier {resolved_quality.upper()})"
+                )
+                if candidate.missing_tracks:
+                    ctx.obj.console.print(
+                        "[yellow]Missing from replacement:[/] "
+                        + ", ".join(candidate.missing_tracks)
+                    )
+                if candidate.extra_tracks:
+                    ctx.obj.console.print(
+                        "[yellow]Additional in replacement:[/] "
+                        + ", ".join(candidate.extra_tracks)
+                    )
+
+                accept = True
+                if candidate.requires_confirmation and EDITION_MATCH == "ask":
+                    if DRY_RUN:
+                        ctx.obj.console.print(
+                            "[yellow]A real run would request confirmation before substitution.[/]"
+                        )
+                    else:
+                        accept = await asyncio.to_thread(
+                            typer.confirm,
+                            f"Use stereo album {alternate.id} instead of {source.id}?",
+                            default=False,
+                        )
+                if accept:
+                    resolved_resources.append(
+                        TidalResource(type="album", id=str(alternate.id))
+                    )
+                else:
+                    ctx.obj.console.print(
+                        f"[yellow]Replacement declined; album/{source.id} was skipped.[/]"
+                    )
+
+            if DRY_RUN:
+                ctx.obj.console.print(
+                    "[dim]Dry run complete: no files were downloaded and no settings "
+                    "were changed.[/]"
+                )
+                return False
+            ctx.obj.resources = resolved_resources
+            if not ctx.obj.resources:
+                ctx.obj.console.print("[yellow]No resources remain to download.[/]")
+                return False
+
         rich_output = RichOutput(ctx.obj.console)
-        _session_track_count = [0]
         _session_limit = CONFIG.download.max_tracks_per_session
+        _session_track_limit = SessionTrackLimit(_session_limit)
 
         # identity_tracker: created once in download_callback() above (not
         # here) — this closure just reuses it, same object save_m3u() and
@@ -775,6 +918,8 @@ def download_callback(
             fallback_api=ctx.obj.fallback_api,
             destination_identity=CONFIG.download.destination_identity,
             identity_tracker=identity_tracker,
+            audio_mode=AUDIO_MODE,
+            quality_policy=QUALITY_POLICY,
         )
 
         # Fast-skip shortcuts (whole-album fast exit, up-front present detection,
@@ -837,13 +982,14 @@ def download_callback(
                 rich_output.total_increment()
 
                 # Límite de tracks por sesión
-                if _session_limit > 0 and _session_track_count[0] >= _session_limit:
-                    ctx.obj.console.print(
-                        f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
-                        f"Reinicia para continuar.[/]"
-                    )
+                admitted, announce_limit = _session_track_limit.admit()
+                if not admitted:
+                    if announce_limit:
+                        ctx.obj.console.print(
+                            f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
+                            f"Reinicia para continuar.[/]"
+                        )
                     return Path(""), item
-                _session_track_count[0] += 1
 
                 if not track_metadata:
                     track_metadata = Metadata()
