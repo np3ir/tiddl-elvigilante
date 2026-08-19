@@ -166,7 +166,7 @@ def test_forget_clears_only_local_state(root):
 def test_forget_unknown_root_is_informational_not_an_error(root):
     result = runner.invoke(app, ["destination", "forget", str(root)])
     assert result.exit_code == 0
-    assert "nothing to do" in result.output.lower()
+    assert "nothing to do" in _flat(result.output).lower()
 
 
 def test_status_single_path_trusted(root):
