@@ -1,4 +1,5 @@
 from __future__ import annotations
+import importlib.metadata
 import sys
 import typer
 import logging
@@ -27,6 +28,20 @@ log = logging.getLogger("tiddl")
 
 app = typer.Typer(name="tiddl", no_args_is_help=True, rich_markup_mode="rich")
 register_commands(app)
+
+
+def _installed_version() -> str:
+    """Return the installed distribution version, or a stable fallback.
+
+    ``importlib.metadata`` reads the same package metadata used by pip, wheels,
+    and bundled applications, so the CLI cannot drift from ``pyproject.toml``.
+    """
+    try:
+        return importlib.metadata.version("tiddl-elvigilante")
+    except Exception:
+        # --version must remain available even if installed metadata is missing
+        # or malformed; it is also a primary troubleshooting command.
+        return "unknown"
 
 
 def _installed_commit() -> str:
@@ -68,8 +83,9 @@ def _commit_datetime(commit: str) -> str:
 
 def version_callback(value: bool):
     if value:
+        version = _installed_version()
         commit = _installed_commit()
-        out = "elvigilante-julio-2026"
+        out = f"tiddl-elvigilante {version}"
         if commit:
             when = _commit_datetime(commit)
             out += f" ({commit}" + (f", {when}" if when else "") + ")"
