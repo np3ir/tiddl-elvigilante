@@ -96,7 +96,7 @@ At scale — tens of thousands of albums — this means your library reflects th
 - 📝 **Complete Metadata** - Artist, album, cover, lyrics, credits
 - 🌍 **Unicode Support** - CJK, Arabic, Vietnamese, Devanagari
 - 💾 **File Integrity** - Hash verification & corruption detection
-- 🔒 **Destination-Volume Identity** (opt-in) - Refuse to write if a configured NAS/USB destination is unmounted and silently falls back to a same-named local folder — `tiddl destination trust <path>`, then `[download] destination_identity = "strict"`
+- 🔒 **Destination-Volume Identity** (opt-in) - Refuse to write if a configured NAS/USB destination is unmounted and silently falls back to a same-named local folder — see the **[Destination Safety Guide (EN/ES)](DESTINATION_SAFETY.md)**
 - ⚡ **Async Downloads** - Concurrent multi-threaded downloads
 - 🔍 **Smart Quality** - Automatic fallback for unavailable qualities
 - 📦 **M3U8 Export** - Create playlists for media players
@@ -254,6 +254,7 @@ artist_separator = " / "
 ### 📋 Detailed Guides
 - **[USAGE.md](USAGE.md)** - Practical command examples and scenarios
 - **[CONFIG.md](CONFIG.md)** - Configuration reference with all options
+- **[DESTINATION_SAFETY.md](DESTINATION_SAFETY.md)** 🔒 - Protect NAS, USB and network destinations (English/Español)
 - **[FORK.md](FORK.md)** - About this fork and improvements over original
 
 ### 🤝 Community
