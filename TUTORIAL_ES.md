@@ -115,6 +115,29 @@ save_lyrics = true
 cover = true
 ```
 
+### 6.1 Proteger un NAS, USB o unidad de red (recomendado)
+
+Si `download_path` apunta a un NAS, USB o unidad mapeada como `Z:\`, podés
+evitar que tiddl escriba en una carpeta local equivocada cuando el volumen no
+esté conectado. Con el destino real montado, ejecutá una sola vez:
+
+```powershell
+tiddl destination trust "Z:\"
+tiddl destination status "Z:\"
+```
+
+El segundo comando debe mostrar `Z:\: trusted`. Después añadí a la sección
+`[download]` de `config.toml`:
+
+```toml
+destination_identity = "strict"
+```
+
+Desde ese momento, si el NAS o disco desaparece o cambia, tiddl rechaza la
+escritura y conserva el archivo verificado para recuperación. No hace falta
+repetir el proceso en cada descarga. Consultá la guía bilingüe completa:
+**[DESTINATION_SAFETY.md](DESTINATION_SAFETY.md)**.
+
 ---
 
 ## 7. Comandos básicos para descargar

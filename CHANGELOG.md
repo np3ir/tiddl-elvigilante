@@ -17,6 +17,12 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+### Documentation
+
+- Added a bilingual destination-safety guide and linked user-facing setup,
+  configuration, second-machine adoption and recovery instructions from the
+  README, configuration reference, usage guide and Spanish tutorial.
+
 ---
 
 ## [1.2.1] - 2026-08-19

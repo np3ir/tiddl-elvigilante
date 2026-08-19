@@ -76,6 +76,39 @@ Supports all options of `download url`.
 
 ---
 
+## 🔒 Protecting NAS, USB and Network Destinations
+
+Destination-volume identity prevents tiddl from publishing files to a
+same-named local directory when the intended NAS, USB drive or network mount is
+missing. The feature is opt-in and remains disabled until the user explicitly
+trusts the mounted root and enables strict mode.
+
+```powershell
+# Run only while the real destination is mounted.
+tiddl destination trust "Z:\"
+
+# Confirm the live marker and local record agree.
+tiddl destination status "Z:\"
+```
+
+Add this to `~/.tiddl/config.toml`, using the same root as `download_path`:
+
+```toml
+[download]
+download_path = "Z:\\"
+destination_identity = "strict"
+```
+
+After activation, downloads work normally while the destination is trusted. If
+the volume disappears or its identity changes, tiddl refuses destination writes
+and retains verified staging files for `tiddl recover` instead of risking the
+wrong path.
+
+For full setup, second-machine adoption, status reasons and recovery, see
+**[DESTINATION_SAFETY.md](DESTINATION_SAFETY.md)**.
+
+---
+
 ## 📝 Advanced Options
 
 ### Quality

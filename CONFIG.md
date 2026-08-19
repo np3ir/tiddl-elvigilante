@@ -33,6 +33,7 @@ skip_existing = true
 threads_count = 4
 requests_per_minute = 50
 download_path = "~/Music/tiddl"
+destination_identity = "off"
 
 [metadata]
 enable = true
@@ -113,6 +114,33 @@ artist_separator = " / "
 - **Type**: path
 - **Default**: ~/Music/tiddl
 - Base directory for downloads
+
+### `destination_identity`
+- **Type**: `off` / `strict`
+- **Default**: `off`
+- **Description**: Protects NAS, USB and network destinations from accidental
+  writes when the expected volume is missing or has been replaced.
+- `off`: preserves the traditional behavior and performs no identity checks.
+- `strict`: allows writes only when the configured destination root has a
+  matching local trust record and `.tiddl-anchor` marker.
+
+Trust the exact root used by `download_path` before enabling strict mode:
+
+```powershell
+tiddl destination trust "Z:\"
+tiddl destination status "Z:\"
+```
+
+Then configure:
+
+```toml
+[download]
+download_path = "Z:\\"
+destination_identity = "strict"
+```
+
+See **[DESTINATION_SAFETY.md](DESTINATION_SAFETY.md)** for Windows, Linux,
+macOS, second-machine adoption, recovery and troubleshooting instructions.
 
 ### `scan_path`
 - **Type**: path
