@@ -292,7 +292,9 @@ def _finalize_db_record(downloader, item, download_path, was_downloaded, identit
         downloader._db_insert(item.id, download_path, "VIDEO")
 
 
-def _download_exit_code(any_identity_refused: bool) -> Optional[int]:
+def _download_exit_code(
+    any_identity_refused: bool, cooperative_stop: bool = False
+) -> Optional[int]:
     """v2.4 §2: the final `tiddl download` exit-code decision, evaluated
     once after every per-item and per-resource task in the run has
     completed (`identity_tracker.any_refused`, which is monotonic across
@@ -304,10 +306,12 @@ def _download_exit_code(any_identity_refused: bool) -> Optional[int]:
     `None` to fall through to Typer's normal 0. Standalone pure function
     for direct unit coverage of this decision, same audit finding as
     `_should_insert_db_record` above."""
-    return 1 if any_identity_refused else None
+    return 1 if any_identity_refused or cooperative_stop else None
 
 
-def _finish_download_run(console, any_identity_refused: bool) -> None:
+def _finish_download_run(
+    console, any_identity_refused: bool, cooperative_stop: bool = False
+) -> None:
     """v2.4 §2: the COMPLETE final-outcome effect for `tiddl download` —
     the warning message AND the actual `sys.exit()` — not just the
     decision. `run()` calls this, not `_download_exit_code()` +
@@ -318,13 +322,19 @@ def _finish_download_run(console, any_identity_refused: bool) -> None:
     `download_callback` below), so a test calling it directly (asserting
     `SystemExit` via `pytest.raises`) exercises the real call site, not a
     parallel copy of its logic."""
-    exit_code = _download_exit_code(any_identity_refused)
+    exit_code = _download_exit_code(any_identity_refused, cooperative_stop)
     if exit_code is not None:
-        console.print(
-            "[red]One or more destination-identity checks refused a write "
-            "this run — see the warnings above. Nothing was lost (retryable "
-            "copies were retained where applicable); exiting non-zero.[/]"
-        )
+        if any_identity_refused:
+            console.print(
+                "[red]One or more destination-identity checks refused a write "
+                "this run — see the warnings above. Nothing was lost (retryable "
+                "copies were retained where applicable); exiting non-zero.[/]"
+            )
+        else:
+            console.print(
+                "[red]The download engine stopped the run for safety; "
+                "exiting non-zero.[/]"
+            )
         sys.exit(exit_code)
 
 
@@ -838,11 +848,15 @@ def download_callback(
 
                 candidate = result.best
                 if candidate is None:
+                    quality_requirement = (
+                        f"at or below {TRACK_QUALITY.upper()}"
+                        if QUALITY_POLICY == "flexible"
+                        else f"at exactly {TRACK_QUALITY.upper()}"
+                    )
                     ctx.obj.console.print(
-                        f"[red]No matching stereo edition at or below "
-                        f"{TRACK_QUALITY.upper()} found for "
-                        f"{source.title} (album/{source.id}); skipped to avoid downloading "
-                        "the Atmos edition.[/]"
+                        f"[red]No matching stereo edition {quality_requirement} found for "
+                        f"{source.title} (album/{source.id}); skipped because the requested "
+                        "stereo/quality policy cannot be satisfied.[/]"
                     )
                     continue
 
@@ -2279,6 +2293,10 @@ def download_callback(
             import traceback
             log.error(traceback.format_exc())
         else:
-            _finish_download_run(ctx.obj.console, any_identity_refused)
+            _finish_download_run(
+                ctx.obj.console,
+                any_identity_refused,
+                cooperative_stop=is_cancelled(),
+            )
 
     ctx.call_on_close(run)

@@ -96,3 +96,22 @@ def test_strict_max_accepts_stereo_hires_only():
 
     assert result.accepted
     assert result.is_stereo
+
+
+def test_strict_normal_maps_to_tidal_high_not_lossless():
+    accepted = inspect_track_stream(
+        stream(quality="HIGH"),
+        audio_mode="stereo",
+        requested_quality="normal",
+        quality_policy="strict",
+    )
+    rejected = inspect_track_stream(
+        stream(quality="LOW"),
+        audio_mode="stereo",
+        requested_quality="normal",
+        quality_policy="strict",
+    )
+
+    assert accepted.accepted
+    assert not rejected.accepted
+    assert "requested exact quality HIGH" in rejected.reason

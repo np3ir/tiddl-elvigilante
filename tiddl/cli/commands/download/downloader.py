@@ -400,6 +400,10 @@ class Downloader:
         self.fallback_api = fallback_api
         self.rich_output = rich_output
         self.semaphore = asyncio.Semaphore(threads_count)
+        # Keep the user tier separate from TIDAL's playback enum. User
+        # `normal` maps to TIDAL `HIGH`; remapping that enum would otherwise
+        # reinterpret it as user `high` (LOSSLESS) during strict inspection.
+        self.requested_quality = track_quality
         self.track_quality = track_qualities[track_quality]
         self.video_quality = video_qualities[video_quality]
         self.videos_filter = videos_filter
@@ -1328,7 +1332,7 @@ class Downloader:
                     inspection = inspect_track_stream(
                         stream,
                         audio_mode=self.audio_mode,
-                        requested_quality=self.track_quality,
+                        requested_quality=self.requested_quality,
                         quality_policy=self.quality_policy,
                     )
                     if not inspection.accepted:

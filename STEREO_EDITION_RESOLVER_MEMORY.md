@@ -205,3 +205,55 @@ Both High and MAX can select a stereo edition advertising
 This repository contains many user-owned untracked audit/proposal files.
 Preserve them. Resolver work is limited to the files listed above plus focused
 tests and documentation.
+
+## Successful controlled live downloads (2026-08-19)
+
+The TIDAL account became available again and the accepted replacement was
+validated using isolated roots outside the music library.
+
+- Source: Atmos album `549984784`.
+- Selected replacement: stereo album `549980023` at 97.4% score and 92.9%
+  track overlap; the additional track `Still` was reported before transfer.
+- Each run used `--edition-match best`, `--quality-policy strict`, one thread,
+  zero delays and `--max-tracks 1`.
+- MAX delivered `Te llevas To` as FLAC, 24-bit, 48 kHz, 2-channel stereo.
+- High delivered the same track as FLAC, 16-bit, 44.1 kHz, 2-channel stereo.
+- Both runs exited successfully with exactly one download. `ffprobe` confirmed
+  the codec, bit depth, sample rate and stereo channel layout.
+- Strict destination-identity protection correctly rejected the first
+  untrusted test root. Each root was then explicitly trusted for its run and
+  removed from local trust state afterward; global security was not weakened.
+- Test files remain under `C:\tiddl-live-test` and
+  `C:\tiddl-live-test-high` for manual inspection or later cleanup.
+
+### Flexible degradation validated with Kinito Mendez
+
+- Artist `3941799` returned 23 album entries: no album advertised
+  `HIRES_LOSSLESS`, 13 advertised `LOSSLESS`, and 10 advertised only `STEREO`.
+- Album `14824487` (`El Decreto`) with MAX + flexible resolved to catalog tier
+  High and downloaded one track successfully as FLAC, 16-bit, 44.1 kHz,
+  2-channel stereo. SHA-256:
+  `68216CD006791C957E810244501855B99F39CAC77BA9CCAA4C4D52487C3B148F`.
+- MAX + strict correctly rejected the same album without downloading because
+  no exact MAX stereo edition exists.
+- That strict dry run exposed misleading wording claiming an Atmos avoidance
+  even though the source was already stereo. The message was corrected to say
+  that the requested stereo/quality policy cannot be satisfied.
+
+Album `8455110` (`El Hombre Merengue`) validated the complete lossy fallback:
+
+- MAX + flexible selected catalog tier Normal; live playback ultimately
+  returned LOW and the engine downloaded one HE-AAC `.m4a`, 96 kbps class,
+  44.1 kHz, 2-channel stereo. It emitted the quality-degradation warning.
+- SHA-256: `096E02D1715F8CF0A6DEBAC0D7D63CC35A1FD8EDF900A86FF4F4F746BFDC68A7`.
+- Normal + strict received LOW, stopped before media transfer, downloaded zero
+  files and now exits with status 1.
+- This test exposed two defects that were fixed: cooperative safety stops now
+  produce a non-zero CLI exit status, and Downloader preserves the original
+  user quality slug so Normal maps to TIDAL `HIGH` rather than being
+  reinterpreted as user High/`LOSSLESS` during strict validation.
+- Focused regression: 65 passed. Complete offline suite after the fixes:
+  **328 passed, 3 skipped, 0 failed**.
+
+Still not intentionally tested live: forcing an authentication failure to
+exercise the 401 stop. That path remains covered by offline tests.

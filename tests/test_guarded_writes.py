@@ -727,5 +727,16 @@ def test_finish_download_run_exits_normally_when_nothing_refused():
     console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
 
     _finish_download_run(console, False)
-
     assert printed == []
+
+
+def test_finish_download_run_exits_nonzero_on_cooperative_safety_stop():
+    printed = []
+    console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
+
+    with pytest.raises(SystemExit) as exc:
+        _finish_download_run(console, False, cooperative_stop=True)
+
+    assert exc.value.code == 1
+    assert len(printed) == 1
+    assert "stopped the run for safety" in printed[0][0][0]
