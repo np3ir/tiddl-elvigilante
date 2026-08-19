@@ -34,6 +34,7 @@ from tiddl.core.utils.fsio import _safe_unlink
 from tiddl.core.utils.publish import publish_verified_file
 from tiddl.core.utils import retained_registry
 from tiddl.core.utils import destination_anchor as anchor
+from tiddl.core.stream_policy import inspect_track_stream
 
 from .output import RichOutput
 
@@ -41,6 +42,48 @@ log = getLogger(__name__)
 
 CHUNK_SIZE = 1024**2
 MAX_RETRIES = 3  # Maximum number of retries for corrupt files
+
+
+def _http_status_code(error: Exception) -> Optional[int]:
+    """Extract an HTTP status without guessing from unrelated message words."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(error, "status", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _message_has_status(error: Exception, status: int) -> bool:
+    """Conservative fallback for exceptions that do not expose a response."""
+    import re
+
+    return re.search(rf"(?<!\d){status}(?!\d)", str(error)) is not None
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    status = _http_status_code(error)
+    return status == 429 or (status is None and _message_has_status(error, 429))
+
+
+def _is_authentication_error(error: Exception) -> bool:
+    status = _http_status_code(error)
+    return status == 401 or (status is None and _message_has_status(error, 401))
+
+
+def _abort_for_authentication_error(error: Exception) -> bool:
+    """Stop the complete cooperative download run when TIDAL returns 401."""
+    if not _is_authentication_error(error):
+        return False
+
+    from tiddl.core.cancel import request_cancel
+
+    request_cancel()
+    return True
 
 
 def _guarded_mkdir(root: Path, path: Path, mode: str) -> "anchor.AnchorCheck":
@@ -348,6 +391,8 @@ class Downloader:
         fallback_api: Optional[TidalAPI] = None,
         destination_identity: Literal["off", "strict"] = "off",
         identity_tracker: Optional["anchor.IdentityFailureTracker"] = None,
+        audio_mode: Literal["auto", "stereo"] = "auto",
+        quality_policy: Literal["flexible", "strict"] = "flexible",
     ) -> None:
         self.api = tidal_api
         # Modo hibrido: cliente TV (lossless) para cuando el primario (HiRes)
@@ -355,6 +400,10 @@ class Downloader:
         self.fallback_api = fallback_api
         self.rich_output = rich_output
         self.semaphore = asyncio.Semaphore(threads_count)
+        # Keep the user tier separate from TIDAL's playback enum. User
+        # `normal` maps to TIDAL `HIGH`; remapping that enum would otherwise
+        # reinterpret it as user `high` (LOSSLESS) during strict inspection.
+        self.requested_quality = track_quality
         self.track_quality = track_qualities[track_quality]
         self.video_quality = video_qualities[video_quality]
         self.videos_filter = videos_filter
@@ -370,6 +419,8 @@ class Downloader:
         # this feature) never hits an AttributeError — its any_refused is
         # simply never observed by anything outside this instance.
         self.identity_tracker = identity_tracker or anchor.IdentityFailureTracker()
+        self.audio_mode = audio_mode
+        self.quality_policy = quality_policy
         self.dir_cache: dict[Path, set[str]] = {}
         # Flat index: stem → set of extensions, para lookup de alternativas sin re-escanear
         self._stem_index: dict[str, set[str]] = {}
@@ -1223,12 +1274,25 @@ class Downloader:
                         log.warning(f"Quality '{q}' failed for {item.id}: {e}")
                         self.rich_output.console.print(f"[yellow]⚠ Quality {q} failed: {e}[/]")
 
-                        # FIX: Fail fast on Rate Limit to avoid "Error Could not download..." spam
-                        if "429" in str(e) or "Limit" in str(e):
+                        if _abort_for_authentication_error(e):
+                            self.rich_output.console.print(
+                                f"[red]Download stopped: authentication expired (401) while "
+                                f"requesting '{display_title}'.[/]"
+                            )
+                            return None, False
+
+                        # Fail fast on a real HTTP 429 to avoid retry spam.
+                        if _is_rate_limit_error(e):
                             self.rich_output.console.print(f"[yellow]Skipped '{display_title}' (Rate Limit)[/]")
                             return None, False
 
                         continue
+
+                    # Another concurrent track may have received a fatal 401 while
+                    # this blocking request was in flight. Do not process or write
+                    # its response after the run-wide stop signal.
+                    if is_cancelled():
+                        return None, False
 
                     # Hibrido de 2 tokens: si el primario (HiRes) degrado por debajo
                     # de LOSSLESS (ej. HI_RES_LOSSLESS -> HIGH 320 en un track solo
@@ -1261,6 +1325,25 @@ class Downloader:
                         if quality_score.get(stream.audioQuality, 0) < quality_score.get(_next_q, 0):
                             log.debug(f"{item.id}: {q}->{stream.audioQuality} degradado, reintento en {_next_q}")
                             continue
+
+                    # Inspect the FINAL selected manifest (including a possible
+                    # fallback-client replacement), before parsing media URLs or
+                    # creating any destination/staging file.
+                    inspection = inspect_track_stream(
+                        stream,
+                        audio_mode=self.audio_mode,
+                        requested_quality=self.requested_quality,
+                        quality_policy=self.quality_policy,
+                    )
+                    if not inspection.accepted:
+                        from tiddl.core.cancel import request_cancel
+
+                        request_cancel()
+                        self.rich_output.console.print(
+                            f"[red]Download stopped before media transfer: {inspection.reason} "
+                            f"for '{display_title}'.[/]"
+                        )
+                        return None, False
                     urls, _ = parse_track_stream(stream)
                     # Use stream.audioQuality (actual delivery) not q (requested quality).
                     # TIDAL can downgrade silently; using q would save M4A content as .flac.
@@ -1388,13 +1471,22 @@ class Downloader:
                         stream = await asyncio.to_thread(self.api.get_video_stream, video_id=item.id, quality=q)
                     except (ApiError, HTTPError) as e:
                         log.warning(f"video quality '{q}' failed for {item.id}: {e}")
-                        if "429" in str(e) or "Rate" in str(e):
+                        if _abort_for_authentication_error(e):
+                            self.rich_output.console.print(
+                                f"[red]Download stopped: authentication expired (401) while "
+                                f"requesting '{display_title}'.[/]"
+                            )
+                            return None, False
+                        if _is_rate_limit_error(e):
                             self.rich_output.console.print(f"[yellow]Skipped '{display_title}' (Rate Limit)[/]")
                             return None, False
                         continue
                     except Exception as e:
                         log.error(f"Unexpected error for video {item.id} q={q}: {e}")
                         continue
+
+                    if is_cancelled():
+                        return None, False
 
                     quality = video_qualities_color[stream.videoQuality]
 

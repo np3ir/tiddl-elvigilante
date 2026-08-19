@@ -38,7 +38,13 @@ def _strip_ansi(text: str) -> str:
 
 @pytest.fixture(autouse=True)
 def _isolated_app_path(tmp_path, monkeypatch):
+    from tiddl.cli.config import CONFIG
+
     monkeypatch.setattr(reg, "APP_PATH", tmp_path / "_app")
+    # Never inherit the developer machine's real config.toml. These tests
+    # exercise the legacy/default recovery path unless an individual test
+    # explicitly opts into strict destination identity below.
+    monkeypatch.setattr(CONFIG.download, "destination_identity", "off")
     # cli/const.py's APP_PATH is resolved at import time (module-level
     # create_app_path()) and consumed by name in a couple of other modules;
     # recover.py only ever reaches the registry through `reg.*`, so
