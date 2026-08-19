@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import re
+import sys
 import random
 import typer
 import asyncio
@@ -269,6 +270,26 @@ def _should_insert_db_record(was_downloaded: bool, identity_refused: bool) -> bo
     return bool(was_downloaded and not identity_refused)
 
 
+def _finalize_db_record(downloader, item, download_path, was_downloaded, identity_refused) -> None:
+    """Class B (v2.3 §3): the COMPLETE per-item DB-insert effect —
+    `handle_item` calls this, not `_should_insert_db_record` +
+    `downloader._db_insert` inline. Implementation-audit finding, third
+    round: a test that only exercises `_should_insert_db_record()` in
+    isolation would keep passing even if `handle_item` stopped calling it,
+    inverted its result, or inserted via a different path — because the
+    helper and the call site were two different pieces of code. Making
+    THIS function the single call site means a test that calls it
+    directly, against a real `Downloader`'s real SQLite-backed
+    `_db_insert`/`_db_lookup`, is exercising the exact same code
+    `handle_item` runs — not a parallel copy of it."""
+    if not download_path or not _should_insert_db_record(was_downloaded, identity_refused):
+        return
+    if isinstance(item, Track):
+        downloader._db_insert(item.id, download_path, str(item.audioQuality))
+    elif isinstance(item, Video):
+        downloader._db_insert(item.id, download_path, "VIDEO")
+
+
 def _download_exit_code(any_identity_refused: bool) -> Optional[int]:
     """v2.4 §2: the final `tiddl download` exit-code decision, evaluated
     once after every per-item and per-resource task in the run has
@@ -282,6 +303,27 @@ def _download_exit_code(any_identity_refused: bool) -> Optional[int]:
     for direct unit coverage of this decision, same audit finding as
     `_should_insert_db_record` above."""
     return 1 if any_identity_refused else None
+
+
+def _finish_download_run(console, any_identity_refused: bool) -> None:
+    """v2.4 §2: the COMPLETE final-outcome effect for `tiddl download` —
+    the warning message AND the actual `sys.exit()` — not just the
+    decision. `run()` calls this, not `_download_exit_code()` +
+    `sys.exit()` inline. Implementation-audit finding, third round: a test
+    of `_download_exit_code()` alone doesn't prove `run()`'s closure still
+    calls it, still uses its return value correctly, or still actually
+    exits the process. This function IS what `run()` calls (see
+    `download_callback` below), so a test calling it directly (asserting
+    `SystemExit` via `pytest.raises`) exercises the real call site, not a
+    parallel copy of its logic."""
+    exit_code = _download_exit_code(any_identity_refused)
+    if exit_code is not None:
+        console.print(
+            "[red]One or more destination-identity checks refused a write "
+            "this run — see the warnings above. Nothing was lost (retryable "
+            "copies were retained where applicable); exiting non-zero.[/]"
+        )
+        sys.exit(exit_code)
 
 
 @download_command.callback(no_args_is_help=True)
@@ -996,11 +1038,9 @@ def download_callback(
                 # — identity_refused stays False (a no-op) whenever
                 # CONFIG.download.destination_identity == "off", so this adds
                 # no behavior change for anyone not using the feature.
-                if download_path and _should_insert_db_record(was_downloaded, identity_refused):
-                    if isinstance(item, Track):
-                        downloader._db_insert(item.id, download_path, str(item.audioQuality))
-                    elif isinstance(item, Video):
-                        downloader._db_insert(item.id, download_path, "VIDEO")
+                _finalize_db_record(
+                    downloader, item, download_path, was_downloaded, identity_refused
+                )
 
                 if download_path and CONFIG.download.update_mtime:
                     try:
@@ -2080,7 +2120,7 @@ def download_callback(
         # cuando el subcomando falló al parsear sus argumentos).
         if not ctx.obj.resources:
             return
-        import warnings, sys
+        import warnings
         # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
         if sys.platform == "win32":
             warnings.filterwarnings("ignore", category=ResourceWarning)
@@ -2093,13 +2133,6 @@ def download_callback(
             import traceback
             log.error(traceback.format_exc())
         else:
-            exit_code = _download_exit_code(any_identity_refused)
-            if exit_code is not None:
-                ctx.obj.console.print(
-                    "[red]One or more destination-identity checks refused a write "
-                    "this run — see the warnings above. Nothing was lost (retryable "
-                    "copies were retained where applicable); exiting non-zero.[/]"
-                )
-                sys.exit(exit_code)
+            _finish_download_run(ctx.obj.console, any_identity_refused)
 
     ctx.call_on_close(run)

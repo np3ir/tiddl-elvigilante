@@ -25,13 +25,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+import types
 
 import pytest
 
 import tiddl.cli.commands.download as dlinit
+import tiddl.cli.const as const_mod
 import tiddl.core.utils.destination_anchor as da
 from tiddl.cli.commands.download import (
     _download_exit_code,
+    _finalize_db_record,
+    _finish_download_run,
     _guarded_save_cover,
     _should_insert_db_record,
     _touch_guarded,
@@ -39,7 +43,8 @@ from tiddl.cli.commands.download import (
     _write_track_metadata_guarded,
     _write_video_metadata_guarded,
 )
-from tiddl.cli.commands.download.downloader import _guarded_mkdir
+from tiddl.cli.commands.download.downloader import Downloader, _guarded_mkdir
+from tiddl.core.api.models import Track, Video
 from tiddl.core.metadata import Cover, CoverDataNotPrefetched
 
 
@@ -61,6 +66,34 @@ def untrusted_root(tmp_path):
     root = tmp_path / "dest_root"
     root.mkdir()
     return root  # never establish_anchor()'d — no trust record, no marker
+
+
+class _DbOnlyDownloader:
+    """Minimal host exposing only the real Downloader._init_db/_db_insert/
+    _db_lookup — the REAL SQLite-backed DB layer `_finalize_db_record`
+    actually calls — without constructing a full `Downloader` (which needs
+    a TidalAPI, RichOutput, thread pool, etc. that have nothing to do with
+    what the Class B/C outcome tests below verify). Same pattern as
+    test_downloader.py's `_StubDownloader`: bind real methods onto a
+    lightweight host rather than mocking them."""
+
+    _init_db = Downloader._init_db
+    _db_insert = Downloader._db_insert
+    _db_lookup = Downloader._db_lookup
+
+    def __init__(self):
+        self._db = self._init_db()
+
+
+@pytest.fixture
+def db_downloader(tmp_path, monkeypatch):
+    app_dir = tmp_path / "_app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    # _init_db() does `from tiddl.cli.const import APP_PATH` locally, so the
+    # module-level attribute is what must be patched — not downloader.py's
+    # namespace (it never imports APP_PATH at module scope).
+    monkeypatch.setattr(const_mod, "APP_PATH", app_dir)
+    return _DbOnlyDownloader()
 
 
 # ---------------------------------------------------------------------------
@@ -533,3 +566,166 @@ async def test_mixed_concurrent_success_and_refusal_trips_the_shared_tracker(tmp
     assert sorted(results) == ["ok", "ok", "refused"]
     assert tracker.any_refused is True
     assert _download_exit_code(tracker.any_refused) == 1
+
+
+# ---------------------------------------------------------------------------
+# Third implementation-audit finding (2026-08-18), P2: integration coverage
+# that reaches the REAL call sites (`_finalize_db_record`, wired into
+# `handle_item`; `_finish_download_run`, wired into `run()`) instead of only
+# the pure decision helpers (`_should_insert_db_record`, `_download_exit_code`)
+# in isolation. A test of a decision helper alone keeps passing even if the
+# real call site stopped calling it, inverted its result, or wired in a
+# different function entirely — these tests exercise the actual production
+# code path: a real `_write_lrc_guarded`/`_write_video_metadata_guarded`/
+# `_guarded_save_cover` refusal, a real SQLite-backed
+# `Downloader._db_insert`/`_db_lookup` via `_finalize_db_record` (queried
+# directly, not spied on), and a real `SystemExit` via `_finish_download_run`.
+# ---------------------------------------------------------------------------
+
+def test_class_b_real_lrc_refusal_withholds_the_real_db_insert(untrusted_root, db_downloader):
+    # Class B (v2.3 §3), via the REAL call site: drive a genuine operation-4
+    # (.lrc) refusal through `_write_lrc_guarded` against an untrusted root,
+    # then call `_finalize_db_record` — the exact function `handle_item`
+    # calls — the same way `handle_item` would (identity_refused=True
+    # because THIS item's own guarded write refused). Query the real
+    # SQLite-backed `_db_lookup` (not a spy) to prove no record exists.
+    track = Track.construct(id=101, audioQuality="LOSSLESS")
+    download_path = untrusted_root / "track.flac"
+    lrc_path = untrusted_root / "track.lrc"
+
+    identity_refused = False
+    try:
+        _write_lrc_guarded(untrusted_root, lrc_path, "strict", "[00:00.00]la la la")
+    except da.DestinationNotTrusted:
+        identity_refused = True
+
+    assert identity_refused is True
+    assert not lrc_path.exists()
+
+    _finalize_db_record(
+        db_downloader, track, download_path, was_downloaded=True,
+        identity_refused=identity_refused,
+    )
+
+    assert db_downloader._db_lookup(track.id) is None
+
+
+def test_class_b_real_lrc_success_performs_the_real_db_insert(trusted_root, db_downloader):
+    # Positive control for the test above: same real call sites, but against
+    # a trusted root — the .lrc write succeeds, identity_refused stays
+    # False, and `_finalize_db_record` performs the real insert.
+    track = Track.construct(id=102, audioQuality="LOSSLESS")
+    download_path = trusted_root / "track.flac"
+    lrc_path = trusted_root / "track.lrc"
+
+    identity_refused = False
+    try:
+        _write_lrc_guarded(trusted_root, lrc_path, "strict", "[00:00.00]la la la")
+    except da.DestinationNotTrusted:
+        identity_refused = True
+
+    assert identity_refused is False
+    assert lrc_path.exists()
+
+    _finalize_db_record(
+        db_downloader, track, download_path, was_downloaded=True,
+        identity_refused=identity_refused,
+    )
+
+    assert db_downloader._db_lookup(track.id) == download_path
+
+
+def test_class_b_real_video_metadata_refusal_withholds_the_real_db_insert(
+    untrusted_root, db_downloader, monkeypatch
+):
+    # Same Class B real-call-site proof, but for operation 6 (video
+    # metadata) — the other operation class that can set
+    # identity_refused=True, this time for a Video item.
+    monkeypatch.setattr(
+        dlinit,
+        "add_video_metadata",
+        lambda **kw: pytest.fail("must not write video metadata when the identity check refuses"),
+    )
+    video = Video.construct(id=201)
+    download_path = untrusted_root / "video.mp4"
+
+    identity_refused = False
+    try:
+        _write_video_metadata_guarded(
+            untrusted_root, download_path, "strict",
+            video=video, artist_separator=" / ",
+        )
+    except da.DestinationNotTrusted:
+        identity_refused = True
+
+    assert identity_refused is True
+
+    _finalize_db_record(
+        db_downloader, video, download_path, was_downloaded=True,
+        identity_refused=identity_refused,
+    )
+
+    assert db_downloader._db_lookup(video.id) is None
+
+
+async def test_class_c_real_cover_refusal_leaves_an_already_inserted_record_untouched(
+    untrusted_root, db_downloader, monkeypatch
+):
+    # Class C (v2.3 §3), via the REAL call site: seed a REAL record in the
+    # temp DB via `_finalize_db_record` (as `handle_item` would after a
+    # successful download with no refusal), then force a REAL operation-8
+    # (cover) refusal via `_guarded_save_cover` against the same untrusted
+    # root, and prove — by querying the real SQLite DB, not a spy — that the
+    # seeded record is still present and unchanged.
+    track = Track.construct(id=301, audioQuality="LOSSLESS")
+    download_path = untrusted_root / "track.flac"
+
+    # Seed: this item's OWN writes succeeded (identity_refused=False) before
+    # the cover step runs, matching handle_item's real ordering (ops 4/5/6
+    # happen, then _finalize_db_record, then ops 7/8).
+    _finalize_db_record(
+        db_downloader, track, download_path, was_downloaded=True,
+        identity_refused=False,
+    )
+    assert db_downloader._db_lookup(track.id) == download_path
+
+    cover = Cover("uid-c")
+    monkeypatch.setattr(cover, "_get_data", lambda: b"jpegbytes")
+    tracker = da.IdentityFailureTracker()
+    cover_path = untrusted_root / "cover"
+
+    await _guarded_save_cover(cover, untrusted_root, cover_path, "strict", tracker, "album")
+
+    assert tracker.any_refused is True
+    assert not cover_path.with_suffix(".jpg").exists()
+    # The record seeded above must be exactly as it was — a cover refusal
+    # (Class C) must never touch an already-truthful per-track record.
+    assert db_downloader._db_lookup(track.id) == download_path
+
+
+def test_finish_download_run_exits_nonzero_on_a_refused_run():
+    # Mixed CLI outcome, via the REAL call site: `_finish_download_run` is
+    # what `run()` actually calls (not `_download_exit_code()` + `sys.exit()`
+    # inline) — a test of `_download_exit_code()` alone wouldn't prove
+    # `run()`'s closure still calls it, still uses its return value, or
+    # still actually exits the process.
+    printed = []
+    console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
+
+    with pytest.raises(SystemExit) as excinfo:
+        _finish_download_run(console, True)
+
+    assert excinfo.value.code == 1
+    assert len(printed) == 1
+
+
+def test_finish_download_run_exits_normally_when_nothing_refused():
+    # Positive control: no identity refusal during the run -> no SystemExit
+    # raised at all (falls through to Typer's own normal exit-0 handling)
+    # and nothing printed.
+    printed = []
+    console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
+
+    _finish_download_run(console, False)
+
+    assert printed == []
