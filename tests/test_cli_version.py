@@ -23,13 +23,23 @@ def test_installed_version_has_controlled_fallback(monkeypatch):
     assert app_module._installed_version() == "unknown"
 
 
+def test_installed_version_survives_malformed_metadata(monkeypatch):
+    def malformed(_name: str) -> str:
+        raise ValueError("invalid distribution metadata")
+
+    monkeypatch.setattr(importlib.metadata, "version", malformed)
+
+    assert app_module._installed_version() == "unknown"
+
+
 def test_version_callback_reports_semver_without_network(monkeypatch, capsys):
     monkeypatch.setattr(app_module, "_installed_version", lambda: "1.2.3")
     monkeypatch.setattr(app_module, "_installed_commit", lambda: "")
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(typer.Exit) as exc_info:
         app_module.version_callback(True)
 
+    assert exc_info.value.exit_code == 0
     assert capsys.readouterr().out == "tiddl-elvigilante 1.2.3\n"
 
 
@@ -40,9 +50,10 @@ def test_version_callback_keeps_git_provenance(monkeypatch, capsys):
         app_module, "_commit_datetime", lambda _commit: "2026-08-19 09:30"
     )
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(typer.Exit) as exc_info:
         app_module.version_callback(True)
 
+    assert exc_info.value.exit_code == 0
     assert (
         capsys.readouterr().out
         == "tiddl-elvigilante 1.2.3 (abcdef12, 2026-08-19 09:30)\n"

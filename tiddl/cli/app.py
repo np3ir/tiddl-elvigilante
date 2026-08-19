@@ -1,4 +1,5 @@
 from __future__ import annotations
+import importlib.metadata
 import sys
 import typer
 import logging
@@ -36,10 +37,10 @@ def _installed_version() -> str:
     and bundled applications, so the CLI cannot drift from ``pyproject.toml``.
     """
     try:
-        import importlib.metadata as _md
-
-        return _md.version("tiddl-elvigilante")
-    except _md.PackageNotFoundError:
+        return importlib.metadata.version("tiddl-elvigilante")
+    except Exception:
+        # --version must remain available even if installed metadata is missing
+        # or malformed; it is also a primary troubleshooting command.
         return "unknown"
 
 
