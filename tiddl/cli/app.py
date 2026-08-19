@@ -29,6 +29,20 @@ app = typer.Typer(name="tiddl", no_args_is_help=True, rich_markup_mode="rich")
 register_commands(app)
 
 
+def _installed_version() -> str:
+    """Return the installed distribution version, or a stable fallback.
+
+    ``importlib.metadata`` reads the same package metadata used by pip, wheels,
+    and bundled applications, so the CLI cannot drift from ``pyproject.toml``.
+    """
+    try:
+        import importlib.metadata as _md
+
+        return _md.version("tiddl-elvigilante")
+    except _md.PackageNotFoundError:
+        return "unknown"
+
+
 def _installed_commit() -> str:
     """Short git commit of the installed tiddl-elvigilante (empty if unknown).
     Read from the pip direct_url.json written for git installs; works both for
@@ -68,8 +82,9 @@ def _commit_datetime(commit: str) -> str:
 
 def version_callback(value: bool):
     if value:
+        version = _installed_version()
         commit = _installed_commit()
-        out = "elvigilante-julio-2026"
+        out = f"tiddl-elvigilante {version}"
         if commit:
             when = _commit_datetime(commit)
             out += f" ({commit}" + (f", {when}" if when else "") + ")"

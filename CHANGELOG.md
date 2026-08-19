@@ -17,6 +17,16 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+### Changed
+
+- **Accurate CLI version output** — `tiddl --version` now reads the installed
+  distribution metadata and reports the actual SemVer version instead of the
+  fixed `elvigilante-julio-2026` label. Git-installed builds still append their
+  commit and date when that provenance is available.
+- **Modern package license metadata** — Packaging now uses the PEP 639 SPDX
+  expression (`MIT`) and explicitly includes `LICENSE`, eliminating deprecated
+  setuptools metadata before its 2027 removal deadline.
+
 ---
 
 ## [1.2.0] - 2026-08-19

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "tiddl-elvigilante"
 version = "1.2.0"
 description = "Modern Python 3.10+ compatible TIDAL downloader - Independent fork with production-grade quality"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "np3ir"},
     {name = "tiddl-elvigilante contributors"},
@@ -20,7 +21,6 @@ keywords = ["tidal", "downloader", "music", "streaming", "python3.10", "tidal-do
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
