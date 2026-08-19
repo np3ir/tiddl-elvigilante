@@ -15,7 +15,11 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ---
 
-## [Unreleased] — 2026-07-19
+## [Unreleased]
+
+---
+
+## [1.2.0] - 2026-08-19
 
 ### ✨ Added
 
@@ -64,12 +68,6 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
   the actual error message, burying it. The downloader teardown now exits early when
   no resources were queued.
 
----
-
-## [Unreleased] — 2026-05-16
-
-### 🐛 Fixed
-
 - **Video ARTIST tag: multi-value list** (`tiddl/core/metadata/video.py`)
   — Video metadata now writes ARTIST as a list of individual names (sorted MAIN then
   FEATURED) instead of a single joined string. Consistent with music track behavior.
@@ -79,12 +77,6 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
   — Date tag now stores only the year (e.g. `2025`) instead of the full datetime string
   (`2025-05-15 00:00:00`). Consistent with music track behavior and iTunes/Apple Music
   expectations.
-
----
-
-## [Unreleased] — 2026-05-15
-
-### 🐛 Fixed
 
 - **Skip-existing now checks destination folder** (`cli/commands/download/__init__.py`,
   `cli/commands/download/downloader.py`)
