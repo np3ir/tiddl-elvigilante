@@ -10,7 +10,7 @@ run never silently drops an album.
 
 from types import SimpleNamespace
 
-from tiddl.cli.commands.download import plan_stereo_resolution
+from tiddl.cli.commands.download import CatalogReadCache, plan_stereo_resolution
 
 
 def ns(**values):
@@ -64,3 +64,54 @@ def test_candidate_replace_propagates_confirmation_flag():
 def test_candidate_replace_without_confirmation():
     r = result(candidate=candidate(1000, needs_confirmation=False))
     assert plan_stereo_resolution(r, keep_original=False) == ("replace", 1000, False)
+
+
+class _CountingApi:
+    """Fake api counting real calls to the cached catalog reads."""
+
+    def __init__(self):
+        self.calls = {"get_album": 0, "get_artist_albums": 0, "get_uncached": 0}
+
+    def get_album(self, album_id):
+        self.calls["get_album"] += 1
+        return ("album", album_id)
+
+    def get_artist_albums(self, artist_id, limit=100, offset=0, filter=None):
+        self.calls["get_artist_albums"] += 1
+        return ("artist_albums", artist_id, limit, offset, filter)
+
+    def get_uncached(self, x):
+        self.calls["get_uncached"] += 1
+        return x
+
+
+def test_cache_memoises_repeated_reads_by_args():
+    api = _CountingApi()
+    cache = CatalogReadCache(api)
+    # same album id repeated -> underlying called once
+    assert cache.get_album(album_id=549984784) == ("album", 549984784)
+    assert cache.get_album(album_id=549984784) == ("album", 549984784)
+    assert api.calls["get_album"] == 1
+    # same artist page repeated (the hot path when resolving a whole artist)
+    for _ in range(5):
+        cache.get_artist_albums(artist_id=5237820, limit=100, offset=0)
+    assert api.calls["get_artist_albums"] == 1
+
+
+def test_cache_distinguishes_different_args():
+    api = _CountingApi()
+    cache = CatalogReadCache(api)
+    cache.get_album(album_id=1)
+    cache.get_album(album_id=2)
+    assert api.calls["get_album"] == 2
+    cache.get_artist_albums(artist_id=9, offset=0, filter="ALBUMS")
+    cache.get_artist_albums(artist_id=9, offset=0, filter="EPSANDSINGLES")
+    assert api.calls["get_artist_albums"] == 2
+
+
+def test_cache_passes_through_uncached_methods():
+    api = _CountingApi()
+    cache = CatalogReadCache(api)
+    assert cache.get_uncached(7) == 7
+    assert cache.get_uncached(7) == 7
+    assert api.calls["get_uncached"] == 2  # not memoised

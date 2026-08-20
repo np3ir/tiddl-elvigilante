@@ -358,6 +358,37 @@ def plan_stereo_resolution(result, keep_original: bool) -> tuple:
     return ("replace", candidate.album.id, candidate.requires_confirmation)
 
 
+class CatalogReadCache:
+    """Per-run memoiser for the read-only catalog endpoints the stereo
+    resolver hits repeatedly. Resolving a whole artist calls
+    ``find_stereo_editions`` once per album, and each of those re-fetches the
+    same ``get_artist_albums`` page (and re-reads album items), which is slow
+    on large discographies. Wrapping the api in this proxy for one artist run
+    fetches each ``get_album`` / ``get_artist_albums`` / ``get_album_items``
+    result at most once; every other attribute passes straight through so
+    behaviour is identical. Catalog data is stable within a single run, so
+    caching these reads is safe."""
+
+    _CACHED = ("get_album", "get_artist_albums", "get_album_items")
+
+    def __init__(self, api):
+        self._api = api
+        self._cache: dict = {}
+
+    def __getattr__(self, name):
+        attr = getattr(self._api, name)
+        if name not in self._CACHED or not callable(attr):
+            return attr
+
+        def cached(*args, **kwargs):
+            key = (name, args, tuple(sorted(kwargs.items())))
+            if key not in self._cache:
+                self._cache[key] = attr(*args, **kwargs)
+            return self._cache[key]
+
+        return cached
+
+
 @download_command.callback(no_args_is_help=True)
 def download_callback(
     ctx: Context,
@@ -841,16 +872,18 @@ def download_callback(
 
         if AUDIO_MODE == "stereo":
 
-            async def _resolve_stereo_album(album_id, keep_original: bool):
+            async def _resolve_stereo_album(album_id, keep_original: bool, api=None):
                 """Resolve one album id to the album id that should actually be
                 downloaded. Returns ``(album_id, download_it)``. When
                 ``keep_original`` is True (artist expansion) an unresolved or
                 declined album keeps its original id; when False (direct album
                 URL) it is skipped, preserving the original single-album
-                behaviour."""
+                behaviour. ``api`` lets the artist path pass a
+                ``CatalogReadCache`` so the shared artist catalog is fetched
+                once per run instead of once per album."""
                 result = await asyncio.to_thread(
                     find_stereo_editions,
-                    ctx.obj.api,
+                    api if api is not None else ctx.obj.api,
                     int(album_id),
                     TRACK_QUALITY,
                     0.75,
@@ -986,11 +1019,15 @@ def download_callback(
                         f"artist/{resource.id} (videos are not included in stereo mode)."
                     )
                     seen_stereo_ids: set = set()
+                    # One shared cache for the whole artist run so the artist
+                    # catalog (and repeated album reads) are fetched once, not
+                    # once per album.
+                    artist_api = CatalogReadCache(ctx.obj.api)
                     for aid in await _collect_artist_album_ids(resource.id):
                         if is_cancelled():
                             break
                         album_id, download_it = await _resolve_stereo_album(
-                            aid, keep_original=True
+                            aid, keep_original=True, api=artist_api
                         )
                         if download_it and album_id not in seen_stereo_ids:
                             seen_stereo_ids.add(album_id)
