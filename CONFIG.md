@@ -162,6 +162,17 @@ macOS, second-machine adoption, recovery and troubleshooting instructions.
 - **Default**: none
 - How to handle music videos
 
+### `exclude_compilations`
+- **Type**: boolean
+- **Default**: false
+- When downloading a whole **artist**, skip the artist's compilations. TIDAL lists them as ordinary albums, so they are identified from the artist page (the same "Compilations" section the TIDAL app shows) and skipped by album id. CLI override: `--exclude-compilations` / `--no-exclude-compilations`.
+
+### `exclude_live_albums`
+- **Type**: boolean
+- **Default**: false
+- Same as above for the artist's **live albums** ("Live albums" section). CLI override: `--exclude-live-albums` / `--no-exclude-live-albums`.
+- (Note: "Appears On" third-party albums are never part of an artist download, so no option is needed for them.)
+
 ### `max_tracks_per_session`
 - **Type**: integer
 - **Default**: 0 (no limit)
