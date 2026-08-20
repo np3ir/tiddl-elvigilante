@@ -72,6 +72,15 @@ class Config(BaseModel):
         video_download_path: Optional[Path] = None
         singles_filter: ARTIST_SINGLES_FILTER_LITERAL = "none"
         videos_filter: VIDEOS_FILTER_LITERAL = "none"
+        # Artist-download release-type filters. TIDAL's get_artist_albums returns
+        # compilations and live albums typed as plain ALBUM, so these are resolved
+        # from the artist *page* endpoint (the "Compilations" / "Live albums"
+        # sections the web UI shows) and excluded by album id. Both default off
+        # (unchanged behavior). ("Appears On" releases are third-party albums the
+        # artist endpoint never returns, so no toggle is needed for them.)
+        # See core.artist_sections.
+        exclude_compilations: bool = False
+        exclude_live_albums: bool = False
         update_mtime: bool = False
         rewrite_metadata: bool = False
         # Destination-volume identity (see tiddl.core.utils.destination_anchor).

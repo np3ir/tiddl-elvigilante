@@ -115,6 +115,12 @@ singles_filter = "none"        # default: "none"
 #   "none" = ignore videos   "only" = videos only   "allow" = audio + videos
 videos_filter = "none"         # default: "none"
 
+# When downloading an ARTIST, exclude these release types. TIDAL lists them as
+# plain albums, so they are identified from the artist page (the same
+# "Compilations" / "Live albums" sections the TIDAL app shows) and skipped.
+exclude_compilations = false   # default: false — skip the artist's compilations
+exclude_live_albums = false    # default: false — skip the artist's live albums
+
 # Set the file modified time (mtime) to the release date.
 update_mtime = false           # default: false
 
