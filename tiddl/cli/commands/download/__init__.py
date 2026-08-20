@@ -23,6 +23,7 @@ from tiddl.core.utils.format import format_template
 from tiddl.core.utils.m3u import save_tracks_to_m3u
 from tiddl.core.utils import destination_anchor as anchor
 from tiddl.core.edition_resolver import find_stereo_editions
+from tiddl.core.artist_sections import get_excluded_artist_album_ids
 from tiddl.core.download_policy import SessionTrackLimit
 from tiddl.cli.config import (
     CONFIG,
@@ -1005,6 +1006,16 @@ def download_callback(
                     await _page(True)
                 else:
                     await _page(SINGLES_FILTER == "only")
+                excluded = await asyncio.to_thread(
+                    get_excluded_artist_album_ids,
+                    ctx.obj.api,
+                    artist_id,
+                    compilations=CONFIG.download.exclude_compilations,
+                    live=CONFIG.download.exclude_live_albums,
+                    appears_on=False,  # third-party albums are never in an artist download
+                )
+                if excluded:
+                    ids = [i for i in ids if i not in excluded]
                 return ids
 
             resolved_resources: list[TidalResource] = []
@@ -2008,7 +2019,30 @@ def download_callback(
                         await collect_albums(True)
                     else:
                         await collect_albums(SINGLES_FILTER == "only")
-                
+
+                # Optionally drop compilations / live albums / "appears on"
+                # releases, resolved from the artist page (get_artist_albums
+                # cannot tell them apart). Config-driven; default keeps all.
+                _excluded_ids = await asyncio.to_thread(
+                    get_excluded_artist_album_ids,
+                    ctx.obj.api,
+                    resource.id,
+                    compilations=CONFIG.download.exclude_compilations,
+                    live=CONFIG.download.exclude_live_albums,
+                    appears_on=False,  # third-party albums are never in an artist download
+                )
+                if _excluded_ids:
+                    _before = len(collected_albums)
+                    collected_albums = [
+                        a for a in collected_albums if a.id not in _excluded_ids
+                    ]
+                    _dropped = _before - len(collected_albums)
+                    if _dropped:
+                        ctx.obj.console.print(
+                            f"[dim]Excluded {_dropped} compilation/live/appears-on "
+                            f"release(s) from the artist download.[/]"
+                        )
+
                 # SMART DEDUPLICATION & QUALITY SELECTION
                 # Group albums by Title + Type + Version to find duplicates (e.g. same album in HiRes vs Lossless)
                 # Keep the highest quality version.
