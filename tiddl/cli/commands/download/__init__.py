@@ -679,6 +679,20 @@ def download_callback(
             help="Set file modified-time to the release date (overrides config).",
         ),
     ] = None,
+    EXCLUDE_COMPILATIONS: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--exclude-compilations/--no-exclude-compilations",
+            help="On artist downloads, skip the artist's compilations (overrides config).",
+        ),
+    ] = None,
+    EXCLUDE_LIVE_ALBUMS: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--exclude-live-albums/--no-exclude-live-albums",
+            help="On artist downloads, skip the artist's live albums (overrides config).",
+        ),
+    ] = None,
     MAX_TRACKS: Annotated[
         Optional[int],
         typer.Option(
@@ -769,6 +783,10 @@ def download_callback(
         CONFIG.download.requests_per_minute = REQUESTS_PER_MINUTE
     if UPDATE_MTIME is not None:
         CONFIG.download.update_mtime = UPDATE_MTIME
+    if EXCLUDE_COMPILATIONS is not None:
+        CONFIG.download.exclude_compilations = EXCLUDE_COMPILATIONS
+    if EXCLUDE_LIVE_ALBUMS is not None:
+        CONFIG.download.exclude_live_albums = EXCLUDE_LIVE_ALBUMS
     if MAX_TRACKS is not None:
         CONFIG.download.max_tracks_per_session = MAX_TRACKS
     if SAVE_M3U is not None:
