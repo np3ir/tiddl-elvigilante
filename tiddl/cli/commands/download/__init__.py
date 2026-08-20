@@ -2150,10 +2150,33 @@ def download_callback(
                         for album in futures:
                             if is_cancelled():
                                 break
-                            await download_album_throttled(album)
+                            # Per-album resilience: one album's failure (a
+                            # geo-block, a transient API error, a bad manifest)
+                            # must not abort the rest of the artist's discography.
+                            # A run-wide safety stop still propagates via
+                            # is_cancelled() checked at the top of the loop.
+                            try:
+                                await download_album_throttled(album)
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as _ae:
+                                ctx.obj.console.print(
+                                    f"[red]Skipped album/{getattr(album, 'id', '?')} "
+                                    f"({getattr(album, 'title', '?')}): {_ae}[/]"
+                                )
                     else:
                         tasks = [asyncio.create_task(download_album_throttled(a)) for a in futures]
-                        await asyncio.gather(*tasks)
+                        # return_exceptions=True so one album failing doesn't cancel
+                        # the sibling album tasks; surface each failure instead.
+                        _results = await asyncio.gather(*tasks, return_exceptions=True)
+                        for _a, _r in zip(futures, _results):
+                            if isinstance(_r, asyncio.CancelledError):
+                                raise _r
+                            if isinstance(_r, Exception):
+                                ctx.obj.console.print(
+                                    f"[red]Skipped album/{getattr(_a, 'id', '?')} "
+                                    f"({getattr(_a, 'title', '?')}): {_r}[/]"
+                                )
 
                     # Videos run concurrently after albums (already created as tasks)
                     if video_tasks:
