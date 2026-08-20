@@ -933,8 +933,11 @@ def download_callback(
 
             async def _collect_artist_album_ids(artist_id):
                 """Enumerate an artist's releases as album ids, honouring the
-                same ``--singles`` filter as a normal artist download."""
+                same ``--singles`` filter as a normal artist download. Album
+                ids are de-duplicated across pages and the ALBUMS/EPSANDSINGLES
+                passes (order preserved) so no album is resolved twice."""
                 ids: list = []
+                seen: set = set()
 
                 async def _page(singles: bool):
                     offset = 0
@@ -951,7 +954,9 @@ def download_callback(
                         if not page or not getattr(page, "items", None):
                             break
                         for album in page.items:
-                            ids.append(album.id)
+                            if album.id not in seen:
+                                seen.add(album.id)
+                                ids.append(album.id)
                         offset += page.limit
                         if offset >= page.totalNumberOfItems:
                             break
