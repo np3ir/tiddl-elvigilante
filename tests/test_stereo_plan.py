@@ -70,11 +70,20 @@ class _CountingApi:
     """Fake api counting real calls to the cached catalog reads."""
 
     def __init__(self):
-        self.calls = {"get_album": 0, "get_artist_albums": 0, "get_uncached": 0}
+        self.calls = {
+            "get_album": 0,
+            "get_artist_albums": 0,
+            "get_album_items": 0,
+            "get_uncached": 0,
+        }
 
     def get_album(self, album_id):
         self.calls["get_album"] += 1
         return ("album", album_id)
+
+    def get_album_items(self, album_id):
+        self.calls["get_album_items"] += 1
+        return ("album_items", album_id)
 
     def get_artist_albums(self, artist_id, limit=100, offset=0, filter=None):
         self.calls["get_artist_albums"] += 1
@@ -96,6 +105,23 @@ def test_cache_memoises_repeated_reads_by_args():
     for _ in range(5):
         cache.get_artist_albums(artist_id=5237820, limit=100, offset=0)
     assert api.calls["get_artist_albums"] == 1
+
+
+def test_cache_memoises_album_items():
+    api = _CountingApi()
+    cache = CatalogReadCache(api)
+    assert cache.get_album_items(album_id=549984784) == ("album_items", 549984784)
+    assert cache.get_album_items(album_id=549984784) == ("album_items", 549984784)
+    assert api.calls["get_album_items"] == 1
+
+
+def test_cache_passes_through_unhashable_args_without_crashing():
+    # Defensive: an unhashable arg must not crash the cache; it just isn't cached.
+    api = _CountingApi()
+    cache = CatalogReadCache(api)
+    assert cache.get_album(album_id=[1, 2]) == ("album", [1, 2])
+    assert cache.get_album(album_id=[1, 2]) == ("album", [1, 2])
+    assert api.calls["get_album"] == 2  # not memoised (unhashable)
 
 
 def test_cache_distinguishes_different_args():

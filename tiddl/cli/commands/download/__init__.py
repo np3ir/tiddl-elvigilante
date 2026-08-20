@@ -382,6 +382,12 @@ class CatalogReadCache:
 
         def cached(*args, **kwargs):
             key = (name, args, tuple(sorted(kwargs.items())))
+            try:
+                hash(key)
+            except TypeError:
+                # Unhashable argument (the catalog reads only take scalars, so
+                # this is defensive): skip the cache and call straight through.
+                return attr(*args, **kwargs)
             if key not in self._cache:
                 self._cache[key] = attr(*args, **kwargs)
             return self._cache[key]
