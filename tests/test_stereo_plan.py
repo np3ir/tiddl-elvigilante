@@ -35,6 +35,14 @@ def test_source_already_stereo_keeps_source_for_both_modes():
     assert plan_stereo_resolution(r, True) == ("keep-source", 7, False)
 
 
+def test_source_satisfies_request_ignores_candidate():
+    # The decision short-circuits on source_satisfies_request and must never
+    # inspect result.best in that case, even when a candidate exists.
+    r = result(source_ok=True, source_id=7, candidate=candidate(9, needs_confirmation=True))
+    assert plan_stereo_resolution(r, False) == ("keep-source", 7, False)
+    assert plan_stereo_resolution(r, True) == ("keep-source", 7, False)
+
+
 def test_no_candidate_direct_album_is_skipped():
     r = result(source_ok=False, candidate=None, source_id=11)
     assert plan_stereo_resolution(r, keep_original=False) == ("skip", 11, False)
