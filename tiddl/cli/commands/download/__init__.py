@@ -338,6 +338,26 @@ def _finish_download_run(
         sys.exit(exit_code)
 
 
+def plan_stereo_resolution(result, keep_original: bool) -> tuple:
+    """Pure pre-confirmation decision for the stereo resolution of one album.
+
+    Returns ``(action, album_id, needs_confirmation)`` where ``action`` is one
+    of ``"keep-source"``, ``"replace"`` or ``"skip"``. ``keep_original`` is the
+    only behavioural difference between the two call sites: a direct album URL
+    (``keep_original=False``) is skipped when no stereo edition qualifies,
+    while an album reached by expanding an artist (``keep_original=True``)
+    keeps its original id instead — so a whole-artist stereo run never silently
+    drops an album. Kept a standalone pure function for direct unit coverage,
+    same as ``_download_exit_code`` above."""
+    source = result.source
+    if result.source_satisfies_request:
+        return ("keep-source", source.id, False)
+    candidate = result.best
+    if candidate is None:
+        return ("keep-source" if keep_original else "skip", source.id, False)
+    return ("replace", candidate.album.id, candidate.requires_confirmation)
+
+
 @download_command.callback(no_args_is_help=True)
 def download_callback(
     ctx: Context,
@@ -354,7 +374,9 @@ def download_callback(
             "--audio-mode",
             help=(
                 "Audio edition policy: auto keeps supplied IDs; stereo resolves "
-                "album URLs to stereo editions."
+                "album URLs to stereo editions, and expands artist URLs into "
+                "their albums resolved to stereo (keeping an album's original "
+                "when it has no stereo edition)."
             ),
         ),
     ] = "auto",
@@ -818,36 +840,35 @@ def download_callback(
         await auto_refresh_if_needed(threshold_minutes=30)
 
         if AUDIO_MODE == "stereo":
-            resolved_resources: list[TidalResource] = []
-            for resource in ctx.obj.resources:
-                if resource.type != "album":
-                    ctx.obj.console.print(
-                        f"[yellow]Stereo edition resolution currently applies only to direct "
-                        f"album URLs; keeping {resource.type}/{resource.id} unchanged.[/]"
-                    )
-                    resolved_resources.append(resource)
-                    continue
 
+            async def _resolve_stereo_album(album_id, keep_original: bool):
+                """Resolve one album id to the album id that should actually be
+                downloaded. Returns ``(album_id, download_it)``. When
+                ``keep_original`` is True (artist expansion) an unresolved or
+                declined album keeps its original id; when False (direct album
+                URL) it is skipped, preserving the original single-album
+                behaviour."""
                 result = await asyncio.to_thread(
                     find_stereo_editions,
                     ctx.obj.api,
-                    int(resource.id),
+                    int(album_id),
                     TRACK_QUALITY,
                     0.75,
                     QUALITY_POLICY,
                 )
                 resolved_quality = result.requested_quality
                 source = result.source
-                if result.source_satisfies_request:
+                action, target_id, needs_confirmation = plan_stereo_resolution(
+                    result, keep_original
+                )
+
+                if action == "keep-source" and result.source_satisfies_request:
                     ctx.obj.console.print(
                         f"[green]Stereo {resolved_quality.upper()} already available:[/] "
                         f"{source.title} (album/{source.id})"
                     )
-                    resolved_resources.append(resource)
-                    continue
-
-                candidate = result.best
-                if candidate is None:
+                    return source.id, True
+                if action == "skip":
                     quality_requirement = (
                         f"at or below {TRACK_QUALITY.upper()}"
                         if QUALITY_POLICY == "flexible"
@@ -858,8 +879,16 @@ def download_callback(
                         f"{source.title} (album/{source.id}); skipped because the requested "
                         "stereo/quality policy cannot be satisfied.[/]"
                     )
-                    continue
+                    return source.id, False
+                if action == "keep-source":
+                    # keep_original and no qualifying stereo edition was found.
+                    ctx.obj.console.print(
+                        f"[yellow]No stereo edition found for {source.title} "
+                        f"(album/{source.id}); keeping the original.[/]"
+                    )
+                    return source.id, True
 
+                candidate = result.best
                 alternate = candidate.album
                 ctx.obj.console.print(
                     f"[bold cyan]Stereo replacement:[/] album/{source.id} → "
@@ -879,7 +908,7 @@ def download_callback(
                     )
 
                 accept = True
-                if candidate.requires_confirmation and EDITION_MATCH == "ask":
+                if needs_confirmation and EDITION_MATCH == "ask":
                     if DRY_RUN:
                         ctx.obj.console.print(
                             "[yellow]A real run would request confirmation before substitution.[/]"
@@ -891,13 +920,84 @@ def download_callback(
                             default=False,
                         )
                 if accept:
-                    resolved_resources.append(
-                        TidalResource(type="album", id=str(alternate.id))
+                    return alternate.id, True
+                if keep_original:
+                    ctx.obj.console.print(
+                        f"[yellow]Replacement declined; keeping original album/{source.id}.[/]"
                     )
+                    return source.id, True
+                ctx.obj.console.print(
+                    f"[yellow]Replacement declined; album/{source.id} was skipped.[/]"
+                )
+                return source.id, False
+
+            async def _collect_artist_album_ids(artist_id):
+                """Enumerate an artist's releases as album ids, honouring the
+                same ``--singles`` filter as a normal artist download."""
+                ids: list = []
+
+                async def _page(singles: bool):
+                    offset = 0
+                    filter_type = "EPSANDSINGLES" if singles else "ALBUMS"
+                    while True:
+                        if is_cancelled():
+                            break
+                        page = await asyncio.to_thread(
+                            ctx.obj.api.get_artist_albums,
+                            artist_id=artist_id,
+                            offset=offset,
+                            filter=filter_type,
+                        )
+                        if not page or not getattr(page, "items", None):
+                            break
+                        for album in page.items:
+                            ids.append(album.id)
+                        offset += page.limit
+                        if offset >= page.totalNumberOfItems:
+                            break
+
+                if SINGLES_FILTER == "include":
+                    await _page(False)
+                    await _page(True)
+                else:
+                    await _page(SINGLES_FILTER == "only")
+                return ids
+
+            resolved_resources: list[TidalResource] = []
+            for resource in ctx.obj.resources:
+                if is_cancelled():
+                    break
+                if resource.type == "album":
+                    album_id, download_it = await _resolve_stereo_album(
+                        resource.id, keep_original=False
+                    )
+                    if download_it:
+                        resolved_resources.append(
+                            TidalResource(type="album", id=str(album_id))
+                        )
+                elif resource.type == "artist":
+                    ctx.obj.console.print(
+                        f"[bold cyan]Stereo mode:[/] resolving stereo editions across "
+                        f"artist/{resource.id} (videos are not included in stereo mode)."
+                    )
+                    seen_stereo_ids: set = set()
+                    for aid in await _collect_artist_album_ids(resource.id):
+                        if is_cancelled():
+                            break
+                        album_id, download_it = await _resolve_stereo_album(
+                            aid, keep_original=True
+                        )
+                        if download_it and album_id not in seen_stereo_ids:
+                            seen_stereo_ids.add(album_id)
+                            resolved_resources.append(
+                                TidalResource(type="album", id=str(album_id))
+                            )
                 else:
                     ctx.obj.console.print(
-                        f"[yellow]Replacement declined; album/{source.id} was skipped.[/]"
+                        f"[yellow]Stereo edition resolution applies only to album and artist "
+                        f"URLs; keeping {resource.type}/{resource.id} unchanged.[/]"
                     )
+                    resolved_resources.append(resource)
 
             if DRY_RUN:
                 ctx.obj.console.print(
