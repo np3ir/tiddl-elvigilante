@@ -76,6 +76,50 @@ Supports all options of `download url`.
 
 ---
 
+## 🎚️ Stereo Editions & Quality Control
+
+Some albums are on TIDAL only in Dolby Atmos. `--audio-mode stereo` finds the
+separately-published **stereo** edition and uses it instead — matched against the
+TIDAL catalog only (no MusicBrainz/ISRC). For an artist URL it resolves every
+album; playlists, mixes and single tracks are left unchanged.
+
+```bash
+# Album → its stereo edition (auto-accept the best match)
+tiddl download -q max --audio-mode stereo --edition-match best url https://tidal.com/album/549984784
+
+# Preview only (no download) — this is the GUI's "Check available versions"
+tiddl download -q max --audio-mode stereo --dry-run url https://tidal.com/album/549984784
+
+# Whole artist in stereo; ask before substituting a changed tracklist
+tiddl download -q max --audio-mode stereo --edition-match ask url https://tidal.com/artist/5237820
+
+# List an album's stereo editions without downloading
+tiddl info editions -q max https://tidal.com/album/549984784
+```
+
+**Quality policy** is independent of the audio edition:
+
+```bash
+tiddl download -q high --quality-policy flexible url https://...   # ceiling (default)
+tiddl download -q high --quality-policy strict   url https://...   # exact tier only
+```
+
+## 🚫 Skip Compilations / Live Albums (Artist)
+
+When downloading a whole artist, skip its compilations and/or live albums.
+TIDAL lists them as ordinary albums, so tiddl reads the artist page (the same
+"Compilations" / "Live albums" sections the app shows) to identify them:
+
+```bash
+tiddl download --exclude-compilations --exclude-live-albums url https://tidal.com/artist/5237820
+```
+
+Or set `[download] exclude_compilations` / `exclude_live_albums` in `config.toml`
+(both default off). "Appears On" third-party albums are never part of an artist
+download to begin with.
+
+---
+
 ## 🔒 Protecting NAS, USB and Network Destinations
 
 Destination-volume identity prevents tiddl from publishing files to a

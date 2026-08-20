@@ -126,9 +126,28 @@ tiddl download --albums url https://tidal.com/playlist/...   # full album of eve
 tiddl download --artists url https://tidal.com/playlist/...  # full discography of every credited artist
 tiddl download --tracks url https://tidal.com/playlist/...   # each track standalone
 
+# Stereo edition resolver: use the separately-published stereo edition of an
+# Atmos-only album (or, for an artist URL, every album). Playlists/mixes/single
+# tracks are left unchanged.
+tiddl download --audio-mode stereo --edition-match best url https://tidal.com/album/549984784
+tiddl download --audio-mode stereo --edition-match ask  url https://tidal.com/artist/5237820
+tiddl download --audio-mode stereo --dry-run url https://tidal.com/album/...   # preview, no download
+#   --audio-mode  auto (default) | stereo
+#   --edition-match  best (auto-accept) | ask (prompt on a changed tracklist)
+
+# Quality policy: flexible (ceiling, default) vs strict (exact tier only)
+tiddl download -q high --quality-policy strict url https://...
+
+# Artist release-type filter (artist downloads): skip compilations / live albums
+tiddl download --exclude-compilations --exclude-live-albums url https://tidal.com/artist/5237820
+#   also --no-exclude-compilations / --no-exclude-live-albums to override config
+
 # Debug (global flag, goes before the subcommand)
 tiddl --debug download url https://...
 ```
+
+> **Stereo editions** are matched against the TIDAL catalog only (no MusicBrainz/ISRC).
+> `tiddl info editions -q high|max <ALBUM_URL>` lists an album's stereo editions without downloading.
 
 ---
 
@@ -206,6 +225,17 @@ tiddl info url https://tidal.com/album/497662013
 - Available bitrate
 - Release date
 - Availability
+
+### `tiddl info editions` — list an album's stereo editions
+
+Read-only diagnostic for the stereo edition resolver: given an Atmos-capable
+album, it searches the artist catalog for matching **stereo** editions and shows
+the candidates (score, track overlap, tier) without downloading anything.
+
+```bash
+tiddl info editions -q max  https://tidal.com/album/549984784
+tiddl info editions -q high https://tidal.com/album/549984784
+```
 
 ---
 

@@ -22,6 +22,58 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 - Added a bilingual destination-safety guide and linked user-facing setup,
   configuration, second-machine adoption and recovery instructions from the
   README, configuration reference, usage guide and Spanish tutorial.
+- Documented the stereo edition resolver, quality policies, `tiddl info
+  editions` and the artist compilation/live-album filter across the README,
+  configuration reference and command reference.
+
+---
+
+## [1.4.1] - 2026-08-20
+
+### Added
+
+- `--exclude-compilations` / `--exclude-live-albums` CLI flags (tri-state,
+  override the config equivalents per run).
+
+## [1.4.0] - 2026-08-20
+
+### Added
+
+- Exclude **compilations** and **live albums** from artist downloads.
+  TIDAL types both as plain albums, so they are identified from the artist page
+  (the same "Compilations" / "Live albums" sections the app shows) via the new
+  `core/artist_sections` module and skipped by album id. Config:
+  `[download] exclude_compilations` / `exclude_live_albums` (default off).
+
+## [1.3.2] - 2026-08-19
+
+### Performance
+
+- Cache catalog reads across an artist stereo run: resolving a whole artist went
+  from minutes to seconds with identical results (per-run `CatalogReadCache`).
+
+## [1.3.1] - 2026-08-19
+
+### Added
+
+- `--audio-mode stereo` now works on **artist** URLs — expands the artist into
+  its releases (honouring `--singles`) and resolves each album to its stereo
+  edition; an album with no stereo edition keeps its original.
+
+## [1.3.0] - 2026-08-19
+
+### Added
+
+- **Stereo Edition Resolver + Quality Policies.** Given an Atmos-only album URL,
+  find and use a separately-published stereo edition at High/MAX, TIDAL-catalog
+  only. New `--audio-mode auto|stereo`, `--edition-match ask|best`,
+  `--quality-policy flexible|strict`, and the read-only `tiddl info editions`
+  diagnostic. New modules `edition_resolver`, `stream_policy`, `download_policy`.
+
+### Fixed
+
+- A cooperative safety stop (e.g. run-wide 401) now exits the CLI non-zero.
+- Strict `normal` correctly maps to TIDAL `HIGH` (not `LOSSLESS`).
 
 ---
 
