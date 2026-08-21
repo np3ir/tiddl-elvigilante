@@ -1336,12 +1336,18 @@ class Downloader:
                         quality_policy=self.quality_policy,
                     )
                     if not inspection.accepted:
-                        from tiddl.core.cancel import request_cancel
-
-                        request_cancel()
+                        # Stereo/quality gate: a non-stereo (Atmos) track — or, under
+                        # a strict quality policy, one TIDAL won't deliver at the exact
+                        # tier — is SKIPPED and the run CONTINUES to the next track,
+                        # instead of aborting the whole run. This lets a large mixed
+                        # playlist download all its eligible stereo tracks without a
+                        # single Atmos track killing everything. The safety promise
+                        # holds: a rejected track is skipped, never downloaded. (A real
+                        # authentication failure still stops the run via the API layer's
+                        # own cooperative-stop signal, independent of this check.)
                         self.rich_output.console.print(
-                            f"[red]Download stopped before media transfer: {inspection.reason} "
-                            f"for '{display_title}'.[/]"
+                            f"[yellow]Skipped (not eligible in stereo/strict mode): "
+                            f"{inspection.reason} for '{display_title}'.[/]"
                         )
                         return None, False
                     urls, _ = parse_track_stream(stream)
