@@ -19,6 +19,17 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ### Added
 
+- **Fidelity quality cascade with Dolby Atmos as a rung.** `-q` now names the
+  STARTING rung of a fixed ladder `max > high > atmos > normal > low`; each track
+  is taken at the first rung from there DOWN that it actually offers. This fixes
+  a real trap: TIDAL serves an AAC (`.m4a`) stream for an Atmos-flagged track at
+  the LOSSLESS tier but the real FLAC only at HI_RES, so a plain `-q high` run
+  used to yield degraded AAC even when a hi-res FLAC existed. Now `-q max` prefers
+  the FLAC (an Atmos track's only FLAC is its hi-res `max`); `-q high` falls to
+  Atmos only when no FLAC exists; `-q atmos` takes Dolby Atmos first. Non-Atmos
+  tracks attempt the same tiers as before. The "Dolby Atmos" download label now
+  reflects the stream actually delivered, so a track's FLAC is no longer
+  mislabelled Atmos. New pure module `tiddl/core/quality_cascade.py`.
 - `--resume`: skip resources already fully processed in a prior run of the same
   job (same links + options) **before any API call**, so a run interrupted by a
   rate-limit stop or Ctrl-C continues cheaply instead of re-enumerating every

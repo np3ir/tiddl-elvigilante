@@ -89,11 +89,17 @@ tiddl download url https://tidal.com/mix/mixed123xyz
 #### Options
 
 ```bash
-# Audio quality
-tiddl download url --track-quality max https://...     # 24-bit, 192kHz FLAC
-tiddl download url --track-quality high https://...    # 16-bit, 44.1kHz FLAC
+# Audio quality — -q is the STARTING rung of a fidelity cascade, and each track
+# is taken at the first rung from there DOWN that it offers:
+#     max  >  high  >  atmos  >  normal  >  low
+tiddl download url --track-quality max https://...     # 24-bit FLAC (hi-res)
+tiddl download url --track-quality high https://...    # 16-bit FLAC (CD)
+tiddl download url --track-quality atmos https://...   # Dolby Atmos first
 tiddl download url --track-quality normal https://...  # 320kbps AAC
 tiddl download url --track-quality low https://...     # 96kbps AAC
+# Atmos note: on a Dolby-Atmos track TIDAL serves AAC at the LOSSLESS tier and
+# the FLAC only at HI_RES, so an Atmos track's only FLAC is its `max` rung.
+# Start at max to PREFER FLAC over Atmos; -q high falls to Atmos (no 16-bit FLAC).
 
 # Video quality
 tiddl download url --video-quality fhd https://...     # 1080p
