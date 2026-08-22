@@ -332,10 +332,28 @@ def _finish_download_run(
                 "copies were retained where applicable); exiting non-zero.[/]"
             )
         else:
-            console.print(
-                "[red]The download engine stopped the run for safety; "
-                "exiting non-zero.[/]"
-            )
+            from tiddl.core.cancel import stop_reason
+            reason = stop_reason()
+            if reason == "tidal_rate_limit":
+                console.print(
+                    "[red]Stopped: TIDAL rate-limited this run repeatedly. "
+                    "Pushing further risks a hard account block. Wait a while, "
+                    "then re-run — already-downloaded tracks are skipped, so it "
+                    "resumes where it left off (tip: set max_tracks_per_session "
+                    "to download big lists in chunks). Exiting non-zero.[/]"
+                )
+            elif reason == "tidal_account_flagged":
+                console.print(
+                    "[red]Stopped: TIDAL flagged the account and refused a token "
+                    "refresh. Run 'tiddl auth login' to sign in again, then "
+                    "re-run (already-downloaded tracks are skipped). "
+                    "Exiting non-zero.[/]"
+                )
+            else:
+                console.print(
+                    "[red]The download engine stopped the run for safety; "
+                    "exiting non-zero.[/]"
+                )
         sys.exit(exit_code)
 
 
@@ -2503,6 +2521,13 @@ def download_callback(
         # cuando el subcomando falló al parsear sus argumentos).
         if not ctx.obj.resources:
             return
+        # Fresh 429 strike budget per invocation: the run-wide circuit breaker
+        # counts 429s across the whole run, so it must start at zero here (the
+        # GUI reuses this process for run after run). Cancel state is managed by
+        # the caller (the GUI clears it before a batch; a safety stop should
+        # halt the rest of the batch, so it is intentionally NOT cleared here).
+        from tiddl.core.ratelimit import guard as _rl_guard
+        _rl_guard().reset()
         import warnings
         # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
         if sys.platform == "win32":

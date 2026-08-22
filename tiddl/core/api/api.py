@@ -114,6 +114,15 @@ class TidalAPI:
                             print(f"⚠️ Content not ready/available ({status}). Skipping...");
                             raise e
 
+                        # Account flagged: TIDAL refused a token refresh (the
+                        # client sets _refresh_blocked on a permanent 4xx). Every
+                        # remaining task would 401 the same way, and more auth
+                        # traffic only deepens the flag — trip a run-wide safety
+                        # stop so the run ends cleanly and the user re-logs in,
+                        # instead of thousands of tasks hammering the endpoint.
+                        if getattr(self.client, "_refresh_blocked", False):
+                            from tiddl.core.cancel import request_cancel
+                            request_cancel(reason="tidal_account_flagged")
                         print(f"\n❌ TOKEN ERROR ({status}).");
                         raise e
                     if status in [406, 451]:
@@ -127,6 +136,16 @@ class TidalAPI:
                         is_http = True
                         if status == 429:
                             self._rate_limit_delay = min(5.0, self._rate_limit_delay + 1.0)
+                            # Run-wide 429 circuit breaker (shared across every
+                            # task and the fallback client): too many 429s in one
+                            # run means TIDAL is throttling hard — trip a
+                            # cooperative stop before a soft rate-limit escalates
+                            # into a hard account block. The is_cancelled() check
+                            # below then bails this request's retries too.
+                            from tiddl.core.ratelimit import guard as _rl_guard
+                            if _rl_guard().note_rate_limited():
+                                from tiddl.core.cancel import request_cancel
+                                request_cancel(reason="tidal_rate_limit")
                         # 500/502/503/504 fall through to the single capped backoff
                         # in the is_http branch below. There used to be a second
                         # sleep here with an UNCAPPED 2**attempt delay — every server
@@ -136,12 +155,24 @@ class TidalAPI:
                 elif "429" in str(e):
                     is_http = True
                     self._rate_limit_delay = min(5.0, self._rate_limit_delay + 1.0)
+                    from tiddl.core.ratelimit import guard as _rl_guard
+                    if _rl_guard().note_rate_limited():
+                        from tiddl.core.cancel import request_cancel
+                        request_cancel(reason="tidal_rate_limit")
 
                 if not is_net and not is_http: raise e
 
                 attempt += 1
                 if attempt > max_retries:
                     print(f"❌ SKIPPING TRACK: Failed {max_retries} times. Next...")
+                    raise e
+
+                # A run-wide stop — a user cancel OR the 429/flagged-account
+                # safety trips above — means we must not keep retry-storming:
+                # give up this request at once so the run drains, instead of
+                # every in-flight task sleeping through its full backoff.
+                from tiddl.core.cancel import is_cancelled
+                if is_cancelled():
                     raise e
 
                 wait = 0

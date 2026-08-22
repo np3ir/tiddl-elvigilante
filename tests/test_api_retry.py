@@ -16,6 +16,19 @@ from requests.exceptions import HTTPError
 from tiddl.core.api.api import TidalAPI
 
 
+@pytest.fixture(autouse=True)
+def _reset_run_state():
+    """The 429 circuit breaker and the cooperative-cancel flag are process-wide,
+    so reset them around every test to keep strike counts and stop state from
+    leaking between cases."""
+    from tiddl.core import cancel, ratelimit
+    cancel.clear()
+    ratelimit.guard().reset(strike_limit=ratelimit.DEFAULT_STRIKE_LIMIT)
+    yield
+    cancel.clear()
+    ratelimit.guard().reset(strike_limit=ratelimit.DEFAULT_STRIKE_LIMIT)
+
+
 class _FakeClient:
     """A client whose fetch() replays a scripted sequence (values or raises)."""
 
