@@ -762,6 +762,19 @@ def download_callback(
             min=0,
         ),
     ] = None,
+    RESUME: Annotated[
+        bool,
+        typer.Option(
+            "--resume/--no-resume",
+            help=(
+                "Skip resources already fully processed in a prior run of this "
+                "SAME job (same links + options), before any API call — so a run "
+                "interrupted by a rate-limit stop or Ctrl-C continues cheaply "
+                "instead of re-enumerating everything. Trusts its checkpoint over "
+                "the filesystem; run without --resume for a full re-verify."
+            ),
+        ),
+    ] = False,
     SAVE_M3U: Annotated[
         Optional[bool],
         typer.Option(
@@ -955,6 +968,34 @@ def download_callback(
         import datetime as _dt
         from tiddl.cli.commands.web_login import auto_refresh_if_needed
         await auto_refresh_if_needed(threshold_minutes=30)
+
+        # Resume checkpoint (opt-in --resume). Capture the job signature from the
+        # ORIGINAL requested resources + the options that change what "done"
+        # means, BEFORE the stereo pre-pass / expansion mutate ctx.obj.resources.
+        resume_log = None
+        if RESUME:
+            from tiddl.core.resume import ResumeLog, compute_signature, resource_key
+            _sig = compute_signature({
+                "resources": sorted(resource_key(r) for r in ctx.obj.resources),
+                "download_path": str(DOWNLOAD_PATH),
+                "quality": TRACK_QUALITY,
+                "audio_mode": AUDIO_MODE,
+                "expand": (
+                    "albums" if EXPAND_ALBUMS
+                    else "tracks" if EXPAND_TRACKS
+                    else "artists" if EXPAND_ARTISTS
+                    else "none"
+                ),
+                "exclude_compilations": bool(CONFIG.download.exclude_compilations),
+                "exclude_live_albums": bool(CONFIG.download.exclude_live_albums),
+                "singles": SINGLES_FILTER,
+            })
+            resume_log = ResumeLog(_sig).load()
+            if resume_log.count:
+                ctx.obj.console.print(
+                    f"[dim][resume] {resume_log.count} resource(s) already done in a "
+                    f"prior run of this job will be skipped.[/]"
+                )
 
         if AUDIO_MODE == "stereo":
 
@@ -2424,8 +2465,16 @@ def download_callback(
                 from tiddl.core.cancel import is_cancelled
                 if is_cancelled():
                     return
+                _rkey = f"{r.type}/{r.id}"
+                # Resume: skip a resource already completed in a prior run of this
+                # job BEFORE any API call — the whole point is to avoid re-enumerating.
+                if resume_log is not None and resume_log.is_done(_rkey):
+                    ctx.obj.console.print(f"[dim][resume] skip {_rkey} (done earlier)[/]")
+                    return
+                ok = False
                 try:
                     await handle_resource(r)
+                    ok = True
                 except HTTPError as e:
                     if e.response is not None and e.response.status_code in [404, 406]:
                          ctx.obj.console.print(f"[yellow]Skipped (Geo-block/Not Found):[/] {r}")
@@ -2440,6 +2489,10 @@ def download_callback(
                     raise
                 except Exception as e:
                     ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
+                # Mark done only on a clean, non-cancelled completion, so a resource
+                # that errored (or a run that got stopped) is retried on --resume.
+                if ok and resume_log is not None and not is_cancelled():
+                    resume_log.mark_done(_rkey)
 
             async def expand_playlist(resource: TidalResource) -> list[TidalResource]:
                 """--albums/--artists: turn a playlist into its unique albums or
