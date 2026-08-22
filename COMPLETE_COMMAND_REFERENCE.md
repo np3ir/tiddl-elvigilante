@@ -142,6 +142,15 @@ tiddl download -q high --quality-policy strict url https://...
 tiddl download --exclude-compilations --exclude-live-albums url https://tidal.com/artist/5237820
 #   also --no-exclude-compilations / --no-exclude-live-albums to override config
 
+# Resume a giant run cheaply: skip resources already fully done in a prior run of
+# the SAME job (same links + options), before any API call — e.g. after a
+# rate-limit safety-stop or Ctrl-C. Opt-in; trusts its checkpoint over the disk.
+tiddl download --resume --artists url https://tidal.com/playlist/...
+#   run WITHOUT --resume for a full re-verify; checkpoint lives in TIDDL_PATH/resume/
+
+# Chunk a huge list instead: stop after N tracks, re-run to continue (skip_existing)
+tiddl download --max-tracks 500 --artists url https://tidal.com/playlist/...
+
 # Debug (global flag, goes before the subcommand)
 tiddl --debug download url https://...
 ```

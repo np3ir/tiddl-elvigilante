@@ -17,6 +17,31 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+### Added
+
+- `--resume`: skip resources already fully processed in a prior run of the same
+  job (same links + options) **before any API call**, so a run interrupted by a
+  rate-limit stop or Ctrl-C continues cheaply instead of re-enumerating every
+  artist. Opt-in and off by default; a resource is recorded only on a clean,
+  error-free completion, and the checkpoint is trusted over the filesystem (run
+  without `--resume` for a full re-verify). Checkpoint at `TIDDL_PATH/resume/`.
+
+### Reliability
+
+- **Run-wide 429 circuit breaker.** A giant run that TIDAL throttles repeatedly
+  now stops cleanly — with a "wait and resume" / "re-login" message and a
+  non-zero exit — once 429s cross a run-wide threshold, or when the account is
+  flagged (refresh-blocked 401), instead of thousands of tasks retrying
+  independently until a soft rate-limit escalates into a hard account block. The
+  breaker is shared by the main and fallback clients, and a stopping run now
+  abandons its retry backoff at once. Benefits the CLI and the GUI's embedded
+  engine alike.
+- **Bounded memory on huge expanded runs.** A playlist expanded into every
+  credited artist no longer creates one asyncio task per resource up front; a
+  fixed worker pool keeps at most `artist_concurrency` tasks alive, so peak
+  memory no longer scales with the resource count (previously an out-of-memory
+  hard-kill on very large runs).
+
 ### Documentation
 
 - Added a bilingual destination-safety guide and linked user-facing setup,
