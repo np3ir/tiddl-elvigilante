@@ -357,6 +357,49 @@ def _finish_download_run(
         sys.exit(exit_code)
 
 
+async def _bounded_dispatch(items, handler, concurrency: int) -> None:
+    """Run ``handler(item, index)`` over ``items`` with a FIXED pool of
+    ``concurrency`` worker tasks, so at most ``concurrency`` tasks exist at once
+    no matter how many items there are.
+
+    This bounds memory on huge expanded runs: a playlist expanded into hundreds
+    of thousands of artist resources would otherwise create one asyncio Task per
+    resource up front (each parked on a semaphore), which is what exhausted RAM
+    and hard-killed the process. asyncio is single-threaded, so pulling the next
+    item from the shared iterator between awaits needs no lock. ``index`` is
+    1-based, matching the previous ``enumerate(..., start=1)`` heartbeat.
+
+    Cancellation propagates: a worker raising ``CancelledError`` /
+    ``KeyboardInterrupt`` (or the awaiting caller being cancelled) tears the
+    whole pool down. A per-item error never kills a worker or orphans the rest —
+    the existing ``wrapper`` already swallows every non-cancel exception, and
+    this is the defensive backstop for anything it doesn't."""
+    it = enumerate(items, start=1)
+
+    async def _worker() -> None:
+        while True:
+            try:
+                index, item = next(it)
+            except StopIteration:
+                return
+            try:
+                await handler(item, index)
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception:
+                log.exception("resource dispatch failed; continuing")
+
+    workers = [asyncio.create_task(_worker()) for _ in range(max(1, concurrency))]
+    try:
+        await asyncio.gather(*workers)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        for w in workers:
+            if not w.done():
+                w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        raise
+
+
 def plan_stereo_resolution(result, keep_original: bool) -> tuple:
     """Pure pre-confirmation decision for the stereo resolution of one album.
 
@@ -2463,16 +2506,17 @@ def download_callback(
 
             if expanded_run or len(ctx.obj.resources) > 1:
                 # Multi-resource runs (expansions or many pasted URLs) can be
-                # hundreds of resources. Launching them all concurrently starves
-                # every task on the API client's global rate-limit lock (each
-                # task's next request queues behind every other task's), so
-                # nothing visibly completes for a long time. Cap concurrency
-                # like artist downloads do so resource #1 starts producing
-                # output immediately.
-                expand_sem = asyncio.Semaphore(max(1, ARTIST_CONCURRENCY))
+                # hundreds of THOUSANDS of resources (a playlist expanded into
+                # every credited artist). A bounded worker pool keeps at most
+                # ARTIST_CONCURRENCY tasks alive at once, so peak memory does not
+                # scale with the resource count — creating one asyncio Task per
+                # resource up front (each parked on a semaphore) is exactly what
+                # exhausted RAM on a giant stereo+artists run. It also caps
+                # concurrency so resource #1 starts producing output immediately
+                # instead of every task queueing behind the shared rate-limit lock.
                 expand_total = len(ctx.obj.resources)
 
-                async def wrapper_limited(r: TidalResource, idx: int):
+                async def dispatch_one(r: TidalResource, idx: int):
                     # Cooperative cancel: bail BEFORE the heartbeat print so a
                     # cancelled run doesn't flood the log with a burst of
                     # "[idx/total] type/id" lines for every remaining resource
@@ -2480,34 +2524,34 @@ def download_callback(
                     # reads as "still working" even though nothing downloads).
                     if is_cancelled():
                         return
-                    async with expand_sem:
-                        if is_cancelled():
-                            return
-                        # Steady per-resource heartbeat: complete albums are
-                        # skipped silently, so without this the output can go
-                        # quiet for minutes on largely-downloaded expansions.
-                        ctx.obj.console.print(
-                            f"[{idx}/{expand_total}] {r.type}/{r.id}", markup=False
-                        )
-                        await wrapper(r)
+                    # Steady per-resource heartbeat: complete albums are skipped
+                    # silently, so without this the output can go quiet for
+                    # minutes on largely-downloaded expansions.
+                    ctx.obj.console.print(
+                        f"[{idx}/{expand_total}] {r.type}/{r.id}", markup=False
+                    )
+                    await wrapper(r)
 
-                tasks = [
-                    asyncio.create_task(wrapper_limited(r, i))
-                    for i, r in enumerate(ctx.obj.resources, start=1)
-                ]
+                try:
+                    await _bounded_dispatch(
+                        ctx.obj.resources, dispatch_one, max(1, ARTIST_CONCURRENCY)
+                    )
+                finally:
+                    # Flush report_playback pendientes y cierra la sesión HTTP compartida
+                    await downloader.close()
             else:
                 tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
-            try:
-                await asyncio.gather(*tasks)
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-            finally:
-                # Flush report_playback pendientes y cierra la sesión HTTP compartida
-                await downloader.close()
+                try:
+                    await asyncio.gather(*tasks)
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                finally:
+                    # Flush report_playback pendientes y cierra la sesión HTTP compartida
+                    await downloader.close()
 
         rich_output.show_stats()
 
