@@ -465,6 +465,13 @@ def download_callback(
         typer.Option(
             "--track-quality",
             "-q",
+            help=(
+                "Starting rung of the fidelity cascade "
+                "max > high > atmos > normal > low. Each track is taken at the "
+                "first rung from here DOWN that it offers: start at high/max to "
+                "prefer FLAC (Atmos only when no FLAC exists), or at atmos to "
+                "take Dolby Atmos first."
+            ),
         ),
     ] = CONFIG.download.track_quality,
     AUDIO_MODE: Annotated[
