@@ -892,8 +892,12 @@ def download_callback(
         ctx.obj.prefer_hires = True
     elif _hires_mode == "never":
         ctx.obj.prefer_hires = False
-    else:  # "auto": HiRes only when the user actually asked for max (24-bit)
-        ctx.obj.prefer_hires = (TRACK_QUALITY == "max")
+    else:  # "auto": use the HiRes client for any FLAC start (high or max). high
+        # needs it too now, because an Atmos track has no 16-bit FLAC and the
+        # cascade climbs it to the 24-bit `max` FLAC (preferring FLAC over Atmos),
+        # which only the HiRes client can deliver. The run-wide 429 breaker makes
+        # this safe on big LOSSLESS runs, which is why "auto" no longer avoids it.
+        ctx.obj.prefer_hires = TRACK_QUALITY in ("high", "max")
 
     # Lyrics come from [metadata] in config.toml; these flags override per run
     # (the download flow reads CONFIG.metadata at runtime).

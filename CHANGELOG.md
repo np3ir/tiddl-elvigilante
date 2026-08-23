@@ -24,10 +24,15 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
   is taken at the first rung from there DOWN that it actually offers. This fixes
   a real trap: TIDAL serves an AAC (`.m4a`) stream for an Atmos-flagged track at
   the LOSSLESS tier but the real FLAC only at HI_RES, so a plain `-q high` run
-  used to yield degraded AAC even when a hi-res FLAC existed. Now `-q max` prefers
-  the FLAC (an Atmos track's only FLAC is its hi-res `max`); `-q high` falls to
-  Atmos only when no FLAC exists; `-q atmos` takes Dolby Atmos first. Non-Atmos
-  tracks attempt the same tiers as before. The "Dolby Atmos" download label now
+  used to yield degraded AAC even when a hi-res FLAC existed. **FLAC is preferred
+  over Atmos:** from a FLAC start (`high`/`max`) the cascade tries BOTH FLAC rungs
+  before Atmos, so `-q high` on an Atmos track (which has no 16-bit FLAC) climbs
+  to the 24-bit `max` FLAC instead of dropping to Atmos — most users want any FLAC
+  over Atmos. `-q atmos` takes Dolby Atmos first for those who want it. (Because a
+  FLAC start may now need the HiRes client for an Atmos track's `max` FLAC,
+  `hires_client="auto"` uses the HiRes client for `-q high` too; the run-wide 429
+  breaker keeps that safe.) Non-Atmos tracks resolve to the same tier as before.
+  The "Dolby Atmos" download label now
   reflects the stream actually delivered, so a track's FLAC is no longer
   mislabelled Atmos. New pure module `tiddl/core/quality_cascade.py`.
 - `--resume`: skip resources already fully processed in a prior run of the same

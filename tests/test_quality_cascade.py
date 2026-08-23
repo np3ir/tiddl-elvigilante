@@ -41,9 +41,17 @@ def test_start_max_on_atmos_track_gets_flac_first():
     assert cascade_api_qualities("max", ATMOS_FULL)[0] == "HI_RES_LOSSLESS"
 
 
-def test_start_high_on_atmos_track_falls_to_atmos():
-    # "-q high" on an Atmos track: no 16-bit FLAC exists → cascade to Atmos.
-    assert resolve_cascade("high", ATMOS_FULL) == ["atmos", "normal", "low"]
+def test_start_high_on_atmos_track_climbs_to_max_flac_before_atmos():
+    # "-q high" on an Atmos track: no 16-bit FLAC exists, but FLAC is preferred
+    # over Atmos, so it climbs to `max` (24-bit FLAC) BEFORE dropping to Atmos.
+    assert resolve_cascade("high", ATMOS_FULL) == ["max", "atmos", "normal", "low"]
+    assert cascade_api_qualities("high", ATMOS_FULL)[0] == "HI_RES_LOSSLESS"
+
+
+def test_flac_start_tries_both_flac_rungs_before_atmos():
+    # The whole point: from either FLAC rung, BOTH FLAC rungs precede Atmos.
+    assert resolve_cascade("high", ATMOS_FULL)[:1] == ["max"]      # high→max (FLAC)
+    assert "atmos" not in resolve_cascade("high", ATMOS_FULL)[:1]  # FLAC before atmos
 
 
 def test_start_atmos_prefers_atmos_first():
@@ -63,7 +71,9 @@ def test_start_max_normal_track():
 
 
 def test_start_high_normal_track():
-    assert resolve_cascade("high", HIRES) == ["high", "normal", "low"]
+    # A normal track offers its 16-bit FLAC, so `high` is taken first; `max` is
+    # only a listed fallback (never reached, since high succeeds), Atmos absent.
+    assert resolve_cascade("high", HIRES) == ["high", "max", "normal", "low"]
 
 
 def test_lossless_only_track():

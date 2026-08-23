@@ -97,9 +97,11 @@ tiddl download url --track-quality high https://...    # 16-bit FLAC (CD)
 tiddl download url --track-quality atmos https://...   # Dolby Atmos first
 tiddl download url --track-quality normal https://...  # 320kbps AAC
 tiddl download url --track-quality low https://...     # 96kbps AAC
-# Atmos note: on a Dolby-Atmos track TIDAL serves AAC at the LOSSLESS tier and
-# the FLAC only at HI_RES, so an Atmos track's only FLAC is its `max` rung.
-# Start at max to PREFER FLAC over Atmos; -q high falls to Atmos (no 16-bit FLAC).
+# FLAC is preferred over Atmos: from a FLAC start (high/max) BOTH FLAC rungs are
+# tried before Atmos. On a Dolby-Atmos track TIDAL serves AAC at the LOSSLESS
+# tier and the FLAC only at HI_RES, so an Atmos track's only FLAC is `max`;
+# -q high therefore CLIMBS to the 24-bit max FLAC instead of dropping to Atmos.
+# Use -q atmos to take Dolby Atmos first.
 
 # Video quality
 tiddl download url --video-quality fhd https://...     # 1080p

@@ -60,17 +60,31 @@ def available_rungs(tags: Iterable[str]) -> Dict[str, bool]:
     }
 
 
-def resolve_cascade(start: str, tags: Iterable[str]) -> List[str]:
-    """Ordered rungs to attempt: from ``start`` DOWN the ladder, offered ones only.
+# The two lossless-FLAC rungs, and everything below them, in fidelity order.
+FLAC_RUNGS = ("max", "high")
+BELOW_FLAC = ("atmos", "normal", "low")
 
-    ``start`` must be a ladder rung. An unknown ``start`` is treated as the top
-    (``max``) so a stray value never silently drops the track to AAC."""
+
+def resolve_cascade(start: str, tags: Iterable[str]) -> List[str]:
+    """Ordered rungs to attempt for a track, given the user's ``start`` rung.
+
+    **FLAC is preferred over Atmos.** When ``start`` is a FLAC rung (``high`` or
+    ``max``), BOTH FLAC rungs are tried before Atmos — the chosen one first, then
+    the other by fidelity — so e.g. ``-q high`` on an Atmos track (which has no
+    16-bit FLAC) climbs to ``max`` for the 24-bit FLAC instead of dropping to
+    Atmos. Most users want any FLAC before Atmos; those who actually want Atmos
+    start at ``-q atmos``, which cascades plainly down (atmos > normal > low).
+
+    An unknown ``start`` is treated as the top (``max``) so a stray value never
+    silently drops the track to AAC."""
+    if start not in QUALITY_LADDER:
+        start = "max"
     avail = available_rungs(tags)
-    try:
-        i = QUALITY_LADDER.index(start)
-    except ValueError:
-        i = 0
-    return [r for r in QUALITY_LADDER[i:] if avail.get(r)]
+    if start in FLAC_RUNGS:
+        order = [start] + [r for r in FLAC_RUNGS if r != start] + list(BELOW_FLAC)
+    else:
+        order = QUALITY_LADDER[QUALITY_LADDER.index(start):]
+    return [r for r in order if avail.get(r)]
 
 
 def cascade_api_qualities(start: str, tags: Iterable[str]) -> List[str]:
