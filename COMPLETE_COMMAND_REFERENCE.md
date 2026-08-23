@@ -89,11 +89,19 @@ tiddl download url https://tidal.com/mix/mixed123xyz
 #### Options
 
 ```bash
-# Audio quality
-tiddl download url --track-quality max https://...     # 24-bit, 192kHz FLAC
-tiddl download url --track-quality high https://...    # 16-bit, 44.1kHz FLAC
+# Audio quality — -q is the STARTING rung of a fidelity cascade, and each track
+# is taken at the first rung from there DOWN that it offers:
+#     max  >  high  >  atmos  >  normal  >  low
+tiddl download url --track-quality max https://...     # 24-bit FLAC (hi-res)
+tiddl download url --track-quality high https://...    # 16-bit FLAC (CD)
+tiddl download url --track-quality atmos https://...   # Dolby Atmos first
 tiddl download url --track-quality normal https://...  # 320kbps AAC
 tiddl download url --track-quality low https://...     # 96kbps AAC
+# FLAC is preferred over Atmos: from a FLAC start (high/max) BOTH FLAC rungs are
+# tried before Atmos. On a Dolby-Atmos track TIDAL serves AAC at the LOSSLESS
+# tier and the FLAC only at HI_RES, so an Atmos track's only FLAC is `max`;
+# -q high therefore CLIMBS to the 24-bit max FLAC instead of dropping to Atmos.
+# Use -q atmos to take Dolby Atmos first.
 
 # Video quality
 tiddl download url --video-quality fhd https://...     # 1080p
@@ -141,6 +149,15 @@ tiddl download -q high --quality-policy strict url https://...
 # Artist release-type filter (artist downloads): skip compilations / live albums
 tiddl download --exclude-compilations --exclude-live-albums url https://tidal.com/artist/5237820
 #   also --no-exclude-compilations / --no-exclude-live-albums to override config
+
+# Resume a giant run cheaply: skip resources already fully done in a prior run of
+# the SAME job (same links + options), before any API call — e.g. after a
+# rate-limit safety-stop or Ctrl-C. Opt-in; trusts its checkpoint over the disk.
+tiddl download --resume --artists url https://tidal.com/playlist/...
+#   run WITHOUT --resume for a full re-verify; checkpoint lives in TIDDL_PATH/resume/
+
+# Chunk a huge list instead: stop after N tracks, re-run to continue (skip_existing)
+tiddl download --max-tracks 500 --artists url https://tidal.com/playlist/...
 
 # Debug (global flag, goes before the subcommand)
 tiddl --debug download url https://...

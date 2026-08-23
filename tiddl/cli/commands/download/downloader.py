@@ -1231,25 +1231,28 @@ class Downloader:
                 # reports LOSSLESS when HI_RES_LOSSLESS is actually available), which
                 # silently prevented downloads in maximum quality.
                 quality_score = {"HI_RES_LOSSLESS": 3, "LOSSLESS": 2, "HIGH": 1, "LOW": 0}
-                max_score = quality_score.get(self.track_quality, 3)
 
-                # Check for Dolby Atmos
-                is_atmos = False
+                # Media tags drive BOTH the Atmos flag and the quality cascade.
+                _tags: list = []
                 if item.mediaMetadata:
-                    tags = []
                     if isinstance(item.mediaMetadata, dict):
-                        tags = item.mediaMetadata.get("tags", [])
+                        _tags = item.mediaMetadata.get("tags", []) or []
                     elif hasattr(item.mediaMetadata, "tags"):
-                        tags = item.mediaMetadata.tags
-                    if "DOLBY_ATMOS" in tags:
-                        is_atmos = True
+                        _tags = item.mediaMetadata.tags or []
+                _tagset = {str(t).upper() for t in _tags}
+                if item.audioModes:
+                    _tagset |= {str(m).upper() for m in item.audioModes}
+                is_atmos = "DOLBY_ATMOS" in _tagset
 
-                if not is_atmos and item.audioModes and "DOLBY_ATMOS" in item.audioModes:
-                    is_atmos = True
-
-                attempt_qualities: list[TrackQuality] = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"]
-                # Filter out qualities higher than what the track supports
-                attempt_qualities = [q for q in attempt_qualities if quality_score.get(q, 0) <= max_score]
+                # Fidelity cascade from the user's chosen start rung (-q): walk DOWN
+                # max -> high -> atmos -> normal -> low, attempting only the tiers
+                # this track offers. Starting at high/max prefers FLAC and only
+                # falls to Atmos when no FLAC exists; starting at atmos takes Atmos
+                # first. See tiddl.core.quality_cascade.
+                from tiddl.core.quality_cascade import cascade_api_qualities
+                attempt_qualities: list[TrackQuality] = cascade_api_qualities(
+                    self.requested_quality, _tagset
+                ) or ["LOW"]
 
                 for _qi, q in enumerate(attempt_qualities):
                     # Cooperative cancel: don't try the next quality tier if the
@@ -1360,7 +1363,13 @@ class Downloader:
                         download_path = Path(_prepare_long_path(str(download_path.absolute())))
 
                     quality = track_qualities_color[stream.audioQuality]
-                    if is_atmos:
+                    # Label "Dolby Atmos" only when the stream we ACTUALLY got is
+                    # the Atmos one — not merely because the track has an Atmos
+                    # version. On an Atmos track the FLAC comes back as
+                    # HI_RES_LOSSLESS (the cascade's `max` rung); anything lower
+                    # delivered for such a track is the Atmos/AAC stream.
+                    stream_is_flac = stream.audioQuality in ("HI_RES_LOSSLESS", "LOSSLESS")
+                    if is_atmos and not stream_is_flac:
                         quality = "[purple]Dolby Atmos"
                     elif stream.audioQuality in ["HI_RES_LOSSLESS", "LOSSLESS"]:
                         quality = f"{quality} {stream.bitDepth}-bit, {(stream.sampleRate or 0) / 1000:.1f} kHz"

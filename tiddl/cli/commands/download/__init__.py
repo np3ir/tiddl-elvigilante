@@ -332,11 +332,72 @@ def _finish_download_run(
                 "copies were retained where applicable); exiting non-zero.[/]"
             )
         else:
-            console.print(
-                "[red]The download engine stopped the run for safety; "
-                "exiting non-zero.[/]"
-            )
+            from tiddl.core.cancel import stop_reason
+            reason = stop_reason()
+            if reason == "tidal_rate_limit":
+                console.print(
+                    "[red]Stopped: TIDAL rate-limited this run repeatedly. "
+                    "Pushing further risks a hard account block. Wait a while, "
+                    "then re-run — already-downloaded tracks are skipped, so it "
+                    "resumes where it left off (tip: set max_tracks_per_session "
+                    "to download big lists in chunks). Exiting non-zero.[/]"
+                )
+            elif reason == "tidal_account_flagged":
+                console.print(
+                    "[red]Stopped: TIDAL flagged the account and refused a token "
+                    "refresh. Run 'tiddl auth login' to sign in again, then "
+                    "re-run (already-downloaded tracks are skipped). "
+                    "Exiting non-zero.[/]"
+                )
+            else:
+                console.print(
+                    "[red]The download engine stopped the run for safety; "
+                    "exiting non-zero.[/]"
+                )
         sys.exit(exit_code)
+
+
+async def _bounded_dispatch(items, handler, concurrency: int) -> None:
+    """Run ``handler(item, index)`` over ``items`` with a FIXED pool of
+    ``concurrency`` worker tasks, so at most ``concurrency`` tasks exist at once
+    no matter how many items there are.
+
+    This bounds memory on huge expanded runs: a playlist expanded into hundreds
+    of thousands of artist resources would otherwise create one asyncio Task per
+    resource up front (each parked on a semaphore), which is what exhausted RAM
+    and hard-killed the process. asyncio is single-threaded, so pulling the next
+    item from the shared iterator between awaits needs no lock. ``index`` is
+    1-based, matching the previous ``enumerate(..., start=1)`` heartbeat.
+
+    Cancellation propagates: a worker raising ``CancelledError`` /
+    ``KeyboardInterrupt`` (or the awaiting caller being cancelled) tears the
+    whole pool down. A per-item error never kills a worker or orphans the rest —
+    the existing ``wrapper`` already swallows every non-cancel exception, and
+    this is the defensive backstop for anything it doesn't."""
+    it = enumerate(items, start=1)
+
+    async def _worker() -> None:
+        while True:
+            try:
+                index, item = next(it)
+            except StopIteration:
+                return
+            try:
+                await handler(item, index)
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception:
+                log.exception("resource dispatch failed; continuing")
+
+    workers = [asyncio.create_task(_worker()) for _ in range(max(1, concurrency))]
+    try:
+        await asyncio.gather(*workers)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        for w in workers:
+            if not w.done():
+                w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        raise
 
 
 def plan_stereo_resolution(result, keep_original: bool) -> tuple:
@@ -404,6 +465,13 @@ def download_callback(
         typer.Option(
             "--track-quality",
             "-q",
+            help=(
+                "Starting rung of the fidelity cascade "
+                "max > high > atmos > normal > low. Each track is taken at the "
+                "first rung from here DOWN that it offers: start at high/max to "
+                "prefer FLAC (Atmos only when no FLAC exists), or at atmos to "
+                "take Dolby Atmos first."
+            ),
         ),
     ] = CONFIG.download.track_quality,
     AUDIO_MODE: Annotated[
@@ -701,6 +769,19 @@ def download_callback(
             min=0,
         ),
     ] = None,
+    RESUME: Annotated[
+        bool,
+        typer.Option(
+            "--resume/--no-resume",
+            help=(
+                "Skip resources already fully processed in a prior run of this "
+                "SAME job (same links + options), before any API call — so a run "
+                "interrupted by a rate-limit stop or Ctrl-C continues cheaply "
+                "instead of re-enumerating everything. Trusts its checkpoint over "
+                "the filesystem; run without --resume for a full re-verify."
+            ),
+        ),
+    ] = False,
     SAVE_M3U: Annotated[
         Optional[bool],
         typer.Option(
@@ -811,8 +892,12 @@ def download_callback(
         ctx.obj.prefer_hires = True
     elif _hires_mode == "never":
         ctx.obj.prefer_hires = False
-    else:  # "auto": HiRes only when the user actually asked for max (24-bit)
-        ctx.obj.prefer_hires = (TRACK_QUALITY == "max")
+    else:  # "auto": use the HiRes client for any FLAC start (high or max). high
+        # needs it too now, because an Atmos track has no 16-bit FLAC and the
+        # cascade climbs it to the 24-bit `max` FLAC (preferring FLAC over Atmos),
+        # which only the HiRes client can deliver. The run-wide 429 breaker makes
+        # this safe on big LOSSLESS runs, which is why "auto" no longer avoids it.
+        ctx.obj.prefer_hires = TRACK_QUALITY in ("high", "max")
 
     # Lyrics come from [metadata] in config.toml; these flags override per run
     # (the download flow reads CONFIG.metadata at runtime).
@@ -894,6 +979,34 @@ def download_callback(
         import datetime as _dt
         from tiddl.cli.commands.web_login import auto_refresh_if_needed
         await auto_refresh_if_needed(threshold_minutes=30)
+
+        # Resume checkpoint (opt-in --resume). Capture the job signature from the
+        # ORIGINAL requested resources + the options that change what "done"
+        # means, BEFORE the stereo pre-pass / expansion mutate ctx.obj.resources.
+        resume_log = None
+        if RESUME:
+            from tiddl.core.resume import ResumeLog, compute_signature, resource_key
+            _sig = compute_signature({
+                "resources": sorted(resource_key(r) for r in ctx.obj.resources),
+                "download_path": str(DOWNLOAD_PATH),
+                "quality": TRACK_QUALITY,
+                "audio_mode": AUDIO_MODE,
+                "expand": (
+                    "albums" if EXPAND_ALBUMS
+                    else "tracks" if EXPAND_TRACKS
+                    else "artists" if EXPAND_ARTISTS
+                    else "none"
+                ),
+                "exclude_compilations": bool(CONFIG.download.exclude_compilations),
+                "exclude_live_albums": bool(CONFIG.download.exclude_live_albums),
+                "singles": SINGLES_FILTER,
+            })
+            resume_log = ResumeLog(_sig).load()
+            if resume_log.count:
+                ctx.obj.console.print(
+                    f"[dim][resume] {resume_log.count} resource(s) already done in a "
+                    f"prior run of this job will be skipped.[/]"
+                )
 
         if AUDIO_MODE == "stereo":
 
@@ -2363,8 +2476,16 @@ def download_callback(
                 from tiddl.core.cancel import is_cancelled
                 if is_cancelled():
                     return
+                _rkey = f"{r.type}/{r.id}"
+                # Resume: skip a resource already completed in a prior run of this
+                # job BEFORE any API call — the whole point is to avoid re-enumerating.
+                if resume_log is not None and resume_log.is_done(_rkey):
+                    ctx.obj.console.print(f"[dim][resume] skip {_rkey} (done earlier)[/]")
+                    return
+                ok = False
                 try:
                     await handle_resource(r)
+                    ok = True
                 except HTTPError as e:
                     if e.response is not None and e.response.status_code in [404, 406]:
                          ctx.obj.console.print(f"[yellow]Skipped (Geo-block/Not Found):[/] {r}")
@@ -2379,6 +2500,10 @@ def download_callback(
                     raise
                 except Exception as e:
                     ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
+                # Mark done only on a clean, non-cancelled completion, so a resource
+                # that errored (or a run that got stopped) is retried on --resume.
+                if ok and resume_log is not None and not is_cancelled():
+                    resume_log.mark_done(_rkey)
 
             async def expand_playlist(resource: TidalResource) -> list[TidalResource]:
                 """--albums/--artists: turn a playlist into its unique albums or
@@ -2445,16 +2570,17 @@ def download_callback(
 
             if expanded_run or len(ctx.obj.resources) > 1:
                 # Multi-resource runs (expansions or many pasted URLs) can be
-                # hundreds of resources. Launching them all concurrently starves
-                # every task on the API client's global rate-limit lock (each
-                # task's next request queues behind every other task's), so
-                # nothing visibly completes for a long time. Cap concurrency
-                # like artist downloads do so resource #1 starts producing
-                # output immediately.
-                expand_sem = asyncio.Semaphore(max(1, ARTIST_CONCURRENCY))
+                # hundreds of THOUSANDS of resources (a playlist expanded into
+                # every credited artist). A bounded worker pool keeps at most
+                # ARTIST_CONCURRENCY tasks alive at once, so peak memory does not
+                # scale with the resource count — creating one asyncio Task per
+                # resource up front (each parked on a semaphore) is exactly what
+                # exhausted RAM on a giant stereo+artists run. It also caps
+                # concurrency so resource #1 starts producing output immediately
+                # instead of every task queueing behind the shared rate-limit lock.
                 expand_total = len(ctx.obj.resources)
 
-                async def wrapper_limited(r: TidalResource, idx: int):
+                async def dispatch_one(r: TidalResource, idx: int):
                     # Cooperative cancel: bail BEFORE the heartbeat print so a
                     # cancelled run doesn't flood the log with a burst of
                     # "[idx/total] type/id" lines for every remaining resource
@@ -2462,34 +2588,34 @@ def download_callback(
                     # reads as "still working" even though nothing downloads).
                     if is_cancelled():
                         return
-                    async with expand_sem:
-                        if is_cancelled():
-                            return
-                        # Steady per-resource heartbeat: complete albums are
-                        # skipped silently, so without this the output can go
-                        # quiet for minutes on largely-downloaded expansions.
-                        ctx.obj.console.print(
-                            f"[{idx}/{expand_total}] {r.type}/{r.id}", markup=False
-                        )
-                        await wrapper(r)
+                    # Steady per-resource heartbeat: complete albums are skipped
+                    # silently, so without this the output can go quiet for
+                    # minutes on largely-downloaded expansions.
+                    ctx.obj.console.print(
+                        f"[{idx}/{expand_total}] {r.type}/{r.id}", markup=False
+                    )
+                    await wrapper(r)
 
-                tasks = [
-                    asyncio.create_task(wrapper_limited(r, i))
-                    for i, r in enumerate(ctx.obj.resources, start=1)
-                ]
+                try:
+                    await _bounded_dispatch(
+                        ctx.obj.resources, dispatch_one, max(1, ARTIST_CONCURRENCY)
+                    )
+                finally:
+                    # Flush report_playback pendientes y cierra la sesión HTTP compartida
+                    await downloader.close()
             else:
                 tasks = [asyncio.create_task(wrapper(r)) for r in ctx.obj.resources]
-            try:
-                await asyncio.gather(*tasks)
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-            finally:
-                # Flush report_playback pendientes y cierra la sesión HTTP compartida
-                await downloader.close()
+                try:
+                    await asyncio.gather(*tasks)
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                finally:
+                    # Flush report_playback pendientes y cierra la sesión HTTP compartida
+                    await downloader.close()
 
         rich_output.show_stats()
 
@@ -2503,6 +2629,13 @@ def download_callback(
         # cuando el subcomando falló al parsear sus argumentos).
         if not ctx.obj.resources:
             return
+        # Fresh 429 strike budget per invocation: the run-wide circuit breaker
+        # counts 429s across the whole run, so it must start at zero here (the
+        # GUI reuses this process for run after run). Cancel state is managed by
+        # the caller (the GUI clears it before a batch; a safety stop should
+        # halt the rest of the batch, so it is intentionally NOT cleared here).
+        from tiddl.core.ratelimit import guard as _rl_guard
+        _rl_guard().reset()
         import warnings
         # Suppress ResourceWarning noise from asyncio pipe cleanup on Windows Ctrl+C
         if sys.platform == "win32":
