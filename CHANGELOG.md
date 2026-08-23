@@ -17,6 +17,8 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-23
+
 ### Added
 
 - **Fidelity quality cascade with Dolby Atmos as a rung.** `-q` now names the
