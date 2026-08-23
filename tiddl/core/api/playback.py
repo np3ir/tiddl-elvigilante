@@ -42,7 +42,18 @@ async def report_playback(
         listen_delay = min(duration * random.uniform(0.3, 0.6), 25.0)
         await asyncio.sleep(listen_delay)
 
-        connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
+        # aiohttp's `enable_cleanup_closed` worked around a CPython SSL-transport
+        # leak that recent 3.12/3.13 fixed; there aiohttp ignores it and emits a
+        # DeprecationWarning. Keep passing it (still helps on older runtimes) but
+        # silence the purely cosmetic warning on the fixed ones.
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            _warnings.filterwarnings(
+                "ignore",
+                category=DeprecationWarning,
+                message=".*enable_cleanup_closed.*",
+            )
+            connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
         now = datetime.now(timezone.utc)
         start = now - timedelta(seconds=duration)
         session_id = str(uuid.uuid4())
