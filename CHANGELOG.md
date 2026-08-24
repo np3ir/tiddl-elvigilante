@@ -17,6 +17,20 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-08-23
+
+### Fixed
+
+- **Complete the `--resume` signature.** Following an exhaustive audit of every
+  option that changes what a resource writes to disk (selection, content,
+  embedded metadata, standalone files, paths, names), the checkpoint signature —
+  now built by the pure `resume.job_signature()` — additionally covers
+  `--video-quality`, `--edition-match`, `--quality-policy`, `hires_client`, the
+  standalone cover file (`[cover] save/size/allowed` + its templates), `[m3u]`
+  (`save/allowed` + templates), `[metadata] enable`, and the video destination.
+  Changing any of them now starts a fresh resume instead of wrongly skipping
+  resources completed under the old settings. (Extends the 1.5.1 signature fix.)
+
 ## [1.5.1] - 2026-08-23
 
 ### Fixed

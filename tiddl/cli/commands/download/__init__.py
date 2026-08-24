@@ -985,38 +985,65 @@ def download_callback(
         # means, BEFORE the stereo pre-pass / expansion mutate ctx.obj.resources.
         resume_log = None
         if RESUME:
-            from tiddl.core.resume import ResumeLog, compute_signature, resource_key
-            _sig = compute_signature({
-                "resources": sorted(resource_key(r) for r in ctx.obj.resources),
-                "download_path": str(DOWNLOAD_PATH),
-                "quality": TRACK_QUALITY,
-                "audio_mode": AUDIO_MODE,
-                "expand": (
+            from tiddl.core.resume import ResumeLog, job_signature, resource_key
+            # Every option that changes what a resource produces on disk goes into
+            # the signature (selection, content, metadata, standalone files, paths,
+            # names) so changing any one starts a fresh checkpoint instead of
+            # skipping resources completed under the old settings.
+            _sig = job_signature(
+                resources=[resource_key(r) for r in ctx.obj.resources],
+                download_path=DOWNLOAD_PATH,
+                video_download_path=VIDEO_DOWNLOAD_PATH,
+                quality=TRACK_QUALITY,
+                video_quality=VIDEO_QUALITY,
+                audio_mode=AUDIO_MODE,
+                edition_match=EDITION_MATCH,
+                quality_policy=QUALITY_POLICY,
+                hires_client=CONFIG.download.hires_client,
+                expand=(
                     "albums" if EXPAND_ALBUMS
                     else "tracks" if EXPAND_TRACKS
                     else "artists" if EXPAND_ARTISTS
                     else "none"
                 ),
-                "exclude_compilations": bool(CONFIG.download.exclude_compilations),
-                "exclude_live_albums": bool(CONFIG.download.exclude_live_albums),
-                "singles": SINGLES_FILTER,
-                # Everything else that changes WHAT a resource produces on disk, so
-                # a resource marked done under one template/metadata config is not
-                # wrongly skipped after the user changes them on a --resume run.
-                "templates": [
-                    CONFIG.templates.default, CONFIG.templates.track,
-                    CONFIG.templates.album, CONFIG.templates.playlist,
-                    CONFIG.templates.video, CONFIG.templates.mix,
-                    CONFIG.templates.artist_separator,
-                ],
-                "video_download_path": str(VIDEO_DOWNLOAD_PATH) if VIDEO_DOWNLOAD_PATH else "",
-                "videos_filter": VIDEOS_FILTER,
-                "metadata": [
-                    bool(CONFIG.metadata.cover), bool(CONFIG.metadata.lyrics),
-                    bool(CONFIG.metadata.save_lyrics), bool(CONFIG.metadata.album_review),
-                    bool(CONFIG.download.update_mtime), bool(REWRITE_METADATA),
-                ],
-            })
+                exclude_compilations=CONFIG.download.exclude_compilations,
+                exclude_live_albums=CONFIG.download.exclude_live_albums,
+                singles=SINGLES_FILTER,
+                videos_filter=VIDEOS_FILTER,
+                templates={
+                    "default": CONFIG.templates.default,
+                    "track": CONFIG.templates.track,
+                    "album": CONFIG.templates.album,
+                    "playlist": CONFIG.templates.playlist,
+                    "video": CONFIG.templates.video,
+                    "mix": CONFIG.templates.mix,
+                    "artist_separator": CONFIG.templates.artist_separator,
+                },
+                metadata={
+                    "enable": bool(CONFIG.metadata.enable),
+                    "cover": bool(CONFIG.metadata.cover),
+                    "lyrics": bool(CONFIG.metadata.lyrics),
+                    "save_lyrics": bool(CONFIG.metadata.save_lyrics),
+                    "album_review": bool(CONFIG.metadata.album_review),
+                    "update_mtime": bool(CONFIG.download.update_mtime),
+                    "rewrite": bool(REWRITE_METADATA),
+                },
+                cover_file={
+                    "save": bool(CONFIG.cover.save),
+                    "size": int(CONFIG.cover.size),
+                    "allowed": sorted(CONFIG.cover.allowed or []),
+                    "tpl_track": CONFIG.cover.templates.track,
+                    "tpl_album": CONFIG.cover.templates.album,
+                    "tpl_playlist": CONFIG.cover.templates.playlist,
+                },
+                m3u={
+                    "save": bool(CONFIG.m3u.save),
+                    "allowed": sorted(CONFIG.m3u.allowed or []),
+                    "tpl_album": CONFIG.m3u.templates.album,
+                    "tpl_playlist": CONFIG.m3u.templates.playlist,
+                    "tpl_mix": CONFIG.m3u.templates.mix,
+                },
+            )
             resume_log = ResumeLog(_sig).load()
             if resume_log.count:
                 ctx.obj.console.print(
