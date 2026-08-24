@@ -20,6 +20,11 @@ SUPPORTED_QUALITIES = ("low", "normal", "high", "max")
 def quality_fallback_order(requested_quality: str, policy: str = "flexible") -> tuple[str, ...]:
     """Catalog tiers to try, from the user's ceiling down to LOW."""
     quality = requested_quality.casefold()
+    # The `atmos` download rung is fetched at the LOSSLESS tier, which the
+    # catalog/edition resolver only knows as `high`; treat them the same here so
+    # `-q atmos --audio-mode stereo` resolves instead of raising ValueError.
+    if quality == "atmos":
+        quality = "high"
     if quality not in SUPPORTED_QUALITIES:
         raise ValueError(f"unsupported quality: {requested_quality}")
     if policy.casefold() == "strict":

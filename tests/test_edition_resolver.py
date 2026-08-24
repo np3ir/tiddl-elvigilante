@@ -50,6 +50,14 @@ def test_normalization_handles_case_accents_and_punctuation():
     assert normalize_catalog_text("  Ahí — (Remix)! ") == "ahi remix"
 
 
+def test_atmos_rung_maps_to_high_instead_of_raising():
+    # The `atmos` download rung is fetched at the LOSSLESS tier, which the edition
+    # resolver only knows as `high`; `-q atmos --audio-mode stereo` must resolve,
+    # not raise ValueError (regression).
+    assert quality_fallback_order("atmos") == quality_fallback_order("high")
+    assert quality_fallback_order("atmos", "strict") == quality_fallback_order("high", "strict")
+
+
 def test_flexible_quality_is_a_user_ceiling_with_downward_fallback():
     assert quality_fallback_order("max") == ("max", "high", "normal", "low")
     assert quality_fallback_order("high") == ("high", "normal", "low")

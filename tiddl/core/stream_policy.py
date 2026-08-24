@@ -12,6 +12,7 @@ QUALITY_RANK = {
 REQUESTED_QUALITY = {
     "low": "LOW",
     "normal": "HIGH",
+    "atmos": "LOSSLESS",  # the Atmos rung is fetched at the LOSSLESS tier
     "high": "LOSSLESS",
     "max": "HI_RES_LOSSLESS",
 }
@@ -55,7 +56,14 @@ def inspect_track_stream(
             f"requested stereo but TIDAL returned {mode}",
         )
 
-    if quality_policy.casefold() == "strict" and quality != wanted:
+    # The Atmos rung has no single clean tier (its stream reports HIGH/LOSSLESS
+    # depending on the master), so an exact-tier strict check can never pass for
+    # it — skip the gate for `-q atmos` rather than always stopping the download.
+    if (
+        quality_policy.casefold() == "strict"
+        and requested_quality.casefold() != "atmos"
+        and quality != wanted
+    ):
         return StreamInspection(
             mode,
             quality,

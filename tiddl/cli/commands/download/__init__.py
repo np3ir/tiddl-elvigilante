@@ -1000,6 +1000,22 @@ def download_callback(
                 "exclude_compilations": bool(CONFIG.download.exclude_compilations),
                 "exclude_live_albums": bool(CONFIG.download.exclude_live_albums),
                 "singles": SINGLES_FILTER,
+                # Everything else that changes WHAT a resource produces on disk, so
+                # a resource marked done under one template/metadata config is not
+                # wrongly skipped after the user changes them on a --resume run.
+                "templates": [
+                    CONFIG.templates.default, CONFIG.templates.track,
+                    CONFIG.templates.album, CONFIG.templates.playlist,
+                    CONFIG.templates.video, CONFIG.templates.mix,
+                    CONFIG.templates.artist_separator,
+                ],
+                "video_download_path": str(VIDEO_DOWNLOAD_PATH) if VIDEO_DOWNLOAD_PATH else "",
+                "videos_filter": VIDEOS_FILTER,
+                "metadata": [
+                    bool(CONFIG.metadata.cover), bool(CONFIG.metadata.lyrics),
+                    bool(CONFIG.metadata.save_lyrics), bool(CONFIG.metadata.album_review),
+                    bool(CONFIG.download.update_mtime), bool(REWRITE_METADATA),
+                ],
             })
             resume_log = ResumeLog(_sig).load()
             if resume_log.count:

@@ -17,6 +17,24 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-23
+
+### Fixed
+
+- `-q atmos` no longer crashes with `--audio-mode stereo` (or artist stereo
+  expansion): the edition resolver now maps the Atmos rung to `high` (its
+  LOSSLESS tier) instead of raising `ValueError: unsupported quality`.
+- `-q atmos --quality-policy strict` no longer stops before downloading: the
+  Atmos rung has no single clean tier, so the exact-quality strict gate is
+  skipped for it (and `atmos` now maps to `LOSSLESS`, not a bogus `ATMOS`).
+- The **`--resume` signature** now includes the output-affecting options
+  (naming templates, artist separator, video path/filter, metadata/lyrics/cover,
+  `update_mtime`, `rewrite_metadata`), so changing any of them starts a fresh
+  resume instead of wrongly skipping resources completed under the old settings.
+- The **"Dolby Atmos" download label** now reflects the DELIVERED stream's
+  `audioMode`, so a track that has an Atmos version but was served FLAC or a
+  degraded non-Atmos AAC is no longer mislabelled Dolby Atmos.
+
 ## [1.5.0] - 2026-08-23
 
 ### Added
