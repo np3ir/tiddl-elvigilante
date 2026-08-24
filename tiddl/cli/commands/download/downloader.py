@@ -1364,12 +1364,12 @@ class Downloader:
 
                     quality = track_qualities_color[stream.audioQuality]
                     # Label "Dolby Atmos" only when the stream we ACTUALLY got is
-                    # the Atmos one — not merely because the track has an Atmos
-                    # version. On an Atmos track the FLAC comes back as
-                    # HI_RES_LOSSLESS (the cascade's `max` rung); anything lower
-                    # delivered for such a track is the Atmos/AAC stream.
-                    stream_is_flac = stream.audioQuality in ("HI_RES_LOSSLESS", "LOSSLESS")
-                    if is_atmos and not stream_is_flac:
+                    # Atmos — read the DELIVERED stream's audioMode, not the track
+                    # tag. A track that HAS an Atmos version but was served a FLAC
+                    # (cascade `max`) or a degraded non-Atmos AAC must be labelled
+                    # by its real quality, not mislabelled Dolby Atmos.
+                    stream_is_atmos = str(getattr(stream, "audioMode", "") or "").upper() == "DOLBY_ATMOS"
+                    if stream_is_atmos:
                         quality = "[purple]Dolby Atmos"
                     elif stream.audioQuality in ["HI_RES_LOSSLESS", "LOSSLESS"]:
                         quality = f"{quality} {stream.bitDepth}-bit, {(stream.sampleRate or 0) / 1000:.1f} kHz"

@@ -12,6 +12,23 @@ def stream(mode="STEREO", quality="LOSSLESS", bit_depth=16, sample_rate=44100):
     )
 
 
+def test_atmos_rung_not_blocked_by_strict_policy():
+    # The `atmos` rung has no clean tier, so the strict exact-quality gate must
+    # NOT stop it (regression: `-q atmos --quality-policy strict` always stopped).
+    result = inspect_track_stream(
+        stream(mode="DOLBY_ATMOS", quality="HIGH"),
+        requested_quality="atmos",
+        quality_policy="strict",
+    )
+    assert result.accepted
+
+
+def test_atmos_rung_flexible_accepts_lossless():
+    # `atmos` maps to the LOSSLESS tier (not a garbage "ATMOS" wanted value).
+    result = inspect_track_stream(stream(quality="LOSSLESS"), requested_quality="atmos")
+    assert result.accepted
+
+
 def test_stereo_high_is_verified_from_playback_metadata():
     result = inspect_track_stream(stream(), audio_mode="stereo", requested_quality="high")
 
