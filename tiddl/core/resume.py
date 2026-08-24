@@ -54,6 +54,59 @@ def resource_key(resource) -> str:
     return f"{resource.type}/{resource.id}"
 
 
+def job_signature(
+    *,
+    resources,
+    download_path,
+    video_download_path,
+    quality,
+    video_quality,
+    audio_mode,
+    edition_match,
+    quality_policy,
+    hires_client,
+    expand,
+    exclude_compilations,
+    exclude_live_albums,
+    singles,
+    videos_filter,
+    templates,
+    metadata,
+    cover_file,
+    m3u,
+) -> str:
+    """Signature of EVERYTHING that changes what a `--resume` resource produces on
+    disk — its selection, content, embedded metadata, standalone files, paths and
+    names. Changing any of these must start a fresh checkpoint rather than skip a
+    resource completed under the old settings. Grouped dicts (``templates``,
+    ``metadata``, ``cover_file``, ``m3u``) let callers pass the whole sub-config;
+    callers pre-sort any set-like ``allowed`` lists so the hash is stable."""
+    fields = {
+        "resources": sorted(str(r) for r in resources),
+        # destinations
+        "download_path": str(download_path or ""),
+        "video_download_path": str(video_download_path or ""),
+        # selection + content
+        "quality": quality,
+        "video_quality": video_quality,
+        "audio_mode": audio_mode,
+        "edition_match": edition_match,
+        "quality_policy": quality_policy,
+        "hires_client": hires_client,
+        "expand": expand,
+        "exclude_compilations": bool(exclude_compilations),
+        "exclude_live_albums": bool(exclude_live_albums),
+        "singles": singles,
+        "videos_filter": videos_filter,
+        # names + written outputs
+        "templates": dict(templates),
+        "metadata": dict(metadata),
+        "cover_file": dict(cover_file),
+        "m3u": dict(m3u),
+    }
+    return compute_signature(fields)
+
+
 class ResumeLog:
     """Persistent set of completed resource keys for one job signature."""
 

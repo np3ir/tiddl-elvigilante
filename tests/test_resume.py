@@ -3,7 +3,86 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tiddl.core.resume import ResumeLog, compute_signature, resource_key
+import pytest
+
+from tiddl.core.resume import ResumeLog, compute_signature, job_signature, resource_key
+
+
+def _base_job():
+    """A full, valid set of job_signature() inputs to mutate one field at a time."""
+    return dict(
+        resources=["artist/1", "album/2"],
+        download_path="Z:/Music",
+        video_download_path="Z:/Videos",
+        quality="high",
+        video_quality="fhd",
+        audio_mode="auto",
+        edition_match="best",
+        quality_policy="flexible",
+        hires_client="auto",
+        expand="artists",
+        exclude_compilations=False,
+        exclude_live_albums=False,
+        singles="include",
+        videos_filter="none",
+        templates={
+            "default": "d", "track": "t", "album": "a", "playlist": "p",
+            "video": "v", "mix": "m", "artist_separator": " / ",
+        },
+        metadata={
+            "enable": True, "cover": True, "lyrics": True, "save_lyrics": False,
+            "album_review": False, "update_mtime": False, "rewrite": False,
+        },
+        cover_file={
+            "save": False, "size": 1280, "allowed": [],
+            "tpl_track": "", "tpl_album": "", "tpl_playlist": "",
+        },
+        m3u={
+            "save": False, "allowed": [],
+            "tpl_album": "", "tpl_playlist": "", "tpl_mix": "",
+        },
+    )
+
+
+def test_job_signature_is_stable():
+    assert job_signature(**_base_job()) == job_signature(**_base_job())
+
+
+# One mutation per output-affecting option/group — each MUST change the signature
+# so a resource completed under the old settings is not wrongly skipped.
+@pytest.mark.parametrize("mutate", [
+    lambda k: k.update(resources=["artist/1"]),
+    lambda k: k.update(download_path="D:/Other"),
+    lambda k: k.update(video_download_path="D:/V"),
+    lambda k: k.update(quality="max"),
+    lambda k: k.update(video_quality="hd"),
+    lambda k: k.update(audio_mode="stereo"),
+    lambda k: k.update(edition_match="ask"),
+    lambda k: k.update(quality_policy="strict"),
+    lambda k: k.update(hires_client="never"),
+    lambda k: k.update(expand="albums"),
+    lambda k: k.update(exclude_compilations=True),
+    lambda k: k.update(exclude_live_albums=True),
+    lambda k: k.update(singles="only"),
+    lambda k: k.update(videos_filter="all"),
+    lambda k: k.__setitem__("templates", {**k["templates"], "album": "CHANGED"}),
+    lambda k: k.__setitem__("templates", {**k["templates"], "artist_separator": ", "}),
+    lambda k: k.__setitem__("metadata", {**k["metadata"], "cover": False}),
+    lambda k: k.__setitem__("metadata", {**k["metadata"], "enable": False}),
+    lambda k: k.__setitem__("metadata", {**k["metadata"], "rewrite": True}),
+    lambda k: k.__setitem__("cover_file", {**k["cover_file"], "save": True}),
+    lambda k: k.__setitem__("cover_file", {**k["cover_file"], "size": 640}),
+    lambda k: k.__setitem__("cover_file", {**k["cover_file"], "allowed": ["album"]}),
+    lambda k: k.__setitem__("cover_file", {**k["cover_file"], "tpl_album": "X"}),
+    lambda k: k.__setitem__("m3u", {**k["m3u"], "save": True}),
+    lambda k: k.__setitem__("m3u", {**k["m3u"], "allowed": ["playlist"]}),
+    lambda k: k.__setitem__("m3u", {**k["m3u"], "tpl_mix": "X"}),
+])
+def test_job_signature_sensitive_to_every_output_option(mutate):
+    base = _base_job()
+    changed = _base_job()
+    mutate(changed)
+    assert job_signature(**changed) != job_signature(**base)
 
 
 def test_resource_key_format():
