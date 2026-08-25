@@ -2,6 +2,7 @@ from __future__ import annotations
 import importlib.metadata
 import sys
 import typer
+import click
 import logging
 from rich.console import Console
 from rich.logging import RichHandler
@@ -299,4 +300,13 @@ def _reorder_download_options(argv: list[str]) -> list[str]:
 def main():
     """Entry point for pip installation."""
     sys.argv = _reorder_download_options(sys.argv)
-    app()
+    try:
+        app()
+    except click.exceptions.Exit as exc:
+        # A cooperative safety stop (Cancel / rate-limit / account-flagged)
+        # raises click.exceptions.Exit from the download group's call_on_close.
+        # Click's standalone handling does NOT translate an Exit raised during
+        # context teardown, so map it to SystemExit here to preserve the CLI's
+        # non-zero exit code. (In-process/GUI catches the Exit around
+        # tiddl_app(standalone_mode=False) instead — separate GUI change.)
+        raise SystemExit(exc.exit_code)

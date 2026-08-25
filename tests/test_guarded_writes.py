@@ -579,7 +579,10 @@ async def test_mixed_concurrent_success_and_refusal_trips_the_shared_tracker(tmp
 # code path: a real `_write_lrc_guarded`/`_write_video_metadata_guarded`/
 # `_guarded_save_cover` refusal, a real SQLite-backed
 # `Downloader._db_insert`/`_db_lookup` via `_finalize_db_record` (queried
-# directly, not spied on), and a real `SystemExit` via `_finish_download_run`.
+# directly, not spied on), and a real non-zero exit code RETURNED by
+# `_finish_download_run` (it no longer calls `sys.exit()`; the caller `run()`
+# turns that non-zero return into `click.exceptions.Exit`, host-safe — see
+# tests/test_cancel_exit_host_safe.py).
 # ---------------------------------------------------------------------------
 
 def test_class_b_real_lrc_refusal_withholds_the_real_db_insert(untrusted_root, db_downloader):
@@ -703,40 +706,39 @@ async def test_class_c_real_cover_refusal_leaves_an_already_inserted_record_unto
     assert db_downloader._db_lookup(track.id) == download_path
 
 
-def test_finish_download_run_exits_nonzero_on_a_refused_run():
-    # Mixed CLI outcome, via the REAL call site: `_finish_download_run` is
-    # what `run()` actually calls (not `_download_exit_code()` + `sys.exit()`
-    # inline) — a test of `_download_exit_code()` alone wouldn't prove
-    # `run()`'s closure still calls it, still uses its return value, or
-    # still actually exits the process.
+def test_finish_download_run_returns_nonzero_on_a_refused_run():
+    # Mixed CLI outcome, via the REAL call site: `_finish_download_run` is what
+    # `run()` actually calls. It now RETURNS the code and never `sys.exit()`s /
+    # raises, so a cooperative stop can't hard-kill the in-process host; `run()`
+    # turns the non-zero return into `click.exceptions.Exit`.
     printed = []
     console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
 
-    with pytest.raises(SystemExit) as excinfo:
-        _finish_download_run(console, True)
+    code = _finish_download_run(console, True)
 
-    assert excinfo.value.code == 1
+    assert code == 1
     assert len(printed) == 1
 
 
-def test_finish_download_run_exits_normally_when_nothing_refused():
-    # Positive control: no identity refusal during the run -> no SystemExit
-    # raised at all (falls through to Typer's own normal exit-0 handling)
-    # and nothing printed.
+def test_finish_download_run_returns_none_when_nothing_refused():
+    # Positive control: no identity refusal during the run -> returns None
+    # (falls through to Typer's own normal exit-0 handling) and nothing
+    # printed. Must never raise.
     printed = []
     console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
 
-    _finish_download_run(console, False)
+    assert _finish_download_run(console, False) is None
     assert printed == []
 
 
-def test_finish_download_run_exits_nonzero_on_cooperative_safety_stop():
+def test_finish_download_run_returns_nonzero_on_cooperative_safety_stop():
+    # Cancel / 401 / 429 all funnel through cooperative_stop -> returns 1 and
+    # prints the safety-stop message; must NOT raise (host-safe).
     printed = []
     console = types.SimpleNamespace(print=lambda *a, **k: printed.append((a, k)))
 
-    with pytest.raises(SystemExit) as exc:
-        _finish_download_run(console, False, cooperative_stop=True)
+    code = _finish_download_run(console, False, cooperative_stop=True)
 
-    assert exc.value.code == 1
+    assert code == 1
     assert len(printed) == 1
     assert "stopped the run for safety" in printed[0][0][0]
