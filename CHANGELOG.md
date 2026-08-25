@@ -21,25 +21,30 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ### Fixed
 
-- **A cooperative safety stop no longer terminates the host process.** When a
-  download is cancelled, or the engine trips its own safety stop on a TIDAL
-  rate-limit (429) or a flagged/blocked account (401), the run now ends by
-  **returning** a non-zero exit code instead of calling `sys.exit()` from the
-  download group's `call_on_close` teardown. `_finish_download_run()` returns the
-  code; the `run()` closure raises `click.exceptions.Exit(code)`, which the CLI
-  entry point `tiddl.cli.app:main()` maps to a non-zero `SystemExit`. Under an
-  embedded interpreter (e.g. a bundled GUI) the previous `sys.exit()` hard-killed
-  the whole host process during teardown; the exit is now catchable in-process.
+- **A cooperative safety stop no longer terminates the host process.** When a run
+  is stopped through the engine's cooperative cancellation hook
+  (`request_cancel()`, as used by the GUI), or the engine trips its own safety
+  stop on a TIDAL rate-limit (429) or a flagged/blocked account (401), the run
+  now ends by **returning** a non-zero exit code instead of calling `sys.exit()`
+  from the download group's `call_on_close` teardown. `_finish_download_run()`
+  returns the code; the `run()` closure raises `click.exceptions.Exit(code)`,
+  which the CLI entry point `tiddl.cli.app:main()` maps to a non-zero
+  `SystemExit`. Under an embedded interpreter (e.g. a bundled GUI) the previous
+  `sys.exit()` hard-killed the whole host process during teardown; the exit is now
+  catchable in-process.
 
 ### Notes
 
-- **CLI behaviour is preserved.** `tiddl download …` — and `python -m tiddl …`,
-  which routes through the same `main()` — still exits non-zero on Cancel / 429 /
-  401, so scripts and CI keep the same exit codes.
+- **CLI exit codes are preserved for cooperative stops.** On a cooperative
+  cancellation (`request_cancel()`), a rate-limit (429) or a flagged account
+  (401), `tiddl download …` — and `python -m tiddl …`, which routes through the
+  same `main()` — still exits non-zero, so scripts and CI keep the same exit
+  codes. This change concerns the cooperative-stop path only; it does not alter
+  the CLI's `Ctrl+C` / `KeyboardInterrupt` handling (a separate `run()` branch).
 - **The matching GUI adaptation is a later, separate change.** The in-process
-  host must catch `click.exceptions.Exit` around `tiddl_app(standalone_mode=False)`;
-  that change, its engine re-pin, and the GUI rebuild/release are not part of this
-  engine release.
+  host must still catch `click.exceptions.Exit` around
+  `tiddl_app(standalone_mode=False)`; that change, its engine re-pin, and the GUI
+  rebuild/release are not part of this engine release.
 
 ## [1.5.2] - 2026-08-23
 
