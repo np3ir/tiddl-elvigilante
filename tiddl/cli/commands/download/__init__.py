@@ -4,6 +4,7 @@ import re
 import sys
 import random
 import typer
+import click
 import asyncio
 import unicodedata
 
@@ -312,17 +313,20 @@ def _download_exit_code(
 
 def _finish_download_run(
     console, any_identity_refused: bool, cooperative_stop: bool = False
-) -> None:
-    """v2.4 §2: the COMPLETE final-outcome effect for `tiddl download` —
-    the warning message AND the actual `sys.exit()` — not just the
-    decision. `run()` calls this, not `_download_exit_code()` +
-    `sys.exit()` inline. Implementation-audit finding, third round: a test
-    of `_download_exit_code()` alone doesn't prove `run()`'s closure still
-    calls it, still uses its return value correctly, or still actually
-    exits the process. This function IS what `run()` calls (see
-    `download_callback` below), so a test calling it directly (asserting
-    `SystemExit` via `pytest.raises`) exercises the real call site, not a
-    parallel copy of its logic."""
+) -> "int | None":
+    """Print the final-outcome warning for `tiddl download` (if any) and
+    RETURN the exit code — `1` on identity-refusal or a cooperative safety
+    stop (Cancel / rate-limit / account-flagged), else `None`.
+
+    It must NOT call `sys.exit()` nor raise: under the Flet-embedded
+    interpreter a `sys.exit()` from the download group's `call_on_close`
+    teardown hard-kills the whole host process (the GUI closed on
+    Cancel/401/429). The caller — `run()` — turns a non-zero return into
+    `click.exceptions.Exit(code)`; `main()` maps that to a non-zero
+    `SystemExit` for the CLI, and the in-process host catches it around
+    `tiddl_app(standalone_mode=False)`. Kept as the single place that both
+    prints AND decides, so a direct unit test asserting the RETURNED code
+    exercises the real call site, not a parallel copy of its logic."""
     exit_code = _download_exit_code(any_identity_refused, cooperative_stop)
     if exit_code is not None:
         if any_identity_refused:
@@ -354,7 +358,7 @@ def _finish_download_run(
                     "[red]The download engine stopped the run for safety; "
                     "exiting non-zero.[/]"
                 )
-        sys.exit(exit_code)
+    return exit_code
 
 
 async def _bounded_dispatch(items, handler, concurrency: int) -> None:
@@ -2692,10 +2696,18 @@ def download_callback(
             import traceback
             log.error(traceback.format_exc())
         else:
-            _finish_download_run(
+            code = _finish_download_run(
                 ctx.obj.console,
                 any_identity_refused,
                 cooperative_stop=is_cancelled(),
             )
+            # A non-zero outcome (identity-refusal or a cooperative safety
+            # stop: Cancel / rate-limit / account-flagged) is signalled with
+            # click.exceptions.Exit — NOT sys.exit — so it stays host-safe:
+            # main() maps it to a non-zero SystemExit for the CLI, and the
+            # in-process host catches it around tiddl_app(standalone_mode=False)
+            # instead of the interpreter being hard-killed.
+            if code:
+                raise click.exceptions.Exit(code)
 
     ctx.call_on_close(run)
