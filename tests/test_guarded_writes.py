@@ -579,7 +579,10 @@ async def test_mixed_concurrent_success_and_refusal_trips_the_shared_tracker(tmp
 # code path: a real `_write_lrc_guarded`/`_write_video_metadata_guarded`/
 # `_guarded_save_cover` refusal, a real SQLite-backed
 # `Downloader._db_insert`/`_db_lookup` via `_finalize_db_record` (queried
-# directly, not spied on), and a real `SystemExit` via `_finish_download_run`.
+# directly, not spied on), and a real non-zero exit code RETURNED by
+# `_finish_download_run` (it no longer calls `sys.exit()`; the caller `run()`
+# turns that non-zero return into `click.exceptions.Exit`, host-safe — see
+# tests/test_cancel_exit_host_safe.py).
 # ---------------------------------------------------------------------------
 
 def test_class_b_real_lrc_refusal_withholds_the_real_db_insert(untrusted_root, db_downloader):

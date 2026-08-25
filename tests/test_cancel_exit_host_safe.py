@@ -221,6 +221,54 @@ def test_real_download_clean_run_is_not_nonzero_via_main(monkeypatch, tmp_path):
         assert (exc.code or 0) == 0
 
 
+def test_real_typer_host_reusable_survives_cancel_then_clean(monkeypatch, tmp_path):
+    # THE reusable-host acceptance criterion on the REAL Typer app object (the
+    # exact object the GUI bundles as `tiddl_app`), NOT the `_make_download_app`
+    # replica:
+    #   1. first call to the real Typer app with standalone_mode=False,
+    #   2. simulated Cancel -> the host catches click.exceptions.Exit(1),
+    #   3. clear the Cancel WITHOUT recreating the app object or the interpreter,
+    #   4. second call to the SAME real object -> clean return 0.
+    # Proves the host survives a cooperative stop and stays reusable in-process.
+    import tiddl.cli.commands.download as dlinit
+    from tiddl.cli.app import app as typer_app
+    from tiddl.cli.config import CONFIG
+
+    monkeypatch.setattr(dlinit, "refresh", lambda *a, **k: None)
+
+    def _fake_asyncio_run(coro):
+        coro.close()
+        return False  # any_identity_refused = False (download itself not under test)
+
+    monkeypatch.setattr(dlinit.asyncio, "run", _fake_asyncio_run)
+    monkeypatch.setattr(CONFIG.download, "download_path", str(tmp_path), raising=False)
+    monkeypatch.setattr(CONFIG.download, "scan_path", str(tmp_path), raising=False)
+
+    cancelled = {"v": True}
+    monkeypatch.setattr(dlinit, "is_cancelled", lambda: cancelled["v"])
+
+    def host_call():
+        """The in-process host contract (mirrors the GUI's run_tiddl): call the
+        REAL Typer app with standalone_mode=False and catch the propagated exit.
+        Returns (exit_code, caught_type) — caught_type pins that a cooperative
+        stop reaches the host as click.exceptions.Exit, not a bare SystemExit."""
+        try:
+            rv = typer_app(args=["download", "url", "track/123"], standalone_mode=False)
+            return int(rv or 0), None
+        except click.exceptions.Exit as exc:
+            return int(exc.exit_code or 0), "Exit"
+        except SystemExit as exc:  # defensive; the real object raises Exit here
+            code = exc.code
+            return (code if isinstance(code, int) else (0 if code is None else 1)), "SystemExit"
+
+    # 1st call: Cancel active -> host catches click.exceptions.Exit(1).
+    assert host_call() == (1, "Exit")
+    # Clear the Cancel WITHOUT recreating the app object or the interpreter.
+    cancelled["v"] = False
+    # 2nd call on the SAME real Typer object -> clean return 0. Host survived.
+    assert host_call() == (0, None)
+
+
 def test_python_dash_m_routes_through_the_same_main():
     # `python -m tiddl` runs tiddl/__main__.py, which must call the SAME main()
     # that maps click.exceptions.Exit -> SystemExit, so the host-safe exit
