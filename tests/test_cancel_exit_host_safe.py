@@ -11,16 +11,22 @@ code, and `run()` raises `click.exceptions.Exit(code)`, which:
 * the CLI entry point `tiddl.cli.app:main()` maps to a non-zero `SystemExit`, and
 * the in-process host catches around `tiddl_app(standalone_mode=False)`.
 
-These tests pin exactly that, with a faithful minimal replica of the real
-group-callback + call_on_close structure (Click's standalone handling does NOT
-translate an Exit raised during context teardown — verified below).
+These tests pin exactly that. The first group uses a faithful minimal replica
+of the group-callback + call_on_close structure (Click's standalone handling
+does NOT translate an Exit raised during context teardown — verified below).
+The `test_real_download_*` group at the bottom then drives the REAL production
+wiring end to end — the actual `tiddl download url ...` command through the real
+`main()` entry point — stubbing only the orthogonal auth-refresh and the
+download execution, so the fix is proven on the production path, not a replica.
 """
+import sys
 import types
 
 import click
 import pytest
 import typer
 
+from tiddl.cli.app import main as app_main
 from tiddl.cli.commands.download import _finish_download_run
 
 
@@ -137,3 +143,88 @@ def test_cooperative_stop_reason_messages_return_nonzero(monkeypatch, reason, ne
 
     assert code == 1
     assert any(needle in str(p[0]) for p in printed if p)
+
+
+# --------------------------------------------------------------------------
+# REAL production-wiring tests
+#
+# The replica above proves the control-flow contract in isolation. These drive
+# the ACTUAL `tiddl download url ...` command through the REAL `main()` entry
+# point, so the real group callback, the real `ctx.call_on_close(run)`, the real
+# `_finish_download_run`, the real `raise click.exceptions.Exit`, and the real
+# `main()` Exit->SystemExit mapping are all exercised together. Only two
+# orthogonal, network-touching pieces are stubbed so the test stays offline /
+# CI-safe (no auth.json, no TIDAL calls):
+#   * the auth refresh the group callback invokes (`ctx.invoke(refresh, ...)`),
+#   * the download execution itself (`asyncio.run(download_resources())`),
+# and `is_cancelled()` is driven to choose the cooperative-stop vs clean outcome.
+# --------------------------------------------------------------------------
+
+
+def _arm_real_download_via_main(monkeypatch, tmp_path, *, cancelled: bool, refused: bool):
+    """Arm the REAL `tiddl download url track/<id>` invocation through the real
+    `main()` and return the app module. Stubs only the auth refresh and the
+    download run; leaves the exit wiring (callback -> call_on_close -> run ->
+    _finish_download_run -> Exit -> main -> SystemExit) fully real."""
+    import tiddl.cli.commands.download as dlinit
+    from tiddl.cli import app as app_mod
+    from tiddl.cli.config import CONFIG
+
+    # 1) Auth refresh the group callback runs (ctx.invoke(refresh, ...)) — no
+    #    auth.json / no network. `refresh` is a module global in download.
+    monkeypatch.setattr(dlinit, "refresh", lambda *a, **k: None)
+    # 2) Drive the cooperative-stop decision. `is_cancelled` is imported into the
+    #    download module and read both by run() (cooperative_stop=is_cancelled())
+    #    and by the (skipped) download loops.
+    monkeypatch.setattr(dlinit, "is_cancelled", lambda: cancelled)
+
+    # 3) Skip the real download; return `any_identity_refused` directly. This is
+    #    the ONE seam that avoids auth/network while keeping run() 100% real.
+    def _fake_asyncio_run(coro):
+        coro.close()  # never awaited -> close to avoid a RuntimeWarning
+        return refused
+
+    monkeypatch.setattr(dlinit.asyncio, "run", _fake_asyncio_run)
+
+    # Keep any (unreached) path resolution off the user's real library.
+    monkeypatch.setattr(CONFIG.download, "download_path", str(tmp_path), raising=False)
+    monkeypatch.setattr(CONFIG.download, "scan_path", str(tmp_path), raising=False)
+
+    monkeypatch.setattr(sys, "argv", ["tiddl", "download", "url", "track/123"])
+    return app_mod
+
+
+def test_real_download_cooperative_stop_exits_nonzero_via_main(monkeypatch, tmp_path):
+    # REAL wiring: a cooperative safety stop must exit NON-ZERO through main()'s
+    # Exit->SystemExit — the exact production path the GUI bundles in-process.
+    app_mod = _arm_real_download_via_main(monkeypatch, tmp_path, cancelled=True, refused=False)
+    with pytest.raises(SystemExit) as exc:
+        app_mod.main()
+    assert exc.value.code == 1
+
+
+def test_real_download_identity_refused_exits_nonzero_via_main(monkeypatch, tmp_path):
+    # REAL wiring: an identity-refused run (no cancel) also exits non-zero.
+    app_mod = _arm_real_download_via_main(monkeypatch, tmp_path, cancelled=False, refused=True)
+    with pytest.raises(SystemExit) as exc:
+        app_mod.main()
+    assert exc.value.code == 1
+
+
+def test_real_download_clean_run_is_not_nonzero_via_main(monkeypatch, tmp_path):
+    # REAL wiring control: a clean run (nothing refused, no stop) must never be a
+    # non-zero exit — it either returns or exits 0.
+    app_mod = _arm_real_download_via_main(monkeypatch, tmp_path, cancelled=False, refused=False)
+    try:
+        app_mod.main()
+    except SystemExit as exc:
+        assert (exc.code or 0) == 0
+
+
+def test_python_dash_m_routes_through_the_same_main():
+    # `python -m tiddl` runs tiddl/__main__.py, which must call the SAME main()
+    # that maps click.exceptions.Exit -> SystemExit, so the host-safe exit
+    # applies to the module entry point as well as the installed console script.
+    import tiddl.__main__ as dunder
+
+    assert dunder.main is app_main
