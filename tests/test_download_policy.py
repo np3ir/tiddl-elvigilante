@@ -15,19 +15,47 @@ class ResponseError(Exception):
         self.response = SimpleNamespace(status_code=status)
 
 
-def test_session_limit_warns_only_once_for_remaining_scheduled_tracks():
+def test_session_limit_counts_new_downloads_and_warns_once():
+    # New semantic: the cap counts NEW downloads (record), not admitted tracks.
+    # A track is admitted, downloaded, recorded; once the quota of downloads is
+    # used up the gate closes and warns exactly once.
     policy = SessionTrackLimit(limit=1)
 
+    assert policy.admit() == (True, False)      # under quota -> admitted
+    assert not policy.is_reached()
+    policy.record(was_downloaded=True)          # the one allowed NEW download
+    assert policy.is_reached()                  # quota used -> run-wide signal
+    assert policy.admit() == (False, True)      # now closed, announce once
+    assert policy.admit() == (False, False)
+    assert policy.admit() == (False, False)
+
+
+def test_existing_files_do_not_consume_the_cap():
+    # Already-present tracks (was_downloaded=False) must NOT eat the quota, so a
+    # run over a mostly-downloaded library keeps working on the missing tracks.
+    policy = SessionTrackLimit(limit=2)
+
     assert policy.admit() == (True, False)
+    policy.record(was_downloaded=False)         # already on disk -> no charge
+    policy.record(was_downloaded=False)
+    assert not policy.is_reached()
+    assert policy.admit() == (True, False)      # still open after two skips
+    policy.record(was_downloaded=True)          # 1st real download
+    assert not policy.is_reached()
+    policy.record(was_downloaded=True)          # 2nd real download -> quota used
+    assert policy.is_reached()
     assert policy.admit() == (False, True)
-    assert policy.admit() == (False, False)
-    assert policy.admit() == (False, False)
 
 
 def test_zero_session_limit_is_unlimited():
     policy = SessionTrackLimit(limit=0)
 
     assert [policy.admit() for _ in range(3)] == [(True, False)] * 3
+    # record is a no-op when disabled and never latches the signal.
+    for _ in range(5):
+        policy.record(was_downloaded=True)
+    assert not policy.is_reached()
+    assert policy.admit() == (True, False)
 
 
 def test_http_401_is_authentication_not_rate_limit():

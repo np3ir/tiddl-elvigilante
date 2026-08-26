@@ -311,6 +311,22 @@ def _download_exit_code(
     return 1 if any_identity_refused or cooperative_stop else None
 
 
+def _resource_resume_done(
+    ok: bool, resume_enabled: bool, cancelled: bool, session_limit_reached: bool
+) -> bool:
+    """Whether a resource may be marked done in the ``--resume`` checkpoint.
+
+    A resource is checkpointed ONLY when it completed cleanly AND the run was not
+    stopped underneath it: not cancelled, and — crucially — the session-track
+    limit was not reached during it. Reaching the cap cuts a resource short (its
+    remaining tracks are never admitted), so marking it done would make a later
+    ``--resume`` skip those tracks and silently lose them. Conservative on
+    purpose: a resource that actually finished just before the cap is re-checked
+    next run, where ``skip_existing`` makes it cheap. Pure function for direct
+    unit coverage, same pattern as ``_download_exit_code``."""
+    return ok and resume_enabled and not cancelled and not session_limit_reached
+
+
 def _resolve_prefer_hires(track_quality: str, hires_client: str) -> bool:
     """Which client backs the WHOLE run, from the requested ``-q`` + config
     ``hires_client`` — the STABLE matrix (restored from ``d1613b0``):
@@ -384,7 +400,7 @@ def _finish_download_run(
     return exit_code
 
 
-async def _bounded_dispatch(items, handler, concurrency: int) -> None:
+async def _bounded_dispatch(items, handler, concurrency: int, should_stop=None) -> None:
     """Run ``handler(item, index)`` over ``items`` with a FIXED pool of
     ``concurrency`` worker tasks, so at most ``concurrency`` tasks exist at once
     no matter how many items there are.
@@ -396,6 +412,12 @@ async def _bounded_dispatch(items, handler, concurrency: int) -> None:
     item from the shared iterator between awaits needs no lock. ``index`` is
     1-based, matching the previous ``enumerate(..., start=1)`` heartbeat.
 
+    ``should_stop`` is an optional zero-arg predicate checked before each pull:
+    once it returns True the workers stop taking NEW items and drain. This is how
+    reaching ``max_tracks_per_session`` halts a run — no further resource is even
+    dequeued (so none is enumerated or produces API traffic), while items already
+    handed to a worker finish cleanly.
+
     Cancellation propagates: a worker raising ``CancelledError`` /
     ``KeyboardInterrupt`` (or the awaiting caller being cancelled) tears the
     whole pool down. A per-item error never kills a worker or orphans the rest —
@@ -405,6 +427,8 @@ async def _bounded_dispatch(items, handler, concurrency: int) -> None:
 
     async def _worker() -> None:
         while True:
+            if should_stop is not None and should_stop():
+                return
             try:
                 index, item = next(it)
             except StopIteration:
@@ -1392,6 +1416,12 @@ def download_callback(
                 )
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
+
+                # Count only tracks this run actually fetched toward the session
+                # cap; an already-present file (skip_existing) must not consume it.
+                # Reaching the cap latches the run-wide `reached` signal that
+                # stops dispatch/enumeration of the remaining resources.
+                _session_track_limit.record(bool(was_downloaded))
 
                 # Destination-volume identity (operations 4/5/6/9, v2.2 §1 /
                 # v2.3 §1): the same root operations 1/2/3 already checked for
@@ -2550,11 +2580,13 @@ def download_callback(
         ):
 
             async def wrapper(r: TidalResource):
-                # Cooperative cancel: on a multi-URL batch, skip every remaining
-                # resource the moment the user cancels instead of processing the
-                # whole pasted list.
+                # Cooperative cancel OR session-limit reached: skip every remaining
+                # resource the moment the run is stopped, instead of enumerating it
+                # (credits, covers, edition resolution) and issuing API calls. This
+                # is the single choke point that stops ALL per-resource work for
+                # not-yet-started resources once the cap is hit.
                 from tiddl.core.cancel import is_cancelled
-                if is_cancelled():
+                if is_cancelled() or _session_track_limit.is_reached():
                     return
                 _rkey = f"{r.type}/{r.id}"
                 # Resume: skip a resource already completed in a prior run of this
@@ -2580,9 +2612,15 @@ def download_callback(
                     raise
                 except Exception as e:
                     ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
-                # Mark done only on a clean, non-cancelled completion, so a resource
-                # that errored (or a run that got stopped) is retried on --resume.
-                if ok and resume_log is not None and not is_cancelled():
+                # Mark done only on a clean completion that was NOT stopped
+                # underneath it — not cancelled, and not cut short by the session
+                # cap (whose remaining tracks were never admitted). See
+                # _resource_resume_done: marking a cap-truncated resource done
+                # would make a later --resume skip its missing tracks.
+                if _resource_resume_done(
+                    ok, resume_log is not None, is_cancelled(),
+                    _session_track_limit.is_reached(),
+                ):
                     resume_log.mark_done(_rkey)
 
             async def expand_playlist(resource: TidalResource) -> list[TidalResource]:
@@ -2661,12 +2699,14 @@ def download_callback(
                 expand_total = len(ctx.obj.resources)
 
                 async def dispatch_one(r: TidalResource, idx: int):
-                    # Cooperative cancel: bail BEFORE the heartbeat print so a
-                    # cancelled run doesn't flood the log with a burst of
-                    # "[idx/total] type/id" lines for every remaining resource
-                    # (on a big expanded batch that's thousands of lines, which
-                    # reads as "still working" even though nothing downloads).
-                    if is_cancelled():
+                    # Cooperative cancel OR session-limit reached: bail BEFORE the
+                    # heartbeat print and before wrapper(), so a stopped run
+                    # doesn't flood the log with a burst of "[idx/total] type/id"
+                    # lines for every remaining resource (on a big expanded batch
+                    # that's thousands of lines, which reads as "still working"
+                    # even though nothing downloads) and issues no API traffic for
+                    # resources it will not process.
+                    if is_cancelled() or _session_track_limit.is_reached():
                         return
                     # Steady per-resource heartbeat: complete albums are skipped
                     # silently, so without this the output can go quiet for
@@ -2678,7 +2718,8 @@ def download_callback(
 
                 try:
                     await _bounded_dispatch(
-                        ctx.obj.resources, dispatch_one, max(1, ARTIST_CONCURRENCY)
+                        ctx.obj.resources, dispatch_one, max(1, ARTIST_CONCURRENCY),
+                        should_stop=_session_track_limit.is_reached,
                     )
                 finally:
                     # Flush report_playback pendientes y cierra la sesión HTTP compartida
