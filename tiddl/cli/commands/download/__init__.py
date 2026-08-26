@@ -451,6 +451,54 @@ async def _bounded_dispatch(items, handler, concurrency: int, should_stop=None) 
         raise
 
 
+async def _expand_playlist_resources(
+    api, playlist_uuid: str, *, expand_albums: bool, expand_tracks: bool
+) -> "tuple[list[TidalResource], int, str]":
+    """Expand one playlist into its unique albums / credited artists / tracks.
+
+    The dedupe + mode semantics of the inline ``expand_playlist``, lifted to a
+    module function so the expansion FAN-OUT is directly testable with a fake API
+    — this is where ``--artists`` (every credited artist, each later enumerated
+    into a WHOLE discography) diverges from ``--albums`` (only the albums the
+    playlist already lists). Every call goes through ``api``; in production that
+    is ``ctx.obj.api``, which for ``high + auto`` is the lenient TV client — so a
+    ``--artists`` expansion never touches the strict HiRes client.
+
+    Returns ``(resources, skipped_videos, playlist_title)``."""
+    playlist = await asyncio.to_thread(api.get_playlist, playlist_uuid=playlist_uuid)
+    seen: set = set()
+    expanded: "list[TidalResource]" = []
+    skipped_videos = 0
+    offset = 0
+    while True:
+        page = await asyncio.to_thread(
+            api.get_playlist_items, playlist_uuid=playlist_uuid, offset=offset,
+        )
+        for playlist_item in page.items:
+            item = playlist_item.item
+            if not isinstance(item, Track):
+                skipped_videos += 1
+                continue
+            if expand_albums:
+                if item.album and item.album.id not in seen:
+                    seen.add(item.album.id)
+                    expanded.append(TidalResource(type="album", id=str(item.album.id)))
+            elif expand_tracks:
+                if item.id not in seen:
+                    seen.add(item.id)
+                    expanded.append(TidalResource(type="track", id=str(item.id)))
+            else:
+                artists = item.artists or ([item.artist] if item.artist else [])
+                for artist in artists:
+                    if artist and artist.id and artist.id not in seen:
+                        seen.add(artist.id)
+                        expanded.append(TidalResource(type="artist", id=str(artist.id)))
+        offset += page.limit
+        if offset >= page.totalNumberOfItems:
+            break
+    return expanded, skipped_videos, getattr(playlist, "title", "")
+
+
 def plan_stereo_resolution(result, keep_original: bool) -> tuple:
     """Pure pre-confirmation decision for the stereo resolution of one album.
 
@@ -2625,44 +2673,18 @@ def download_callback(
 
             async def expand_playlist(resource: TidalResource) -> list[TidalResource]:
                 """--albums/--artists: turn a playlist into its unique albums or
-                credited artists (same dedupe semantics as tidmon playlist)."""
-                playlist = await asyncio.to_thread(
-                    ctx.obj.api.get_playlist, playlist_uuid=resource.id
+                credited artists (same dedupe semantics as tidmon playlist).
+
+                Core lives in the module-level `_expand_playlist_resources` (so the
+                expansion fan-out is unit-testable); this keeps the console line.
+                Every API call goes through `ctx.obj.api` — TV for high+auto."""
+                expanded, skipped_videos, title = await _expand_playlist_resources(
+                    ctx.obj.api, resource.id,
+                    expand_albums=EXPAND_ALBUMS, expand_tracks=EXPAND_TRACKS,
                 )
-                seen: set = set()
-                expanded: list[TidalResource] = []
-                skipped_videos = 0
-                offset = 0
-                while True:
-                    page = await asyncio.to_thread(
-                        ctx.obj.api.get_playlist_items,
-                        playlist_uuid=resource.id, offset=offset,
-                    )
-                    for playlist_item in page.items:
-                        item = playlist_item.item
-                        if not isinstance(item, Track):
-                            skipped_videos += 1
-                            continue
-                        if EXPAND_ALBUMS:
-                            if item.album and item.album.id not in seen:
-                                seen.add(item.album.id)
-                                expanded.append(TidalResource(type="album", id=str(item.album.id)))
-                        elif EXPAND_TRACKS:
-                            if item.id not in seen:
-                                seen.add(item.id)
-                                expanded.append(TidalResource(type="track", id=str(item.id)))
-                        else:
-                            artists = item.artists or ([item.artist] if item.artist else [])
-                            for artist in artists:
-                                if artist and artist.id and artist.id not in seen:
-                                    seen.add(artist.id)
-                                    expanded.append(TidalResource(type="artist", id=str(artist.id)))
-                    offset += page.limit
-                    if offset >= page.totalNumberOfItems:
-                        break
                 kind = "albums" if EXPAND_ALBUMS else ("tracks" if EXPAND_TRACKS else "artists")
                 msg = (
-                    f"\n[bold magenta]Playlist expanded:[/] {playlist.title} "
+                    f"\n[bold magenta]Playlist expanded:[/] {title} "
                     f"-> [bold]{len(expanded)} unique {kind}[/]"
                 )
                 if skipped_videos:
