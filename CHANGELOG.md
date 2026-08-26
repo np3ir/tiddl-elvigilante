@@ -21,14 +21,15 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ### Fixed
 
-- **Large `--artists` / high-quality runs no longer trip TIDAL's HTTP 429 rate
-  limit.** A regression (`05b1eca`) had widened the client selector so that
-  `-q high` (the default) with `hires_client=auto` promoted the WHOLE run —
-  including all enumeration of playlists, artists, albums and credits — to the
-  strict, low-limit **HiRes** client. On a big `--artists` expansion (every
-  credited artist's full discography = `get_artist_albums` + `get_album_items`
-  per album) TIDAL answered with real **HTTP 429 (`Retry-After: 60`)**. The
-  stable client matrix is restored: `high + auto → TV`, `max + auto → HiRes`,
+- **Large `--artists` / high-quality runs no longer route all traffic through the
+  strict HiRes client, fixing the regression that caused frequent HTTP 429
+  responses.** `05b1eca` had widened the client selector so that `-q high` (the
+  default) with `hires_client=auto` promoted the WHOLE run — including all
+  enumeration of playlists, artists, albums and credits — to the strict, low-limit
+  **HiRes** client. On a big `--artists` expansion (every credited artist's full
+  discography = `get_artist_albums` + `get_album_items` per album) TIDAL responded
+  with frequent **HTTP 429 (`Retry-After: 60`)**. The stable client matrix is
+  restored: `high + auto → TV`, `max + auto → HiRes`,
   `* + never → TV`, `* + always → HiRes`. In `high + auto` **all enumeration
   stays on the lenient TV client**; the 24-bit `HI_RES_LOSSLESS` tier is now
   requested **per track only** — for a track whose only FLAC is 24-bit (e.g.
@@ -38,11 +39,11 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 - **The session-track cap now actually stops the run.** Reaching
   `max_tracks_per_session` used to print "Reinicia para continuar" but the engine
   kept dispatching and enumerating the remaining resources (real API calls, more
-  `[n/total]` lines). Reaching the cap now latches a run-wide stop: no further
-  resource is dequeued, enumerated (credits, covers, edition resolution) or
-  requested; already-in-flight downloads finish cleanly. On `--resume`, a
-  resource cut short by the cap is **not** checkpointed, so a later run re-fetches
-  its remaining tracks.
+  `[n/total]` lines). **No new resource is dequeued or started after the cap is
+  reached; already-started work finishes cleanly** (no further enumeration —
+  credits, covers, edition resolution — or API calls for not-yet-started
+  resources). On `--resume`, a resource cut short by the cap is **not**
+  checkpointed, so a later run re-fetches its remaining tracks.
 
 ### Changed
 

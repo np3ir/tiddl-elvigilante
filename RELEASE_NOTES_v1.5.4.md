@@ -2,14 +2,15 @@
 
 ## 🇬🇧 What's new
 
-**Large `--artists` / high-quality runs no longer trip TIDAL's HTTP 429 rate limit.**
+**Large `--artists` / high-quality runs no longer route all traffic through the strict HiRes client, fixing the regression that caused frequent HTTP 429 responses.**
 
 - A regression had promoted the **whole run** to the strict, low-limit **HiRes**
   client whenever `-q high` (the default) ran with `hires_client=auto` — including
   **all enumeration** of playlists, artists, albums and credits. On a big
-  `--artists` expansion (every credited artist's full discography) TIDAL answered
-  with real **HTTP 429 (`Retry-After: 60`)**. `--albums` stayed quiet only because
-  it enumerates far less; the amplifier is the artist fan-out, not `--resume`.
+  `--artists` expansion (every credited artist's full discography) TIDAL responded
+  with frequent **HTTP 429 (`Retry-After: 60`)**. `--albums` stayed quiet only
+  because it enumerates far less; the amplifier is the artist fan-out, not
+  `--resume`.
 - The stable client matrix is restored — `high + auto → TV`, `max + auto → HiRes`,
   `* + never → TV`, `* + always → HiRes`. In **`high + auto` all enumeration now
   stays on the lenient TV client**; the 24-bit `HI_RES_LOSSLESS` tier is requested
@@ -25,9 +26,10 @@
 
 - Reaching the cap used to print "Reinicia para continuar" while the engine kept
   dispatching and enumerating the remaining resources (real API calls, more
-  `[n/total]` lines). Reaching the cap now **stops the run**: no further resource
-  is dequeued, enumerated (credits, covers, edition resolution) or requested;
-  already-in-flight downloads finish cleanly.
+  `[n/total]` lines). Now, **no new resource is dequeued or started after the cap
+  is reached; already-started work finishes cleanly** (no further enumeration —
+  credits, covers, edition resolution — or API calls for not-yet-started
+  resources).
 - The cap **counts only NEW downloads** — an already-present file
   (`skip_existing`) no longer consumes the quota. Under concurrency it is enforced
   with an **atomic per-track reservation**, so parallel tracks can never overshoot
@@ -41,15 +43,15 @@
 
 ## 🇪🇸 Novedades
 
-**Las corridas grandes `--artists` / de alta calidad ya no disparan el límite HTTP 429 de TIDAL.**
+**Las corridas grandes `--artists` / de alta calidad ya no envían todo el tráfico por el cliente HiRes estricto, corrigiendo la regresión que provocaba respuestas HTTP 429 frecuentes.**
 
 - Una regresión promovía **toda la corrida** al cliente **HiRes** estricto (de
   límite bajo) siempre que `-q high` (el valor por defecto) corría con
   `hires_client=auto` — incluida **toda la enumeración** de playlists, artistas,
   álbumes y créditos. En una expansión grande `--artists` (la discografía completa
-  de cada artista acreditado) TIDAL respondía con **HTTP 429 real
-  (`Retry-After: 60`)**. `--albums` quedaba tranquilo solo porque enumera mucho
-  menos; el amplificador es el fan-out de artistas, no `--resume`.
+  de cada artista acreditado) TIDAL respondía con **HTTP 429 (`Retry-After: 60`)
+  frecuente**. `--albums` quedaba tranquilo solo porque enumera mucho menos; el
+  amplificador es el fan-out de artistas, no `--resume`.
 - Se restaura la matriz estable de clientes — `high + auto → TV`,
   `max + auto → HiRes`, `* + never → TV`, `* + always → HiRes`. En
   **`high + auto` toda la enumeración se queda ahora en el cliente TV lenient**; el
@@ -66,9 +68,10 @@
 
 - Al alcanzar el límite se imprimía "Reinicia para continuar" mientras el motor
   seguía despachando y enumerando los recursos restantes (llamadas API reales, más
-  líneas `[n/total]`). Alcanzar el límite ahora **detiene la corrida**: no se
-  toma, enumera (créditos, portadas, resolución de ediciones) ni solicita ningún
-  recurso más; las descargas ya en curso terminan limpiamente.
+  líneas `[n/total]`). Ahora, **después de alcanzar el límite no se toma ni inicia
+  ningún recurso nuevo; el trabajo ya iniciado termina limpiamente** (sin más
+  enumeración —créditos, portadas, resolución de ediciones— ni llamadas API para
+  recursos no iniciados).
 - El límite **cuenta solo descargas nuevas** — un archivo ya presente
   (`skip_existing`) ya no consume el cupo. Con concurrencia se aplica mediante una
   **reserva atómica por pista**, de modo que las pistas en paralelo nunca superan
