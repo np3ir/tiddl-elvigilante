@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from time import sleep
 import time
 import random
-import threading
 
 # CRITICAL FIX: Import HTTPError
 from requests.exceptions import JSONDecodeError, HTTPError
@@ -21,6 +20,7 @@ from requests_cache import (
 import requests as _requests
 
 from .exceptions import ApiError
+from .budget import SharedRequestBudget
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -46,9 +46,8 @@ class TidalClientImproved:
     session: CachedSession
     on_token_expiry: Optional[Callable[[bool, int], Union[tuple[str, int, Union[str, None]], None]]]
     
-    # Rate Limiting: 60 requests per minute
-    _last_request_time: float
-    _request_interval: float
+    # Base fixed-interval spacing lives in a SHARED per-run budget (budget.py);
+    # only the adaptive 429 backoff is per-client.
 
     def __init__(
         self,
@@ -60,18 +59,19 @@ class TidalClientImproved:
         refresh_token: Optional[str] = None,
         token_expiry: Optional[int] = None,  # Unix timestamp
         requests_per_minute: int = 50,
+        budget: "SharedRequestBudget | None" = None,
     ) -> None:
         self.on_token_expiry = on_token_expiry
         self.debug_path = debug_path
         self._refresh_token = refresh_token
         self._token_expiry = token_expiry
 
-        # Rate Limiting Init
-        safe_rpm = requests_per_minute if requests_per_minute > 0 else 50
-        self._last_request_time = 0.0
-        self._request_interval = 60.0 / safe_rpm
-        self._rate_lock = threading.Lock()
-        self._rate_limit_delay: float = 0.0  # Adaptive: grows on 429, shrinks on success
+        # Rate Limiting Init. The base fixed-interval spacing lives in a SHARED
+        # per-run budget so the TV + HiRes clients of one context cannot jointly
+        # exceed requests_per_minute. If no budget is injected (standalone use),
+        # own a private one — preserving prior single-client behaviour.
+        self._budget = budget if budget is not None else SharedRequestBudget(requests_per_minute)
+        self._rate_limit_delay: float = 0.0  # Adaptive per-client 429 backoff
         self._refresh_blocked: bool = False  # Set when refresh returns a permanent 4xx
         
         self._omit_cache = omit_cache
@@ -220,24 +220,22 @@ class TidalClientImproved:
             if self._rate_limit_delay > 0:
                 time.sleep(self._rate_limit_delay)
 
-            # Rate Limiting Enforcement (thread-safe, fixed interval + jitter)
-            with self._rate_lock:
-                elapsed = time.time() - self._last_request_time
-                wait = self._request_interval - elapsed + random.uniform(0, 0.3)
-                if wait > 0:
-                    time.sleep(wait)
-                self._last_request_time = time.time()
+            # Shared per-run budget: the combined TV + HiRes traffic of this
+            # context is spaced at 60/RPM, so activating both clients cannot
+            # double the configured requests_per_minute. Thread-safe + jittered.
+            self._budget.throttle()
 
             res = self.session.get(
                 f"{base_url}/{endpoint}",
                 params=params,
                 expire_after=expire_after
             )
-
-            # Cache hits don't consume API quota — release the slot
-            if getattr(res, 'from_cache', False):
-                with self._rate_lock:
-                    self._last_request_time = time.time() - self._request_interval
+            # A true cache hit was already served by the only_if_cached peek
+            # above (before throttle). If this GET still comes back from_cache it
+            # was a conditional revalidation — a real network round-trip — so it
+            # keeps the slot it just throttled for. We deliberately never hand the
+            # slot back: moving the shared spacing clock backward here could roll
+            # back a reservation another thread already made and burst past RPM.
 
         # ============================================================
         # IMPROVEMENT 5: Detailed rate limiting handling (429)

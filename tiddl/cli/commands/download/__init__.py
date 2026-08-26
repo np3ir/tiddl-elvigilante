@@ -311,6 +311,45 @@ def _download_exit_code(
     return 1 if any_identity_refused or cooperative_stop else None
 
 
+def _resource_resume_done(
+    ok: bool, resume_enabled: bool, cancelled: bool, session_limit_reached: bool
+) -> bool:
+    """Whether a resource may be marked done in the ``--resume`` checkpoint.
+
+    A resource is checkpointed ONLY when it completed cleanly AND the run was not
+    stopped underneath it: not cancelled, and — crucially — the session-track
+    limit was not reached during it. Reaching the cap cuts a resource short (its
+    remaining tracks are never admitted), so marking it done would make a later
+    ``--resume`` skip those tracks and silently lose them. Conservative on
+    purpose: a resource that actually finished just before the cap is re-checked
+    next run, where ``skip_existing`` makes it cheap. Pure function for direct
+    unit coverage, same pattern as ``_download_exit_code``."""
+    return ok and resume_enabled and not cancelled and not session_limit_reached
+
+
+def _resolve_prefer_hires(track_quality: str, hires_client: str) -> bool:
+    """Which client backs the WHOLE run, from the requested ``-q`` + config
+    ``hires_client`` — the STABLE matrix (restored from ``d1613b0``):
+
+    | quality  | hires_client | primary |
+    |----------|--------------|---------|
+    | high     | auto         | TV      |
+    | max      | auto         | HiRes   |
+    | any      | never        | TV      |
+    | any      | always       | HiRes   |
+
+    Only ``max`` (auto) or ``always`` put the strict HiRes client on the whole
+    run; ``high`` (auto) and ``never`` stay on the lenient TV client. A ``high``
+    run's occasional 24-bit-only (Atmos) track is escalated PER-TRACK to a
+    secondary HiRes client instead of promoting the whole run (which is what
+    ``05b1eca`` did, causing real 429s). Pure function for direct unit coverage."""
+    if hires_client == "always":
+        return True
+    if hires_client == "never":
+        return False
+    return track_quality == "max"  # "auto"
+
+
 def _finish_download_run(
     console, any_identity_refused: bool, cooperative_stop: bool = False
 ) -> "int | None":
@@ -361,7 +400,7 @@ def _finish_download_run(
     return exit_code
 
 
-async def _bounded_dispatch(items, handler, concurrency: int) -> None:
+async def _bounded_dispatch(items, handler, concurrency: int, should_stop=None) -> None:
     """Run ``handler(item, index)`` over ``items`` with a FIXED pool of
     ``concurrency`` worker tasks, so at most ``concurrency`` tasks exist at once
     no matter how many items there are.
@@ -373,6 +412,12 @@ async def _bounded_dispatch(items, handler, concurrency: int) -> None:
     item from the shared iterator between awaits needs no lock. ``index`` is
     1-based, matching the previous ``enumerate(..., start=1)`` heartbeat.
 
+    ``should_stop`` is an optional zero-arg predicate checked before each pull:
+    once it returns True the workers stop taking NEW items and drain. This is how
+    reaching ``max_tracks_per_session`` halts a run — no further resource is even
+    dequeued (so none is enumerated or produces API traffic), while items already
+    handed to a worker finish cleanly.
+
     Cancellation propagates: a worker raising ``CancelledError`` /
     ``KeyboardInterrupt`` (or the awaiting caller being cancelled) tears the
     whole pool down. A per-item error never kills a worker or orphans the rest —
@@ -382,6 +427,8 @@ async def _bounded_dispatch(items, handler, concurrency: int) -> None:
 
     async def _worker() -> None:
         while True:
+            if should_stop is not None and should_stop():
+                return
             try:
                 index, item = next(it)
             except StopIteration:
@@ -402,6 +449,54 @@ async def _bounded_dispatch(items, handler, concurrency: int) -> None:
                 w.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
         raise
+
+
+async def _expand_playlist_resources(
+    api, playlist_uuid: str, *, expand_albums: bool, expand_tracks: bool
+) -> "tuple[list[TidalResource], int, str]":
+    """Expand one playlist into its unique albums / credited artists / tracks.
+
+    The dedupe + mode semantics of the inline ``expand_playlist``, lifted to a
+    module function so the expansion FAN-OUT is directly testable with a fake API
+    — this is where ``--artists`` (every credited artist, each later enumerated
+    into a WHOLE discography) diverges from ``--albums`` (only the albums the
+    playlist already lists). Every call goes through ``api``; in production that
+    is ``ctx.obj.api``, which for ``high + auto`` is the lenient TV client — so a
+    ``--artists`` expansion never touches the strict HiRes client.
+
+    Returns ``(resources, skipped_videos, playlist_title)``."""
+    playlist = await asyncio.to_thread(api.get_playlist, playlist_uuid=playlist_uuid)
+    seen: set = set()
+    expanded: "list[TidalResource]" = []
+    skipped_videos = 0
+    offset = 0
+    while True:
+        page = await asyncio.to_thread(
+            api.get_playlist_items, playlist_uuid=playlist_uuid, offset=offset,
+        )
+        for playlist_item in page.items:
+            item = playlist_item.item
+            if not isinstance(item, Track):
+                skipped_videos += 1
+                continue
+            if expand_albums:
+                if item.album and item.album.id not in seen:
+                    seen.add(item.album.id)
+                    expanded.append(TidalResource(type="album", id=str(item.album.id)))
+            elif expand_tracks:
+                if item.id not in seen:
+                    seen.add(item.id)
+                    expanded.append(TidalResource(type="track", id=str(item.id)))
+            else:
+                artists = item.artists or ([item.artist] if item.artist else [])
+                for artist in artists:
+                    if artist and artist.id and artist.id not in seen:
+                        seen.add(artist.id)
+                        expanded.append(TidalResource(type="artist", id=str(artist.id)))
+        offset += page.limit
+        if offset >= page.totalNumberOfItems:
+            break
+    return expanded, skipped_videos, getattr(playlist, "title", "")
 
 
 def plan_stereo_resolution(result, keep_original: bool) -> tuple:
@@ -866,6 +961,11 @@ def download_callback(
         CONFIG.download.hires_client = HIRES_CLIENT
     if REQUESTS_PER_MINUTE is not None:
         CONFIG.download.requests_per_minute = REQUESTS_PER_MINUTE
+    # Build the ONE shared request budget from the EFFECTIVE rpm (config +
+    # optional --rpm override just applied) BEFORE any client is constructed, so
+    # both the TV and HiRes clients space their COMBINED traffic at the effective
+    # rate. Done unconditionally: with no --rpm this uses the config value.
+    ctx.obj.configure_request_budget(CONFIG.download.requests_per_minute)
     if UPDATE_MTIME is not None:
         CONFIG.download.update_mtime = UPDATE_MTIME
     if EXCLUDE_COMPILATIONS is not None:
@@ -891,17 +991,12 @@ def download_callback(
     # `hires_client` + the requested -q. The HiRes client has a strict TIDAL
     # rate limit (429 on big lists); the TV client is lenient but tops at
     # LOSSLESS. Set BEFORE any ctx.obj.api access (the refresh below builds it).
-    _hires_mode = CONFIG.download.hires_client
-    if _hires_mode == "always":
-        ctx.obj.prefer_hires = True
-    elif _hires_mode == "never":
-        ctx.obj.prefer_hires = False
-    else:  # "auto": use the HiRes client for any FLAC start (high or max). high
-        # needs it too now, because an Atmos track has no 16-bit FLAC and the
-        # cascade climbs it to the 24-bit `max` FLAC (preferring FLAC over Atmos),
-        # which only the HiRes client can deliver. The run-wide 429 breaker makes
-        # this safe on big LOSSLESS runs, which is why "auto" no longer avoids it.
-        ctx.obj.prefer_hires = TRACK_QUALITY in ("high", "max")
+    # Which client_id backs ALL requests this run — the stable matrix
+    # (`high`/`never` -> TV lenient LOSSLESS, `max`/`always` -> HiRes strict). A
+    # `high` run's occasional 24-bit-only (Atmos) track is escalated PER-TRACK to
+    # a secondary HiRes client (see the downloader), NOT run-wide, so a big `high`
+    # run cannot storm the HiRes rate limit. (Reverts 05b1eca.)
+    ctx.obj.prefer_hires = _resolve_prefer_hires(TRACK_QUALITY, CONFIG.download.hires_client)
 
     # Lyrics come from [metadata] in config.toml; these flags override per run
     # (the download flow reads CONFIG.metadata at runtime).
@@ -1267,6 +1362,16 @@ def download_callback(
             scan_path=SCAN_PATH,
             video_download_path=VIDEO_DOWNLOAD_PATH,
             fallback_api=ctx.obj.fallback_api,
+            # Secondary HiRes client for the PER-TRACK `max` ascent — only in
+            # `auto` while TV is the primary (i.e. `high + auto`). In `max`/`always`
+            # HiRes is already the primary (`api`), and `never` must never build or
+            # call a HiRes client, so both pass None here.
+            hires_api=(
+                ctx.obj.hires_api
+                if (CONFIG.download.hires_client == "auto" and not ctx.obj.prefer_hires)
+                else None
+            ),
+            primary_client_kind=("hires" if ctx.obj.prefer_hires else "tv"),
             destination_identity=CONFIG.download.destination_identity,
             identity_tracker=identity_tracker,
             audio_mode=AUDIO_MODE,
@@ -1332,14 +1437,14 @@ def download_callback(
                 log.debug(f"{item.id=}, {file_path=}")
                 rich_output.total_increment()
 
-                # Límite de tracks por sesión
-                admitted, announce_limit = _session_track_limit.admit()
+                # Session cap: reserve a slot BEFORE downloading. With concurrency
+                # this is the only correct gate — a reservation is atomic, so N
+                # tasks can never all slip past and overshoot the cap. reserve()
+                # may wait (all slots reserved) and resume when one is released, or
+                # be rejected once the cap is used up. A reserved slot MUST be
+                # settled below (commit on a real download, release otherwise).
+                admitted = await _session_track_limit.reserve()
                 if not admitted:
-                    if announce_limit:
-                        ctx.obj.console.print(
-                            f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
-                            f"Reinicia para continuar.[/]"
-                        )
                     return Path(""), item
 
                 if not track_metadata:
@@ -1353,12 +1458,33 @@ def download_callback(
                 # always matches dispatch order), while still letting a track's
                 # delay run concurrently with the *previous* track's in-flight
                 # download instead of stacking dead time after it.
-                download_path, was_downloaded = await downloader.download(
-                    item=item, file_path=Path(file_path),
-                    source_type=source_type, source_id=source_id,
-                )
+                try:
+                    download_path, was_downloaded = await downloader.download(
+                        item=item, file_path=Path(file_path),
+                        source_type=source_type, source_id=source_id,
+                    )
+                except BaseException:
+                    # Cancel/error after reserving but before settling: give the
+                    # slot back (sync, uninterruptible) so waiting tracks proceed
+                    # and the cap never leaks a reservation. Then re-raise.
+                    _session_track_limit.release()
+                    raise
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
+
+                # Settle the reservation. A real new download COMMITS its slot —
+                # and if it's the one that reaches the cap, the warning is printed
+                # NOW (immediately, even if no later track follows). An
+                # already-present file RELEASES its slot, unused, so a waiting
+                # track takes its place and existing files never eat the quota.
+                if was_downloaded:
+                    if _session_track_limit.commit():
+                        ctx.obj.console.print(
+                            f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
+                            f"Reinicia para continuar.[/]"
+                        )
+                else:
+                    _session_track_limit.release()
 
                 # Destination-volume identity (operations 4/5/6/9, v2.2 §1 /
                 # v2.3 §1): the same root operations 1/2/3 already checked for
@@ -2517,11 +2643,13 @@ def download_callback(
         ):
 
             async def wrapper(r: TidalResource):
-                # Cooperative cancel: on a multi-URL batch, skip every remaining
-                # resource the moment the user cancels instead of processing the
-                # whole pasted list.
+                # Cooperative cancel OR session-limit reached: skip every remaining
+                # resource the moment the run is stopped, instead of enumerating it
+                # (credits, covers, edition resolution) and issuing API calls. This
+                # is the single choke point that stops ALL per-resource work for
+                # not-yet-started resources once the cap is hit.
                 from tiddl.core.cancel import is_cancelled
-                if is_cancelled():
+                if is_cancelled() or _session_track_limit.is_reached():
                     return
                 _rkey = f"{r.type}/{r.id}"
                 # Resume: skip a resource already completed in a prior run of this
@@ -2547,51 +2675,31 @@ def download_callback(
                     raise
                 except Exception as e:
                     ctx.obj.console.print(f"[red]Error:[/] {e} at {r}")
-                # Mark done only on a clean, non-cancelled completion, so a resource
-                # that errored (or a run that got stopped) is retried on --resume.
-                if ok and resume_log is not None and not is_cancelled():
+                # Mark done only on a clean completion that was NOT stopped
+                # underneath it — not cancelled, and not cut short by the session
+                # cap (whose remaining tracks were never admitted). See
+                # _resource_resume_done: marking a cap-truncated resource done
+                # would make a later --resume skip its missing tracks.
+                if _resource_resume_done(
+                    ok, resume_log is not None, is_cancelled(),
+                    _session_track_limit.is_reached(),
+                ):
                     resume_log.mark_done(_rkey)
 
             async def expand_playlist(resource: TidalResource) -> list[TidalResource]:
                 """--albums/--artists: turn a playlist into its unique albums or
-                credited artists (same dedupe semantics as tidmon playlist)."""
-                playlist = await asyncio.to_thread(
-                    ctx.obj.api.get_playlist, playlist_uuid=resource.id
+                credited artists (same dedupe semantics as tidmon playlist).
+
+                Core lives in the module-level `_expand_playlist_resources` (so the
+                expansion fan-out is unit-testable); this keeps the console line.
+                Every API call goes through `ctx.obj.api` — TV for high+auto."""
+                expanded, skipped_videos, title = await _expand_playlist_resources(
+                    ctx.obj.api, resource.id,
+                    expand_albums=EXPAND_ALBUMS, expand_tracks=EXPAND_TRACKS,
                 )
-                seen: set = set()
-                expanded: list[TidalResource] = []
-                skipped_videos = 0
-                offset = 0
-                while True:
-                    page = await asyncio.to_thread(
-                        ctx.obj.api.get_playlist_items,
-                        playlist_uuid=resource.id, offset=offset,
-                    )
-                    for playlist_item in page.items:
-                        item = playlist_item.item
-                        if not isinstance(item, Track):
-                            skipped_videos += 1
-                            continue
-                        if EXPAND_ALBUMS:
-                            if item.album and item.album.id not in seen:
-                                seen.add(item.album.id)
-                                expanded.append(TidalResource(type="album", id=str(item.album.id)))
-                        elif EXPAND_TRACKS:
-                            if item.id not in seen:
-                                seen.add(item.id)
-                                expanded.append(TidalResource(type="track", id=str(item.id)))
-                        else:
-                            artists = item.artists or ([item.artist] if item.artist else [])
-                            for artist in artists:
-                                if artist and artist.id and artist.id not in seen:
-                                    seen.add(artist.id)
-                                    expanded.append(TidalResource(type="artist", id=str(artist.id)))
-                    offset += page.limit
-                    if offset >= page.totalNumberOfItems:
-                        break
                 kind = "albums" if EXPAND_ALBUMS else ("tracks" if EXPAND_TRACKS else "artists")
                 msg = (
-                    f"\n[bold magenta]Playlist expanded:[/] {playlist.title} "
+                    f"\n[bold magenta]Playlist expanded:[/] {title} "
                     f"-> [bold]{len(expanded)} unique {kind}[/]"
                 )
                 if skipped_videos:
@@ -2628,12 +2736,14 @@ def download_callback(
                 expand_total = len(ctx.obj.resources)
 
                 async def dispatch_one(r: TidalResource, idx: int):
-                    # Cooperative cancel: bail BEFORE the heartbeat print so a
-                    # cancelled run doesn't flood the log with a burst of
-                    # "[idx/total] type/id" lines for every remaining resource
-                    # (on a big expanded batch that's thousands of lines, which
-                    # reads as "still working" even though nothing downloads).
-                    if is_cancelled():
+                    # Cooperative cancel OR session-limit reached: bail BEFORE the
+                    # heartbeat print and before wrapper(), so a stopped run
+                    # doesn't flood the log with a burst of "[idx/total] type/id"
+                    # lines for every remaining resource (on a big expanded batch
+                    # that's thousands of lines, which reads as "still working"
+                    # even though nothing downloads) and issues no API traffic for
+                    # resources it will not process.
+                    if is_cancelled() or _session_track_limit.is_reached():
                         return
                     # Steady per-resource heartbeat: complete albums are skipped
                     # silently, so without this the output can go quiet for
@@ -2645,7 +2755,8 @@ def download_callback(
 
                 try:
                     await _bounded_dispatch(
-                        ctx.obj.resources, dispatch_one, max(1, ARTIST_CONCURRENCY)
+                        ctx.obj.resources, dispatch_one, max(1, ARTIST_CONCURRENCY),
+                        should_stop=_session_track_limit.is_reached,
                     )
                 finally:
                     # Flush report_playback pendientes y cierra la sesión HTTP compartida

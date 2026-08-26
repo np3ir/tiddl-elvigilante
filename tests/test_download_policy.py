@@ -15,19 +15,46 @@ class ResponseError(Exception):
         self.response = SimpleNamespace(status_code=status)
 
 
-def test_session_limit_warns_only_once_for_remaining_scheduled_tracks():
+async def test_session_limit_counts_new_downloads_and_warns_once():
+    # The cap counts NEW downloads (commit), not admitted tracks. A track is
+    # reserved, downloaded, committed; the commit that reaches the cap latches the
+    # signal and returns the one-shot warning flag.
     policy = SessionTrackLimit(limit=1)
 
-    assert policy.admit() == (True, False)
-    assert policy.admit() == (False, True)
-    assert policy.admit() == (False, False)
-    assert policy.admit() == (False, False)
+    assert await policy.reserve() is True       # under quota -> reserved
+    assert not policy.is_reached()
+    assert policy.commit() is True              # the one allowed NEW download
+    assert policy.is_reached()                  # quota used -> run-wide signal
+    assert await policy.reserve() is False      # now closed
+    assert await policy.reserve() is False
 
 
-def test_zero_session_limit_is_unlimited():
+async def test_existing_files_release_their_reservation_without_charge():
+    # An already-present track releases its reserved slot (was_downloaded=False)
+    # and does NOT eat the quota, so a run over a mostly-downloaded library keeps
+    # working on the missing tracks.
+    policy = SessionTrackLimit(limit=2)
+
+    assert await policy.reserve() is True
+    policy.release()                            # already on disk -> slot back
+    assert not policy.is_reached()
+    assert await policy.reserve() is True       # still open after the release
+    assert policy.commit() is False             # downloaded=1 < 2
+    assert await policy.reserve() is True
+    assert policy.commit() is True              # downloaded=2 == 2 -> reached
+    assert policy.is_reached()
+
+
+async def test_zero_session_limit_is_unlimited():
     policy = SessionTrackLimit(limit=0)
 
-    assert [policy.admit() for _ in range(3)] == [(True, False)] * 3
+    for _ in range(3):
+        assert await policy.reserve() is True
+    # commit/release are no-ops when disabled and never latch the signal.
+    for _ in range(5):
+        assert policy.commit() is False
+    assert not policy.is_reached()
+    assert await policy.reserve() is True
 
 
 def test_http_401_is_authentication_not_rate_limit():

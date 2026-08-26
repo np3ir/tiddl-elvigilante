@@ -86,6 +86,44 @@ def _abort_for_authentication_error(error: Exception) -> bool:
     return True
 
 
+def _pick_stream_client(quality, primary_api, primary_kind: str, hires_api):
+    """Client + kind for ONE per-track stream attempt.
+
+    The 24-bit ``max`` (``HI_RES_LOSSLESS``) tier goes to the SECONDARY HiRes
+    client when one is provided — the per-track ascent in TV-primary
+    ``high + auto`` for an Atmos track whose only FLAC is 24-bit. Every other
+    tier — and ``HI_RES_LOSSLESS`` itself when no secondary HiRes client exists
+    (HiRes is already primary, or ``never``) — goes to the primary. Pure function
+    for direct unit coverage of the per-track routing."""
+    if quality == "HI_RES_LOSSLESS" and hires_api is not None:
+        return hires_api, "hires"
+    return primary_api, primary_kind
+
+
+def _hires_capable(primary_kind: str, hires_api) -> bool:
+    """Whether THIS run can serve a 24-bit ``HI_RES_LOSSLESS`` request at all:
+    either the primary client is HiRes (``max``/``always``), or a secondary HiRes
+    client exists for the per-track ascent (``high + auto`` with a HiRes token).
+
+    False for ``never`` and for ``high + auto`` when no HiRes token is set up.
+    """
+    return primary_kind == "hires" or hires_api is not None
+
+
+def _supported_attempts(qualities, primary_kind: str, hires_api):
+    """Filter the per-track cascade down to tiers a client can actually serve.
+
+    Only ``HI_RES_LOSSLESS`` is capability-gated: when the run has no HiRes-capable
+    client (:func:`_hires_capable` is False) it is DROPPED rather than routed to
+    the TV primary — the TV client cannot deliver the 24-bit FLAC, so sending it
+    ``HI_RES_LOSSLESS`` would waste a request and (pre-fix) mislabel the result.
+    The cascade then continues on the next offered tier per ``quality_policy``.
+    Every other tier is served by the primary (TV or HiRes) and is kept as-is."""
+    if _hires_capable(primary_kind, hires_api):
+        return list(qualities)
+    return [q for q in qualities if q != "HI_RES_LOSSLESS"]
+
+
 def _guarded_mkdir(root: Path, path: Path, mode: str) -> "anchor.AnchorCheck":
     """Operations 1/2 (destination-volume identity, v2.2 §1): checked
     immediately before creating this item's directory — a refusal here is
@@ -389,6 +427,8 @@ class Downloader:
         scan_path: Path,
         video_download_path: Optional[Path] = None,
         fallback_api: Optional[TidalAPI] = None,
+        hires_api: Optional[TidalAPI] = None,
+        primary_client_kind: Literal["tv", "hires"] = "hires",
         destination_identity: Literal["off", "strict"] = "off",
         identity_tracker: Optional["anchor.IdentityFailureTracker"] = None,
         audio_mode: Literal["auto", "stereo"] = "auto",
@@ -398,6 +438,12 @@ class Downloader:
         # Modo hibrido: cliente TV (lossless) para cuando el primario (HiRes)
         # degrada un track no-HiRes a 320. None = sin fallback.
         self.fallback_api = fallback_api
+        # Secondary HiRes client for the PER-TRACK `max` (HI_RES_LOSSLESS) ascent
+        # while TV backs the run (`high + auto`). None in HiRes-primary / `never`.
+        self.hires_api = hires_api
+        # Which client backs `self.api`: "tv" for `high`/`never`, "hires" for
+        # `max`/`always`. Used per-attempt to route and de-dup stream requests.
+        self.primary_client_kind = primary_client_kind
         self.rich_output = rich_output
         self.semaphore = asyncio.Semaphore(threads_count)
         # Keep the user tier separate from TIDAL's playback enum. User
@@ -1253,15 +1299,41 @@ class Downloader:
                 attempt_qualities: list[TrackQuality] = cascade_api_qualities(
                     self.requested_quality, _tagset
                 ) or ["LOW"]
+                # Capability filter: if this run has no HiRes-capable client
+                # (`never`, or `high + auto` without a HiRes token) drop the 24-bit
+                # HI_RES_LOSSLESS rung instead of routing it to the TV primary,
+                # which cannot serve it. Keeps `never` from ever emitting a HiRes
+                # quality and stops a missing-token run from sending Max to TV.
+                attempt_qualities = _supported_attempts(
+                    attempt_qualities, self.primary_client_kind, self.hires_api
+                ) or ["LOW"]
+
+                # Per-track de-dup: never issue the same (client_kind, quality)
+                # pair twice — prevents a request cycle when a controlled fallback
+                # re-enters the cascade. LOCAL to this download() call (no shared
+                # instance state) so concurrent tracks never race on it.
+                _tried: set = set()
 
                 for _qi, q in enumerate(attempt_qualities):
                     # Cooperative cancel: don't try the next quality tier if the
                     # user cancelled while the previous tier was being fetched.
                     if is_cancelled():
                         return None, False
+                    # Per-track `max` ascent: an Atmos track whose only FLAC is the
+                    # 24-bit HI_RES_LOSSLESS tier needs the SECONDARY HiRes client
+                    # for THIS request only; every other tier stays on the primary.
+                    # In HiRes-primary / `never`, hires_api is None.
+                    _client, _kind = _pick_stream_client(
+                        q, self.api, self.primary_client_kind, self.hires_api
+                    )
+                    # Never re-issue the same (client, quality): a controlled
+                    # fallback must not form a request cycle.
+                    if (_kind, q) in _tried:
+                        continue
+                    _tried.add((_kind, q))
                     try:
                         # Use asyncio.to_thread to prevent blocking the event loop during retries (sleep)
-                        stream = await asyncio.to_thread(self.api.get_track_stream, track_id=item.id, quality=q)
+                        stream = await asyncio.to_thread(_client.get_track_stream, track_id=item.id, quality=q)
                     except Exception as e:
                         # Check for Asset Not Ready (4005) first to avoid noisy logs
                         try:
@@ -1302,7 +1374,9 @@ class Downloader:
                     # lossless), pide LOSSLESS al cliente fallback (TV), que SI entrega
                     # el FLAC 16-bit. Headless, sin ventanas. Sustituye el stream.
                     if (self.fallback_api is not None
-                            and quality_score.get(stream.audioQuality, 0) < quality_score.get("LOSSLESS", 2)):
+                            and quality_score.get(stream.audioQuality, 0) < quality_score.get("LOSSLESS", 2)
+                            and ("tv", "LOSSLESS") not in _tried):
+                        _tried.add(("tv", "LOSSLESS"))
                         try:
                             _fb = await asyncio.to_thread(
                                 self.fallback_api.get_track_stream, track_id=item.id, quality="LOSSLESS"
