@@ -1437,14 +1437,14 @@ def download_callback(
                 log.debug(f"{item.id=}, {file_path=}")
                 rich_output.total_increment()
 
-                # Límite de tracks por sesión
-                admitted, announce_limit = _session_track_limit.admit()
+                # Session cap: reserve a slot BEFORE downloading. With concurrency
+                # this is the only correct gate — a reservation is atomic, so N
+                # tasks can never all slip past and overshoot the cap. reserve()
+                # may wait (all slots reserved) and resume when one is released, or
+                # be rejected once the cap is used up. A reserved slot MUST be
+                # settled below (commit on a real download, release otherwise).
+                admitted = await _session_track_limit.reserve()
                 if not admitted:
-                    if announce_limit:
-                        ctx.obj.console.print(
-                            f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
-                            f"Reinicia para continuar.[/]"
-                        )
                     return Path(""), item
 
                 if not track_metadata:
@@ -1458,18 +1458,33 @@ def download_callback(
                 # always matches dispatch order), while still letting a track's
                 # delay run concurrently with the *previous* track's in-flight
                 # download instead of stacking dead time after it.
-                download_path, was_downloaded = await downloader.download(
-                    item=item, file_path=Path(file_path),
-                    source_type=source_type, source_id=source_id,
-                )
+                try:
+                    download_path, was_downloaded = await downloader.download(
+                        item=item, file_path=Path(file_path),
+                        source_type=source_type, source_id=source_id,
+                    )
+                except BaseException:
+                    # Cancel/error after reserving but before settling: give the
+                    # slot back (sync, uninterruptible) so waiting tracks proceed
+                    # and the cap never leaks a reservation. Then re-raise.
+                    _session_track_limit.release()
+                    raise
 
                 log.debug(f"{download_path=}, {was_downloaded=}")
 
-                # Count only tracks this run actually fetched toward the session
-                # cap; an already-present file (skip_existing) must not consume it.
-                # Reaching the cap latches the run-wide `reached` signal that
-                # stops dispatch/enumeration of the remaining resources.
-                _session_track_limit.record(bool(was_downloaded))
+                # Settle the reservation. A real new download COMMITS its slot —
+                # and if it's the one that reaches the cap, the warning is printed
+                # NOW (immediately, even if no later track follows). An
+                # already-present file RELEASES its slot, unused, so a waiting
+                # track takes its place and existing files never eat the quota.
+                if was_downloaded:
+                    if _session_track_limit.commit():
+                        ctx.obj.console.print(
+                            f"[yellow]Límite de sesión alcanzado ({_session_limit} tracks). "
+                            f"Reinicia para continuar.[/]"
+                        )
+                else:
+                    _session_track_limit.release()
 
                 # Destination-volume identity (operations 4/5/6/9, v2.2 §1 /
                 # v2.3 §1): the same root operations 1/2/3 already checked for

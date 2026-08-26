@@ -63,15 +63,14 @@ def test_mandatory_no_heartbeat_or_api_for_remaining_resources_after_limit():
         heartbeats.append((idx, album))          # the `[idx/total]` line
         # wrapper -> handle_resource: enumerating a resource IS an API call.
         api_calls.append(("enumerate", album))
-        # handle_item per track: admit-gate, then a real download is an API call.
+        # handle_item per track: reserve -> download -> commit (a real download).
         for _t in range(tracks_per_album):
-            admitted, announce = limit.admit()
-            if announce:
-                announces.append(album)
+            admitted = await limit.reserve()
             if not admitted:
                 break                            # cap hit: stop admitting more
             api_calls.append(("stream", album))
-            limit.record(was_downloaded=True)
+            if limit.commit():                   # the commit that reached the cap
+                announces.append(album)
 
     asyncio.run(
         _bounded_dispatch(albums, dispatch_one_like, concurrency=1,
@@ -110,7 +109,7 @@ def test_resource_resume_done_truth_table():
     assert done(True, False, False, False) is False
 
 
-def test_session_limit_is_not_user_cancel_or_rate_limit():
+async def test_session_limit_is_not_user_cancel_or_rate_limit():
     # Point 7: the cap must NOT masquerade as Cancel/401/429 — it is its own
     # run-local signal on the policy object, leaving global cancel untouched.
     from tiddl.core import cancel
@@ -118,7 +117,8 @@ def test_session_limit_is_not_user_cancel_or_rate_limit():
     cancel.clear()
     try:
         limit = SessionTrackLimit(limit=1)
-        limit.record(was_downloaded=True)
+        assert await limit.reserve() is True
+        limit.commit()
         assert limit.is_reached()
         assert not cancel.is_cancelled()  # reaching the cap never cancels the run
     finally:
