@@ -17,6 +17,57 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-08-26
+
+### Fixed
+
+- **Large `--artists` / high-quality runs no longer trip TIDAL's HTTP 429 rate
+  limit.** A regression (`05b1eca`) had widened the client selector so that
+  `-q high` (the default) with `hires_client=auto` promoted the WHOLE run —
+  including all enumeration of playlists, artists, albums and credits — to the
+  strict, low-limit **HiRes** client. On a big `--artists` expansion (every
+  credited artist's full discography = `get_artist_albums` + `get_album_items`
+  per album) TIDAL answered with real **HTTP 429 (`Retry-After: 60`)**. The
+  stable client matrix is restored: `high + auto → TV`, `max + auto → HiRes`,
+  `* + never → TV`, `* + always → HiRes`. In `high + auto` **all enumeration
+  stays on the lenient TV client**; the 24-bit `HI_RES_LOSSLESS` tier is now
+  requested **per track only** — for a track whose only FLAC is 24-bit (e.g.
+  Atmos) — through a separate secondary HiRes client, never for enumeration.
+  `hires_client=never` never builds or calls the HiRes client, and a run with no
+  HiRes token never sends the 24-bit request to the TV client.
+- **The session-track cap now actually stops the run.** Reaching
+  `max_tracks_per_session` used to print "Reinicia para continuar" but the engine
+  kept dispatching and enumerating the remaining resources (real API calls, more
+  `[n/total]` lines). Reaching the cap now latches a run-wide stop: no further
+  resource is dequeued, enumerated (credits, covers, edition resolution) or
+  requested; already-in-flight downloads finish cleanly. On `--resume`, a
+  resource cut short by the cap is **not** checkpointed, so a later run re-fetches
+  its remaining tracks.
+
+### Changed
+
+- **One shared per-run request budget** now paces the TV and HiRes clients
+  *together*, so activating both cannot exceed `requests_per_minute` (previously
+  each client had its own limiter, allowing up to ~2× the configured rate). It is
+  built from the effective rate, honouring the `--rpm` CLI override, and is
+  per-run (not process-global). The run-wide 429 circuit breaker remains as the
+  last-resort host-safe stop.
+- **`max_tracks_per_session` counts only NEW downloads.** An already-present file
+  (`skip_existing`) no longer consumes the quota, so a run over a mostly-complete
+  library keeps making progress on the genuinely-missing tracks. Under
+  concurrency the cap is enforced with an **atomic per-track reservation**, so
+  parallel tracks can never overshoot the limit; the "limit reached" warning is
+  emitted immediately by the download that reaches it.
+
+### Notes
+
+- **Reaching the session cap is a normal stop, not an error.** It is a run-wide
+  signal distinct from a user cancel / 429 / 401, so `tiddl download …` still
+  exits **0** when it stops because the cap was reached.
+- **Engine-only release.** No functional change to the CLI's `Ctrl+C` handling.
+  Re-pinning the bundled engine and rebuilding/publishing the GUI are a later,
+  separate step and are not part of this engine release.
+
 ## [1.5.3] - 2026-08-25
 
 ### Fixed
