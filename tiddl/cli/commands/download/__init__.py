@@ -311,6 +311,29 @@ def _download_exit_code(
     return 1 if any_identity_refused or cooperative_stop else None
 
 
+def _resolve_prefer_hires(track_quality: str, hires_client: str) -> bool:
+    """Which client backs the WHOLE run, from the requested ``-q`` + config
+    ``hires_client`` — the STABLE matrix (restored from ``d1613b0``):
+
+    | quality  | hires_client | primary |
+    |----------|--------------|---------|
+    | high     | auto         | TV      |
+    | max      | auto         | HiRes   |
+    | any      | never        | TV      |
+    | any      | always       | HiRes   |
+
+    Only ``max`` (auto) or ``always`` put the strict HiRes client on the whole
+    run; ``high`` (auto) and ``never`` stay on the lenient TV client. A ``high``
+    run's occasional 24-bit-only (Atmos) track is escalated PER-TRACK to a
+    secondary HiRes client instead of promoting the whole run (which is what
+    ``05b1eca`` did, causing real 429s). Pure function for direct unit coverage."""
+    if hires_client == "always":
+        return True
+    if hires_client == "never":
+        return False
+    return track_quality == "max"  # "auto"
+
+
 def _finish_download_run(
     console, any_identity_refused: bool, cooperative_stop: bool = False
 ) -> "int | None":
@@ -891,17 +914,12 @@ def download_callback(
     # `hires_client` + the requested -q. The HiRes client has a strict TIDAL
     # rate limit (429 on big lists); the TV client is lenient but tops at
     # LOSSLESS. Set BEFORE any ctx.obj.api access (the refresh below builds it).
-    _hires_mode = CONFIG.download.hires_client
-    if _hires_mode == "always":
-        ctx.obj.prefer_hires = True
-    elif _hires_mode == "never":
-        ctx.obj.prefer_hires = False
-    else:  # "auto": use the HiRes client for any FLAC start (high or max). high
-        # needs it too now, because an Atmos track has no 16-bit FLAC and the
-        # cascade climbs it to the 24-bit `max` FLAC (preferring FLAC over Atmos),
-        # which only the HiRes client can deliver. The run-wide 429 breaker makes
-        # this safe on big LOSSLESS runs, which is why "auto" no longer avoids it.
-        ctx.obj.prefer_hires = TRACK_QUALITY in ("high", "max")
+    # Which client_id backs ALL requests this run — the stable matrix
+    # (`high`/`never` -> TV lenient LOSSLESS, `max`/`always` -> HiRes strict). A
+    # `high` run's occasional 24-bit-only (Atmos) track is escalated PER-TRACK to
+    # a secondary HiRes client (see the downloader), NOT run-wide, so a big `high`
+    # run cannot storm the HiRes rate limit. (Reverts 05b1eca.)
+    ctx.obj.prefer_hires = _resolve_prefer_hires(TRACK_QUALITY, CONFIG.download.hires_client)
 
     # Lyrics come from [metadata] in config.toml; these flags override per run
     # (the download flow reads CONFIG.metadata at runtime).
@@ -1267,6 +1285,16 @@ def download_callback(
             scan_path=SCAN_PATH,
             video_download_path=VIDEO_DOWNLOAD_PATH,
             fallback_api=ctx.obj.fallback_api,
+            # Secondary HiRes client for the PER-TRACK `max` ascent — only in
+            # `auto` while TV is the primary (i.e. `high + auto`). In `max`/`always`
+            # HiRes is already the primary (`api`), and `never` must never build or
+            # call a HiRes client, so both pass None here.
+            hires_api=(
+                ctx.obj.hires_api
+                if (CONFIG.download.hires_client == "auto" and not ctx.obj.prefer_hires)
+                else None
+            ),
+            primary_client_kind=("hires" if ctx.obj.prefer_hires else "tv"),
             destination_identity=CONFIG.download.destination_identity,
             identity_tracker=identity_tracker,
             audio_mode=AUDIO_MODE,

@@ -12,6 +12,7 @@ from filelock import FileLock
 from rich.console import Console
 
 from tiddl.core.api import TidalClientImproved, TidalAPI
+from tiddl.core.api.budget import SharedRequestBudget
 from tiddl.cli.config import APP_PATH, CONFIG
 from tiddl.core.auth import AuthAPI
 from tiddl.core.auth.client import get_auth_client_for
@@ -30,6 +31,9 @@ class ContextObject:
     _api: TidalAPI | None
     _fallback_api: TidalAPI | None
     _fallback_built: bool
+    _hires_api: TidalAPI | None
+    _hires_built: bool
+    request_budget: SharedRequestBudget
     api_omit_cache: bool
     debug_path: Path | None
 
@@ -41,8 +45,16 @@ class ContextObject:
         self._api = None
         self._fallback_api = None
         self._fallback_built = False
+        self._hires_api = None
+        self._hires_built = False
         self.api_omit_cache = api_omit_cache
         self.debug_path = debug_path
+        # ONE shared request budget for THIS run/context: the primary client, the
+        # LOSSLESS fallback (HiRes mode) and the secondary HiRes client (per-track
+        # `max` ascent in TV mode) all draw from it, so their COMBINED traffic
+        # stays within requests_per_minute. Per-context (NOT process-global): a new
+        # run starts clean and Cancel/401/429 cleanup just drops the context.
+        self.request_budget = SharedRequestBudget(CONFIG.download.requests_per_minute)
         # Which client_id backs the PRIMARY api. True = HiRes (fX2Jxdmnt): 24-bit
         # but a STRICT TIDAL rate limit (429 on big lists). False = TV
         # (4N3n6Q1x95LL5K7p): LOSSLESS 16-bit but lenient. The download command
@@ -102,6 +114,7 @@ class ContextObject:
             refresh_token=auth_data.refresh_token,
             token_expiry=auth_data.expires_at,
             requests_per_minute=CONFIG.download.requests_per_minute,
+            budget=self.request_budget,
         )
 
         return TidalAPI(client, auth_data.user_id, auth_data.country_code)
@@ -140,6 +153,25 @@ class ContextObject:
                 AUTH_FALLBACK_FILE, "auth_refresh_fallback.lock", "api_cache_fallback", require=False
             )
         return self._fallback_api
+
+    @property
+    def hires_api(self) -> TidalAPI | None:
+        """SECONDARY HiRes client for the per-track ``max`` ascent in TV-primary
+        mode — an Atmos track whose only FLAC is the 24-bit HI_RES_LOSSLESS tier.
+
+        DISTINCT from ``fallback_api`` (which is the TV client used to fix HiRes
+        degradation when HiRes is primary): this is the HiRes client used only for
+        the occasional per-track HI_RES_LOSSLESS request while TV backs the run.
+        It shares this run's request budget. The caller must NOT touch it when
+        ``hires_client='never'`` and does not need it when HiRes is already the
+        primary (``max``/``always`` — then ``api`` handles HI_RES_LOSSLESS).
+        ``require=False`` so it is ``None`` when no HiRes token exists."""
+        if not self._hires_built:
+            self._hires_built = True
+            self._hires_api = self._build_api(
+                AUTH_DATA_FILE, "auth_refresh.lock", "api_cache", require=False
+            )
+        return self._hires_api
 
 
 class Context(typer.Context):
