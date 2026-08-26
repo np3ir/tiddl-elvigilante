@@ -133,6 +133,33 @@ async def test_reserve_cancelled_while_waiting_is_cleaned_up():
     assert limit.reserved == 0
 
 
+async def test_wakeup_is_passed_on_when_a_woken_waiter_is_cancelled():
+    # Race: release() wakes waiter A, but A is cancelled BEFORE it reserves. The
+    # freed slot must not be orphaned — A hands the wakeup to waiter B, which then
+    # obtains the slot. No deadlock, no negative counter, invariant preserved.
+    limit = SessionTrackLimit(limit=1)
+    assert await limit.reserve() is True          # H holds the only slot
+    a = asyncio.ensure_future(limit.reserve())    # A parks
+    b = asyncio.ensure_future(limit.reserve())    # B parks
+    await asyncio.sleep(0)                         # let both park on their futures
+    assert len(limit._waiters) == 2
+
+    limit.release()                               # frees the slot -> wakes A (first)
+    assert len(limit._waiters) == 1               # A dequeued; B still waiting
+
+    a.cancel()                                    # cancel A before it can reserve
+    with pytest.raises(asyncio.CancelledError):
+        await a
+
+    # B must get the slot handed on from A's aborted wakeup.
+    assert await b is True
+    assert limit.reserved == 1                    # exactly B holds it now
+    assert limit.downloaded == 0
+    assert limit.reserved >= 0                    # never went negative
+    assert limit.downloaded + limit.reserved <= limit.limit
+    assert limit._waiters == []                   # no stranded waiter
+
+
 async def test_resume_does_not_checkpoint_a_cap_truncated_resource():
     # 5. --resume after the cap: a resource cut short by the limit must NOT be
     #    marked complete, so a later --resume retries its missing tracks.

@@ -75,7 +75,14 @@ class SessionTrackLimit:
                 await fut
             except asyncio.CancelledError:
                 if fut in self._waiters:
+                    # Cancelled BEFORE being woken: just drop out of the queue.
                     self._waiters.remove(fut)
+                elif self.downloaded + self.reserved < self.limit:
+                    # Cancelled AFTER a release woke us but BEFORE we reserved: we
+                    # consumed a wakeup we can't use while a slot is still free. Pass
+                    # it on to the next waiter, or the freed slot is orphaned and the
+                    # remaining waiters deadlock. (Same re-wake asyncio.Lock does.)
+                    self._wake_one()
                 raise
             # woken: re-check from the top
 
