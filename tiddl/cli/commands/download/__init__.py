@@ -889,6 +889,11 @@ def download_callback(
         CONFIG.download.hires_client = HIRES_CLIENT
     if REQUESTS_PER_MINUTE is not None:
         CONFIG.download.requests_per_minute = REQUESTS_PER_MINUTE
+    # Build the ONE shared request budget from the EFFECTIVE rpm (config +
+    # optional --rpm override just applied) BEFORE any client is constructed, so
+    # both the TV and HiRes clients space their COMBINED traffic at the effective
+    # rate. Done unconditionally: with no --rpm this uses the config value.
+    ctx.obj.configure_request_budget(CONFIG.download.requests_per_minute)
     if UPDATE_MTIME is not None:
         CONFIG.download.update_mtime = UPDATE_MTIME
     if EXCLUDE_COMPILATIONS is not None:

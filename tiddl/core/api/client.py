@@ -230,10 +230,12 @@ class TidalClientImproved:
                 params=params,
                 expire_after=expire_after
             )
-
-            # Cache hits don't consume API quota — release the slot
-            if getattr(res, 'from_cache', False):
-                self._budget.refund()
+            # A true cache hit was already served by the only_if_cached peek
+            # above (before throttle). If this GET still comes back from_cache it
+            # was a conditional revalidation — a real network round-trip — so it
+            # keeps the slot it just throttled for. We deliberately never hand the
+            # slot back: moving the shared spacing clock backward here could roll
+            # back a reservation another thread already made and burst past RPM.
 
         # ============================================================
         # IMPROVEMENT 5: Detailed rate limiting handling (429)

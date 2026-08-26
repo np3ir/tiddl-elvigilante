@@ -12,10 +12,15 @@ each client — deliberately **NOT** process-global:
 * tests are deterministic (inject a fake clock);
 * the reusable in-process GUI host accrues no extra global state.
 
-Only a **real HTTP request** consumes budget: a cache hit must call neither
-:meth:`throttle` nor must it leave a slot spent (see :meth:`refund`). A 429
-retry is a real request and consumes budget again (and still counts for the
-run-wide 429 circuit breaker, which is a separate last-resort protection).
+Only a **real HTTP request** consumes budget, and the client enforces that by
+*peeking the cache first*: a true cache hit returns before :meth:`throttle` is
+ever called, so it pays no spacing. There is deliberately **no** "refund" that
+moves the spacing clock backward — in concurrent use that could roll back a slot
+another thread had already reserved and let a later request burst past the RPM.
+A conditional revalidation that comes back ``304`` is a genuine network
+round-trip, so it correctly keeps the slot it throttled for. A 429 retry is a
+real request too and consumes budget again (and still counts for the run-wide
+429 circuit breaker, which is a separate last-resort protection).
 """
 from __future__ import annotations
 
@@ -72,11 +77,3 @@ class SharedRequestBudget:
                 self._sleep(wait)
             self._last = self._clock()
             self.request_count += 1
-
-    def refund(self) -> None:
-        """Return the slot when an admitted 'request' was actually served from
-        cache (revalidated) and consumed no network quota."""
-        with self._lock:
-            self._last = self._clock() - self._interval
-            if self.request_count > 0:
-                self.request_count -= 1
