@@ -29,8 +29,9 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
   album scanned poisoned the index, so a same-titled track in the **other** album
   matched a file that lives in a **different** folder. The engine then reported
   `Exists (Alt)` and pointed the metadata writer at a path that does not exist in
-  that folder, producing a `[WinError 2]` and **silently skipping the Atmos track**.
-  The alternative-extension lookup is now scoped to the **track's own directory**:
+  that folder, **skipping the Atmos track and emitting a metadata warning**
+  (`[WinError 2]`). The alternative-extension lookup is now scoped to the
+  **track's own directory**:
   - Only a real file **in the same folder** can satisfy the request; a same-stem
     file in another album is ignored.
   - The **real on-disk name and casing** are returned (matching is
@@ -39,12 +40,24 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
   - When **Atmos is the requested modality** (`-q atmos` on a track that offers
     Atmos), a same-stem **stereo FLAC is not accepted** as an alternative — Atmos
     and stereo are treated as **distinct modalities**. For a stereo request
-    (`-q normal`/`low`) or a FLAC request (`-q high`/`max`), an existing same-folder
-    file still satisfies as before.
+    (`-q normal`/`low`) or a FLAC request (`-q high`/`max`), an eligible
+    equal-or-better same-folder alternative continues to satisfy the request.
   - If the cached folder listing is stale (the file vanished, or the name is a
     directory), the folder is re-scanned **once** and revalidated with a real
     `is_file()` check before reporting `Exists (Alt)`; otherwise the track is
     downloaded normally.
+
+### Documentation
+
+- Engine-reference documentation improvements folded in for this release. These
+  are **documentation only** — they describe existing behaviour and are **not**
+  new functional changes in 1.5.5:
+  - The `tiddl destination` group — `trust` / `status` / `forget`.
+  - The safety model of `--confirm-mounted` and `--adopt-existing`.
+  - `hires_client`, `quality_policy`, and the `--rpm` override.
+  - The shared per-run TV/HiRes request budget.
+  - The `max_tracks_per_session` semantics (counts only new downloads; reaching
+    the cap is a normal stop).
 
 ### Notes
 
