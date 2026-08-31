@@ -65,11 +65,20 @@ def test_empty_directory_listing_is_none():
     assert _find_alt_extension(Path("/x/01. T.m4a"), ".m4a", set()) is None
 
 
-def test_extension_case_is_normalised():
-    # 7. `.FLAC` on disk / `.M4A` requested still match (Windows/SMB semantics).
-    assert _find_alt_extension(Path("/x/01. T.m4a"), ".M4A", {"01. T.FLAC"}) == (
-        Path("/x/01. T.flac")
-    )
+def test_extension_case_matches_and_real_casing_is_preserved():
+    # 7. `.FLAC` on disk / `.M4A` requested match (case-insensitive), and the
+    #    returned path keeps the exact on-disk casing (valid file on a
+    #    case-sensitive filesystem, not a lowercased reconstruction).
+    res = _find_alt_extension(Path("/x/01. T.m4a"), ".M4A", {"01. T.FLAC"})
+    assert res is not None
+    assert res.name == "01. T.FLAC"
+
+
+def test_casing_tie_prefers_exact_match_deterministically():
+    # Both `01. T.flac` and `01. T.FLAC` present (only possible on a case-sensitive
+    # FS): the exact-case name that matches the requested reconstruction wins.
+    res = _find_alt_extension(Path("/x/01. T.m4a"), ".m4a", {"01. T.FLAC", "01. T.flac"})
+    assert res is not None and res.name == "01. T.flac"
 
 
 def test_flac_and_m4a_coexisting_is_deterministic_and_atmos_is_distinct():
@@ -173,6 +182,41 @@ def test_atmos_request_ignores_a_same_folder_stereo_flac(tmp_path):
         return await s._resolve_alt_existing(d / "01. a lot.m4a", ".m4a", True)
 
     assert asyncio.run(run()) is None
+
+
+def test_resolve_preserves_real_casing_stereo_and_is_a_file(tmp_path):
+    # §5. A `Track.FLAC` (uppercase ext on disk) satisfies a stereo `.m4a` request;
+    #     the resolved path keeps `Track.FLAC` and is a real file (so it works on a
+    #     case-sensitive filesystem, and no download is started).
+    d = tmp_path / "Album"
+    d.mkdir()
+    (d / "01. Track.FLAC").write_bytes(b"x")
+
+    async def run():
+        s = _Stub()
+        return await s._resolve_alt_existing(d / "01. Track.m4a", ".m4a", False)
+
+    res = asyncio.run(run())
+    assert res is not None
+    assert res.name == "01. Track.FLAC"   # exact on-disk casing, not lowercased
+    assert res.is_file()                  # a real file (no re-download)
+
+
+def test_resolve_preserves_real_casing_atmos_container(tmp_path):
+    # §5. Atmos request: a `.MP4` (uppercase) Atmos container satisfies it and the
+    #     resolved path keeps the real name.
+    d = tmp_path / "Atmos"
+    d.mkdir()
+    (d / "01. Track.MP4").write_bytes(b"x")
+
+    async def run():
+        s = _Stub()
+        return await s._resolve_alt_existing(d / "01. Track.m4a", ".m4a", True)
+
+    res = asyncio.run(run())
+    assert res is not None
+    assert res.name == "01. Track.MP4"
+    assert res.is_file()
 
 
 def test_stem_index_is_gone():

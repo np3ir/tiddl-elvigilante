@@ -168,18 +168,30 @@ def _find_alt_extension(
       silently skipping an Atmos track because a homonymous stereo FLAC exists.
 
     Matching is case-insensitive on the file name (Windows/SMB semantics) and the
-    requested suffix is normalised, so ``.FLAC`` / ``.M4A`` match. Pure function
-    for direct unit coverage."""
+    requested suffix is normalised, so ``.FLAC`` / ``.M4A`` match. The returned
+    path uses the REAL on-disk name (exact casing), so it is a valid file on
+    case-sensitive filesystems too; on a casing-only tie the exact-case name wins,
+    else a stable order. Pure function for direct unit coverage."""
     req = (requested_suffix or "").lower()
     target = _ALT_QUALITY.get(req, 0)
-    names_ci = {n.casefold() for n in dir_names}
+    # Map each casefolded name to the REAL on-disk names, so the returned path
+    # keeps the exact casing that exists on disk. Returning a lowercased
+    # reconstruction (`with_suffix`) would not be a real file on a case-sensitive
+    # filesystem — the caller's is_file() would then fail and re-download.
+    by_ci: "dict[str, list[str]]" = {}
+    for name in dir_names:
+        by_ci.setdefault(name.casefold(), []).append(name)
     candidates = (".m4a", ".mp4") if atmos_request else (".flac", ".m4a", ".mp4")
     for ext in candidates:
         if ext == req or _ALT_QUALITY.get(ext, 0) < target:
             continue
-        alt = existing_file_path.with_suffix(ext)
-        if alt.name.casefold() in names_ci:
-            return alt
+        wanted = existing_file_path.with_suffix(ext).name
+        matches = by_ci.get(wanted.casefold())
+        if not matches:
+            continue
+        # Deterministic: an exact-case match wins; otherwise a stable order.
+        actual = wanted if wanted in matches else sorted(matches)[0]
+        return existing_file_path.parent / actual
     return None
 
 
