@@ -6,7 +6,7 @@
 
 ## 📋 Table of Contents
 
-1. [Main Commands](#main-commands)
+1. [Main Commands](#main-commands) — `tiddl auth`, `tiddl download`, `tiddl info`, `tiddl destination`, and the M3U8 export flow
 2. [Download Subcommands](#download-subcommands)
 3. [Global Options](#global-options)
 4. [Command Options](#command-options)

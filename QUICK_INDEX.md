@@ -259,7 +259,7 @@ tiddl download url https://tidal.com/playlist/xyz
 |--------|-------|
 | Lines | 734 |
 | Size | 17 KB |
-| Commands explained | 5 main (auth, download, info, destination, + M3U8 note) |
+| Commands explained | 4 main: auth, download, info, destination (M3U8 is an export flow, not a standalone command) |
 | Subcommands | auth (2) · download (3) · destination (3) |
 | Options documented | 16 |
 | Item placeholders | 15 |
