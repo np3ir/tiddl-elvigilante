@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import types
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from tiddl.cli.commands.download.downloader import (
     Downloader,
@@ -28,13 +28,15 @@ from tiddl.cli.commands.download.downloader import (
 def test_cross_directory_same_stem_is_not_matched():
     # 1. FLAC lives in album A; album B (same title, Atmos Version) has no file.
     #    Requesting B's .m4a must NOT match a file from A's folder.
-    b_target = Path(r"Z:\#\21 Savage\(2018) i am (Dolby Atmos Version)\01. a lot.m4a")
+    b_target = PureWindowsPath(
+        r"Z:\#\21 Savage\(2018) i am (Dolby Atmos Version)\01. a lot.m4a"
+    )
     assert _find_alt_extension(b_target, ".m4a", {"cover.jpg"}) is None
 
 
 def test_real_alternative_in_same_directory_is_returned():
     # 2.
-    target = Path(r"Z:\Artist\Album\01. Track.m4a")
+    target = PureWindowsPath(r"Z:\Artist\Album\01. Track.m4a")
     assert _find_alt_extension(target, ".m4a", {"01. Track.flac", "cover.jpg"}) == (
         target.with_suffix(".flac")
     )
