@@ -19,7 +19,16 @@ from tiddl.cli.commands.download.downloader import (
     Downloader,
     _find_alt_extension,
     _track_is_atmos,
+    _wants_atmos,
 )
+
+
+def _atmos_item():
+    return types.SimpleNamespace(mediaMetadata={"tags": ["DOLBY_ATMOS", "LOSSLESS"]}, audioModes=[])
+
+
+def _stereo_item():
+    return types.SimpleNamespace(mediaMetadata={"tags": ["LOSSLESS"]}, audioModes=[])
 
 
 # ==========================================================================
@@ -105,6 +114,61 @@ def test_track_is_atmos_detects_dolby_atmos():
     assert _track_is_atmos(atmos) is True
     assert _track_is_atmos(stereo) is False
     assert _track_is_atmos(via_modes) is True
+
+
+# ==========================================================================
+# Requested (effective) modality — _wants_atmos: an Atmos TAG is not an Atmos
+# REQUEST. Only `-q atmos` on a track that offers it is an Atmos delivery.
+# ==========================================================================
+def test_wants_atmos_requires_requested_atmos_not_just_the_tag():
+    a = _atmos_item()
+    assert _wants_atmos("atmos", a) is True         # requested AND offered
+    assert _wants_atmos("normal", a) is False        # -q normal -> stereo AAC
+    assert _wants_atmos("low", a) is False
+    assert _wants_atmos("high", a) is False          # -q high -> climbs to FLAC
+    assert _wants_atmos("max", a) is False
+    assert _wants_atmos("atmos", _stereo_item()) is False  # track offers no Atmos
+
+
+def test_atmos_tag_with_normal_quality_accepts_stereo_flac():
+    # (1) Atmos tag + `-q normal` + existing FLAC -> stereo contract: the FLAC
+    #     (higher quality) satisfies the `.m4a` request, as it always historically did.
+    atmos = _wants_atmos("normal", _atmos_item())
+    res = _find_alt_extension(Path("/x/01. T.m4a"), ".m4a", {"01. T.flac"}, atmos_request=atmos)
+    assert res is not None and res.name == "01. T.flac"
+
+
+def test_atmos_tag_with_atmos_quality_rejects_stereo_flac():
+    # (2) Atmos tag + `-q atmos` + FLAC -> a stereo FLAC does NOT satisfy an Atmos
+    #     delivery (distinct modality) -> download proceeds.
+    atmos = _wants_atmos("atmos", _atmos_item())
+    res = _find_alt_extension(Path("/x/01. T.m4a"), ".m4a", {"01. T.flac"}, atmos_request=atmos)
+    assert res is None
+
+
+def test_atmos_tag_with_atmos_quality_accepts_atmos_container():
+    # (3) Atmos tag + `-q atmos` + MP4/M4A -> another Atmos container satisfies it.
+    atmos = _wants_atmos("atmos", _atmos_item())
+    res = _find_alt_extension(Path("/x/01. T.m4a"), ".m4a", {"01. T.mp4"}, atmos_request=atmos)
+    assert res is not None and res.name == "01. T.mp4"
+
+
+def test_atmos_tag_with_high_quality_preserves_flac_priority():
+    # (4) Atmos tag + `-q high` -> FLAC-over-Atmos: the requested file is `.flac`,
+    #     which never downgrades to a lower `.m4a`, and it is NOT an Atmos delivery.
+    atmos = _wants_atmos("high", _atmos_item())
+    assert atmos is False
+    res = _find_alt_extension(Path("/x/01. T.flac"), ".flac", {"01. T.m4a"}, atmos_request=atmos)
+    assert res is None
+
+
+def test_non_atmos_track_with_atmos_request_uses_stereo_contract():
+    # (5) Non-Atmos track + `-q atmos` -> not an Atmos delivery; the stereo contract
+    #     applies and a FLAC still satisfies an `.m4a` fallback.
+    atmos = _wants_atmos("atmos", _stereo_item())
+    assert atmos is False
+    res = _find_alt_extension(Path("/x/01. T.m4a"), ".m4a", {"01. T.flac"}, atmos_request=atmos)
+    assert res is not None and res.name == "01. T.flac"
 
 
 # ==========================================================================

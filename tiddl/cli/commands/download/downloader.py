@@ -140,6 +140,19 @@ def _track_is_atmos(item: "Track") -> bool:
     return "DOLBY_ATMOS" in tags
 
 
+def _wants_atmos(requested_quality: str, item: "Track") -> bool:
+    """Whether the skip-existing alt-check should treat this as an Atmos DELIVERY
+    (an M4A/MP4 container), which a stereo FLAC must NOT satisfy.
+
+    This is the REQUESTED-and-effective modality, not mere availability. A
+    DOLBY_ATMOS tag alone is not enough: only ``-q atmos`` starts the cascade at
+    the Atmos rung. ``-q normal`` / ``low`` download the stereo AAC (`.m4a`), and
+    ``-q high`` / ``max`` prefer FLAC over Atmos (they climb to the 24-bit FLAC),
+    so for those an existing stereo FLAC still legitimately satisfies the request.
+    Only ``-q atmos`` on a track that offers Atmos is an Atmos delivery."""
+    return requested_quality == "atmos" and _track_is_atmos(item)
+
+
 def _find_alt_extension(
     existing_file_path: Path,
     requested_suffix: str,
@@ -1337,7 +1350,7 @@ class Downloader:
             alt_path = await self._resolve_alt_existing(
                 existing_file_path,
                 filename.suffix,
-                _track_is_atmos(item) if isinstance(item, Track) else False,
+                _wants_atmos(self.requested_quality, item) if isinstance(item, Track) else False,
             )
             if alt_path is not None:
                 self.rich_output.show_item_result(
