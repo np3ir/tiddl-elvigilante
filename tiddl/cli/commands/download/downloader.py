@@ -124,6 +124,90 @@ def _supported_attempts(qualities, primary_kind: str, hires_api):
     return [q for q in qualities if q != "HI_RES_LOSSLESS"]
 
 
+_ALT_QUALITY = {".flac": 2, ".m4a": 1, ".mp4": 1}
+
+
+def _track_is_atmos(item: "Track") -> bool:
+    """True if this track is a Dolby Atmos delivery (its medium is an M4A/MP4
+    container, not a FLAC). Mirrors the tag/audioMode read used by the cascade."""
+    tags: set = set()
+    mm = getattr(item, "mediaMetadata", None)
+    if isinstance(mm, dict):
+        tags |= {str(t).upper() for t in (mm.get("tags") or [])}
+    elif mm is not None and getattr(mm, "tags", None):
+        tags |= {str(t).upper() for t in mm.tags}
+    tags |= {str(m).upper() for m in (getattr(item, "audioModes", None) or [])}
+    return "DOLBY_ATMOS" in tags
+
+
+def _wants_atmos(requested_quality: str, item: "Track") -> bool:
+    """Whether the skip-existing alt-check should treat this as an Atmos DELIVERY
+    (an M4A/MP4 container), which a stereo FLAC must NOT satisfy.
+
+    This is the REQUESTED-and-effective modality, not mere availability. A
+    DOLBY_ATMOS tag alone is not enough: only ``-q atmos`` starts the cascade at
+    the Atmos rung. ``-q normal`` / ``low`` download the stereo AAC (`.m4a`), and
+    ``-q high`` / ``max`` prefer FLAC over Atmos (they climb to the 24-bit FLAC),
+    so for those an existing stereo FLAC still legitimately satisfies the request.
+    Only ``-q atmos`` on a track that offers Atmos is an Atmos delivery."""
+    return requested_quality == "atmos" and _track_is_atmos(item)
+
+
+def _find_alt_extension(
+    existing_file_path: Path,
+    requested_suffix: str,
+    dir_names: "set[str]",
+    *,
+    atmos_request: bool = False,
+) -> "Optional[Path]":
+    """An equal-or-better-quality alternative of ``existing_file_path`` that is
+    actually present in its OWN directory (e.g. a ``.flac`` when an ``.m4a`` was
+    requested), or ``None``.
+
+    ``dir_names`` MUST be the listing of ``existing_file_path.parent`` only.
+    Scoping the match to this one directory is the whole point: two TIDAL albums
+    can share track titles — a standard/Deluxe album and its separate "Dolby
+    Atmos Version" release — so a directory-blind index would report a same-named
+    file from the OTHER album's folder and hand back a path that does not exist
+    here, which then skips a real download and fails to tag a missing file.
+
+    Contract for coexisting formats in ONE folder:
+    * Stereo requests keep the historical extension quality-equivalence — a FLAC
+      (higher quality) satisfies an ``.m4a`` request, an equal container satisfies
+      an equal one; a lower-quality extension never satisfies a higher one.
+    * ``atmos_request=True`` marks a Dolby Atmos delivery: Atmos is a distinct
+      audio MODALITY, so a same-stem FLAC (a stereo track) does NOT satisfy it —
+      only another Atmos container (``.m4a`` / ``.mp4``) counts. This prevents
+      silently skipping an Atmos track because a homonymous stereo FLAC exists.
+
+    Matching is case-insensitive on the file name (Windows/SMB semantics) and the
+    requested suffix is normalised, so ``.FLAC`` / ``.M4A`` match. The returned
+    path uses the REAL on-disk name (exact casing), so it is a valid file on
+    case-sensitive filesystems too; on a casing-only tie the exact-case name wins,
+    else a stable order. Pure function for direct unit coverage."""
+    req = (requested_suffix or "").lower()
+    target = _ALT_QUALITY.get(req, 0)
+    # Map each casefolded name to the REAL on-disk names, so the returned path
+    # keeps the exact casing that exists on disk. Returning a lowercased
+    # reconstruction (`with_suffix`) would not be a real file on a case-sensitive
+    # filesystem — the caller's is_file() would then fail and re-download.
+    by_ci: "dict[str, list[str]]" = {}
+    for name in dir_names:
+        by_ci.setdefault(name.casefold(), []).append(name)
+    candidates = (".m4a", ".mp4") if atmos_request else (".flac", ".m4a", ".mp4")
+    for ext in candidates:
+        if ext == req or _ALT_QUALITY.get(ext, 0) < target:
+            continue
+        wanted = existing_file_path.with_suffix(ext).name
+        matches = by_ci.get(wanted.casefold())
+        if not matches:
+            continue
+        # Deterministic: an exact-case match wins; otherwise a stable order.
+        actual = wanted if wanted in matches else sorted(matches)[0]
+        return existing_file_path.parent / actual
+    return None
+
+
 def _guarded_mkdir(root: Path, path: Path, mode: str) -> "anchor.AnchorCheck":
     """Operations 1/2 (destination-volume identity, v2.2 §1): checked
     immediately before creating this item's directory — a refusal here is
@@ -468,8 +552,6 @@ class Downloader:
         self.audio_mode = audio_mode
         self.quality_policy = quality_policy
         self.dir_cache: dict[Path, set[str]] = {}
-        # Flat index: stem → set of extensions, para lookup de alternativas sin re-escanear
-        self._stem_index: dict[str, set[str]] = {}
         # Per-directory locks: allows scanning different dirs in parallel while
         # preventing duplicate scans of the same directory.
         self._dir_locks: dict[Path, asyncio.Lock] = {}
@@ -641,15 +723,40 @@ class Downloader:
                 # iterdir() + is_file() would add one SMB round-trip per file,
                 # which is catastrophic on network shares.
                 names = await asyncio.to_thread(os.listdir, dir_path)
-                files = set(names)
-                self.dir_cache[dir_path] = files
-                for name in files:
-                    stem = Path(name).stem
-                    if stem not in self._stem_index:
-                        self._stem_index[stem] = set()
-                    self._stem_index[stem].add(Path(name).suffix)
+                self.dir_cache[dir_path] = set(names)
             except (FileNotFoundError, OSError):
                 self.dir_cache[dir_path] = set()
+
+    async def _resolve_alt_existing(
+        self, existing_file_path: Path, requested_suffix: str, atmos_request: bool
+    ) -> "Optional[Path]":
+        """An equal-or-better alternative of `existing_file_path` that is really a
+        FILE in its OWN directory, or None — directory-scoped (never a cross-album
+        stem index) with a one-shot stale-cache refresh.
+
+        Guarantees the caller only ever reports `Exists (Alt)` / skips a download
+        for a path that currently exists as a file: if the cached listing was
+        stale (the file vanished after enumeration, or a same-named directory
+        exists), this refreshes THIS folder's cache once and re-checks; if the
+        alternative is still not a real file, it returns None so the normal
+        download proceeds."""
+        parent = existing_file_path.parent
+        await self._scan_directory(parent)
+        alt = _find_alt_extension(
+            existing_file_path, requested_suffix,
+            self.dir_cache.get(parent, set()), atmos_request=atmos_request,
+        )
+        if alt is not None and not await asyncio.to_thread(alt.is_file):
+            # Stale listing — refresh this one folder once and re-resolve.
+            self.dir_cache.pop(parent, None)
+            await self._scan_directory(parent)
+            alt = _find_alt_extension(
+                existing_file_path, requested_suffix,
+                self.dir_cache.get(parent, set()), atmos_request=atmos_request,
+            )
+            if alt is not None and not await asyncio.to_thread(alt.is_file):
+                alt = None
+        return alt
 
     async def _is_file_in_cache(self, file_path: Path) -> bool:
         """Checks if a file exists, using async dir scan + in-memory cache.
@@ -1232,32 +1339,26 @@ class Downloader:
                 )
                 return existing_file_path, True
 
-        # Check for alternative extensions (e.g. have FLAC, requesting M4A)
+        # Check for an alternative extension already on disk (e.g. have FLAC,
+        # requesting M4A). Scoped to THIS track's own directory (via dir_cache),
+        # never a cross-album stem index — two albums (a Deluxe/standard release
+        # and its separate Dolby Atmos Version) share track titles, so a
+        # directory-blind lookup would report a same-named file from the other
+        # album's folder. Atmos requests never accept a stereo FLAC (distinct
+        # modality). The helper only returns a path that is really a file here.
         elif self.skip_existing:
-            qual_map = {".flac": 2, ".m4a": 1, ".mp4": 1}
-            target_score = qual_map.get(filename.suffix, 0)
-            stem = existing_file_path.stem
-
-            # Usar stem_index para evitar re-escanear el mismo directorio 3 veces
-            existing_exts = self._stem_index.get(stem)
-            if existing_exts is None:
-                # stem no indexado aún — garantizar que el dir esté escaneado (async)
-                await self._scan_directory(existing_file_path.parent)
-                existing_exts = self._stem_index.get(stem, set())
-
-            for ext in [".flac", ".m4a", ".mp4"]:
-                if ext == filename.suffix or ext not in existing_exts:
-                    continue
-
-                found_score = qual_map.get(ext, 0)
-                if found_score >= target_score:
-                    alt_path = existing_file_path.with_suffix(ext)
-                    self.rich_output.show_item_result(
-                        result_message="[yellow]Exists (Alt)",
-                        item_description=f"[{vibrant_color}]{display_title}",
-                        item_path=alt_path,
-                    )
-                    return alt_path, True
+            alt_path = await self._resolve_alt_existing(
+                existing_file_path,
+                filename.suffix,
+                _wants_atmos(self.requested_quality, item) if isinstance(item, Track) else False,
+            )
+            if alt_path is not None:
+                self.rich_output.show_item_result(
+                    result_message="[yellow]Exists (Alt)",
+                    item_description=f"[{vibrant_color}]{display_title}",
+                    item_path=alt_path,
+                )
+                return alt_path, True
 
         should_extract_flac = False
 
@@ -1538,6 +1639,15 @@ class Downloader:
                         source_type=source_type,
                         source_id=source_id or (str(item.album.id) if getattr(item, "album", None) else None),
                     ))
+
+                    # Keep dir_cache coherent for the rest of THIS run: a listing
+                    # enumerated before this write would otherwise miss the file we
+                    # just created, causing a wrong later same-folder decision. Only
+                    # patch an already-enumerated folder (no extra scan — one
+                    # enumeration per folder stays the norm, important on SMB).
+                    _cached_names = self.dir_cache.get(download_path.parent)
+                    if _cached_names is not None:
+                        _cached_names.add(download_path.name)
 
                     return download_path, True
 
