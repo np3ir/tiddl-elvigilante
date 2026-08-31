@@ -17,6 +17,43 @@ See [FORK.md](FORK.md) for detailed information about improvements and differenc
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-08-31
+
+### Fixed
+
+- **Cross-folder false `Exists (Alt)` no longer skips Dolby Atmos tracks.** The
+  skip-existing check that looks for an already-downloaded alternative extension
+  (e.g. a `.flac` when a `.m4a` was requested) used a **run-global** index keyed by
+  the bare filename stem. Two albums that share track titles — for example a Deluxe
+  edition (`.flac`) and a "(Dolby Atmos Version)" (`.m4a`) — collided: the first
+  album scanned poisoned the index, so a same-titled track in the **other** album
+  matched a file that lives in a **different** folder. The engine then reported
+  `Exists (Alt)` and pointed the metadata writer at a path that does not exist in
+  that folder, producing a `[WinError 2]` and **silently skipping the Atmos track**.
+  The alternative-extension lookup is now scoped to the **track's own directory**:
+  - Only a real file **in the same folder** can satisfy the request; a same-stem
+    file in another album is ignored.
+  - The **real on-disk name and casing** are returned (matching is
+    case-insensitive but the existing filename is preserved), so the result is a
+    path that actually exists — no re-download from a reconstructed lowercase name.
+  - When **Atmos is the requested modality** (`-q atmos` on a track that offers
+    Atmos), a same-stem **stereo FLAC is not accepted** as an alternative — Atmos
+    and stereo are treated as **distinct modalities**. For a stereo request
+    (`-q normal`/`low`) or a FLAC request (`-q high`/`max`), an existing same-folder
+    file still satisfies as before.
+  - If the cached folder listing is stale (the file vanished, or the name is a
+    directory), the folder is re-scanned **once** and revalidated with a real
+    `is_file()` check before reporting `Exists (Alt)`; otherwise the track is
+    downloaded normally.
+
+### Notes
+
+- **No change to TV/HiRes client routing, the quality cascade, or the per-run RPM
+  budget.** This release only corrects the skip-existing / alternative-extension
+  logic; download quality selection and rate limiting behave exactly as in 1.5.4.
+- **Engine-only release.** Re-pinning the bundled engine and rebuilding/publishing
+  the GUI are a later, separate step and are not part of this engine release.
+
 ## [1.5.4] - 2026-08-26
 
 ### Fixed
