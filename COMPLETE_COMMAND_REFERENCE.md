@@ -6,7 +6,7 @@
 
 ## 📋 Table of Contents
 
-1. [Main Commands](#main-commands)
+1. [Main Commands](#main-commands) — `tiddl auth`, `tiddl download`, `tiddl info`, `tiddl destination`, and the M3U8 export flow
 2. [Download Subcommands](#download-subcommands)
 3. [Global Options](#global-options)
 4. [Command Options](#command-options)
@@ -146,6 +146,19 @@ tiddl download --audio-mode stereo --dry-run url https://tidal.com/album/...   #
 # Quality policy: flexible (ceiling, default) vs strict (exact tier only)
 tiddl download -q high --quality-policy strict url https://...
 
+# HiRes vs TV client (default auto). In auto, `high` (and lower) keep ALL enumeration
+# (playlists/artists/albums/credits) on the lenient TV client and fetch the 24-bit tier
+# per-track only for Atmos tracks; `max` uses HiRes for the run. never = TV only;
+# always = HiRes for the whole run. (v1.5.4 — fixes the `high` 429 regression.)
+tiddl download -q high --hires-client auto   url https://...   # TV enum + per-track 24-bit (default)
+tiddl download -q high --hires-client never  url https://...   # TV only
+tiddl download         --hires-client always url https://...   # HiRes for the whole run
+
+# API pacing: max TIDAL API calls per minute (alias of requests_per_minute). TV + HiRes
+# share ONE per-run budget, so their COMBINED traffic stays under it. Reduces HTTP 429
+# risk; does not guarantee TIDAL never rate-limits. Only paces API calls, not the transfer.
+tiddl download --rpm 30 url https://...
+
 # Artist release-type filter (artist downloads): skip compilations / live albums
 tiddl download --exclude-compilations --exclude-live-albums url https://tidal.com/artist/5237820
 #   also --no-exclude-compilations / --no-exclude-live-albums to override config
@@ -156,7 +169,9 @@ tiddl download --exclude-compilations --exclude-live-albums url https://tidal.co
 tiddl download --resume --artists url https://tidal.com/playlist/...
 #   run WITHOUT --resume for a full re-verify; checkpoint lives in TIDDL_PATH/resume/
 
-# Chunk a huge list instead: stop after N tracks, re-run to continue (skip_existing)
+# Chunk a huge list instead: stop after N NEW downloads, re-run to continue (skip_existing).
+# On reaching the cap the run stops cleanly — no further resource is dequeued, enumerated or
+# requested; in-flight downloads finish. Existing files don't consume the cap. Exits 0.
 tiddl download --max-tracks 500 --artists url https://tidal.com/playlist/...
 
 # Debug (global flag, goes before the subcommand)
@@ -277,6 +292,40 @@ tiddl download url https://tidal.com/playlist/xyz
 ```
 
 See [CONFIG.md](CONFIG.md) for the `[m3u]` section and template options.
+
+---
+
+## 5. `tiddl destination` - Destination-volume identity
+
+Administer the trust records used by `destination_identity = "strict"` — a safety guard
+that stops downloads from silently landing on a local fallback path when a NAS / USB /
+network destination isn't actually mounted. See the full guide (platforms, second-machine
+adoption, recovery, troubleshooting) in **[DESTINATION_SAFETY.md](DESTINATION_SAFETY.md)**.
+
+```bash
+# Trust a destination root — an explicit, one-time administrative act. A download or
+# `tiddl recover` NEVER creates, adopts or rotates trust. Writes a `.tiddl-anchor`
+# marker in the root + a local record on this machine.
+tiddl destination trust "Z:\"
+
+# Read-only: report the live trust status of one root, or list every trusted root.
+tiddl destination status "Z:\"
+tiddl destination status
+
+# Remove ONLY this machine's local trust record (never deletes `.tiddl-anchor` from the
+# shared destination — another install may still depend on it).
+tiddl destination forget "Z:\"
+```
+
+**Flags on `trust`:**
+- `--adopt-existing` — adopt a valid `.tiddl-anchor` a correct shared destination already
+  has (second machine / fresh install) instead of creating a new one. Only when you can
+  independently confirm it is the intended volume.
+- `--confirm-mounted` — skip the interactive confirmation (scripted/unattended). It means
+  *you already verified the real destination is mounted* — it is **not** a way to bypass
+  that verification.
+
+`trust` never runs automatically; `status` is read-only; `forget` is local-only.
 
 ---
 

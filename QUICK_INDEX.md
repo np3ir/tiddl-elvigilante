@@ -25,6 +25,11 @@
 
 ✅ tiddl info          - Get information
 
+✅ tiddl destination   - Destination-volume identity (strict-mode trust)
+   ├── trust           - Trust a root (one-time; --confirm-mounted, --adopt-existing)
+   ├── status          - Read-only trust status (one root or all)
+   └── forget          - Remove this machine's local trust record
+
 ⚠️ M3U8 export         - Not a standalone command; enable [m3u] save=true
                          in config.toml and it's generated automatically
                          during a normal `download` (see CONFIG.md)
@@ -61,7 +66,13 @@ tiddl download url https://tidal.com/mix/mixed123xyz      ✓
 | `--threads-count` | `-t` | `8` | Download threads |
 | `--path` | `-p` | `D:/Music` | Download folder |
 | `--template` | - | `{artist}/{album}/{title}` | Custom naming |
-| And more... | | | |
+| `--hires-client` | - | `auto`, `always`, `never` | Which client (TV/HiRes) backs the run |
+| `--quality-policy` | - | `flexible`, `strict` | `-q` as ceiling vs exact tier only |
+| `--rpm` | - | `30` | API calls/min (alias of `requests_per_minute`) |
+| `--max-tracks` | - | `500` | Stop after N new downloads (chunk a huge run) |
+| `--resume` | - | - | Skip resources done in a prior run of the same job |
+| `--audio-mode` | - | `auto`, `stereo` | Use the stereo edition of Atmos-only albums |
+| And more (see COMPLETE_COMMAND_REFERENCE.md) | | | |
 
 ---
 
@@ -248,8 +259,8 @@ tiddl download url https://tidal.com/playlist/xyz
 |--------|-------|
 | Lines | 734 |
 | Size | 17 KB |
-| Commands explained | 4 main |
-| Subcommands | 2 |
+| Commands explained | 4 main: auth, download, info, destination (M3U8 is an export flow, not a standalone command) |
+| Subcommands | auth (2) · download (3) · destination (3) |
 | Options documented | 16 |
 | Item placeholders | 15 |
 | Album placeholders | 10 |
@@ -292,6 +303,7 @@ tiddl download url https://tidal.com/playlist/xyz
 ├── README.md
 ├── USAGE.md
 ├── CONFIG.md
+├── DESTINATION_SAFETY.md
 ├── FORK.md
 ├── CONTRIBUTING.md
 ├── CHANGELOG.md

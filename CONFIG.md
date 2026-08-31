@@ -73,6 +73,34 @@ artist_separator = " / "
   - `normal`: 320kbps AAC
   - `low`: 96kbps AAC (worst)
 
+### `hires_client`
+- **Type**: `auto` / `always` / `never`
+- **Default**: `auto`
+- Which TIDAL client backs the run. tiddl uses two: **TV** (lenient rate limit, LOSSLESS
+  16-bit) and **HiRes** (24-bit `HI_RES_LOSSLESS`, but a strict rate limit that returns
+  HTTP 429 on large lists).
+  - `auto` (default): choose per the requested `-q`. `high` (and lower) keep **all
+    enumeration** (playlists, artists, albums, credits) on the lenient **TV** client, and
+    the 24-bit tier is fetched **per track** through a secondary HiRes client only for a
+    track whose only FLAC is 24-bit (e.g. Dolby Atmos). `max` uses the HiRes client for the run.
+  - `always`: use the HiRes client for the whole run.
+  - `never`: use only the TV client — the HiRes client is never built or called.
+- CLI override: `--hires-client auto|always|never`.
+- (v1.5.4) TV and HiRes share ONE per-run request budget so their **combined** traffic
+  stays within `requests_per_minute`. This fixed a regression where a `high` run drove all
+  enumeration through the strict HiRes client and hit frequent HTTP 429s; it reduces that
+  risk but does not guarantee TIDAL never rate-limits.
+
+### `quality_policy`
+- **Type**: `flexible` / `strict`
+- **Default**: `flexible`
+- How the requested `-q` (`track_quality`) is treated when a track doesn't offer that exact tier.
+  - `flexible` (default): `-q` is a **ceiling** — take the best tier at or below it the track
+    offers (the fidelity cascade `max > high > atmos > normal > low`).
+  - `strict`: accept **only** the exact requested tier; a track that can't provide it is
+    skipped rather than downloaded at a lower quality.
+- CLI override: `--quality-policy flexible|strict`.
+
 ### `video_quality`
 - **Type**: sd / hd / fhd
 - **Default**: fhd
@@ -97,11 +125,14 @@ artist_separator = " / "
 - **Default**: 20
 - **Range**: 1–300
 - Maximum TIDAL API calls per minute. The client enforces a fixed-interval gate with
-  per-request jitter so downloads never trigger HTTP 429 (Too Many Requests). Lower this
-  value if you still see rate-limit errors; raise it only if you have a high-throughput
-  account. The adaptive delay mechanism adjusts automatically, so this value is the
-  ceiling, not a guaranteed throughput. Note this only paces metadata/API calls — the
-  actual audio file transfer is not rate-limited by this setting.
+  per-request jitter to avoid HTTP 429 (Too Many Requests) — it greatly reduces the risk
+  but cannot guarantee TIDAL never rate-limits you. (v1.5.4) The TV and HiRes clients share
+  ONE per-run budget, so their **combined** traffic stays within this ceiling instead of
+  each client pacing independently. Lower this value if you still see rate-limit errors;
+  raise it only if you have a high-throughput account. This value is the ceiling, not a
+  guaranteed throughput, and it only paces metadata/API calls — the actual audio file
+  transfer is not rate-limited by this setting.
+- CLI override: `--rpm` (alias for `requests_per_minute`), e.g. `tiddl download --rpm 30 url ...`.
 - **Example**:
   ```toml
   [download]
@@ -176,7 +207,15 @@ macOS, second-machine adoption, recovery and troubleshooting instructions.
 ### `max_tracks_per_session`
 - **Type**: integer
 - **Default**: 0 (no limit)
-- Stop after downloading this many tracks in a single `tiddl download` run. Restart the command to continue.
+- Stop after this many **new** downloads in a single `tiddl download` run. Restart the
+  command to continue — already-downloaded tracks are skipped, so it resumes where it left off.
+- Counts only tracks this run actually fetched: a file already present (`skip_existing`)
+  does **not** consume the quota.
+- (v1.5.4) Reaching the cap stops the whole run — **no new resource (playlist/artist/album)
+  is dequeued, enumerated or requested afterwards**, while downloads already in flight finish
+  cleanly. Under concurrency an atomic per-track reservation keeps the run from exceeding the
+  cap. This is a normal stop (not a cancel / 429 / 401), so the command still exits 0.
+- CLI override: `--max-tracks N`.
 
 ### `artist_concurrency`
 - **Type**: integer
