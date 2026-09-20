@@ -44,6 +44,36 @@ from .downloader import Downloader
 from .output import RichOutput
 
 
+def _is_benign_proactor_teardown(context: dict) -> bool:
+    """True for the benign Windows ProactorEventLoop socket-teardown error.
+
+    On Windows, asyncio's ProactorEventLoop raises OSError [WinError 10022]
+    (WSAEINVAL) from _ProactorBasePipeTransport._call_connection_lost when
+    aiohttp closes a socket that is already disconnected. It is a long-standing
+    CPython bug that fires AFTER a transfer completes, so it is cosmetic — but the
+    loop's default exception handler prints its traceback to stderr (the warnings
+    filter cannot mute it, since it is not a warning), which floods the log and,
+    in the GUI, its stderr-backed console.
+    """
+    exc = context.get("exception")
+    return isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10022
+
+
+def _install_proactor_teardown_filter(loop: asyncio.AbstractEventLoop) -> None:
+    """Mute the benign Windows Proactor teardown error on ``loop``.
+
+    Installs an exception handler that swallows only that exact case and defers
+    every other error to the loop's default handler, so real failures still
+    surface. See :func:`_is_benign_proactor_teardown`.
+    """
+    def _handler(loop_: asyncio.AbstractEventLoop, context: dict) -> None:
+        if _is_benign_proactor_teardown(context):
+            return
+        loop_.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+
+
 def _fold_accents(s: str) -> str:
     """Strip diacritics for loose comparison (Tidal spells the same person's
     name inconsistently across endpoints, e.g. 'Raúl' vs 'Raül')."""
@@ -233,6 +263,46 @@ async def _guarded_save_cover(
             f"[destination-identity] refused {label} cover write "
             f"for {path}: {e.check.reason}"
         )
+
+
+def _default_cover_target(track_paths, download_root: Path) -> Optional[Path]:
+    """Resolve where an empty ``[cover.templates]`` entry saves the cover.
+
+    The documented contract for an empty template is "next to the audio, default
+    name" — but an empty string fed to ``format_template`` renders to nothing and
+    the cover landed at the download root as ``.*.jpg`` instead. This restores the
+    contract: the target is the common parent folder of the just-downloaded track
+    paths (the album/track/playlist folder; for a multi-disc album this is the
+    album root above the ``Disc N`` subfolders), named ``cover`` — the guarded
+    writer appends ``.jpg``. Returns ``None`` when no track path is known, so the
+    caller simply skips the standalone cover rather than writing it to the root.
+    """
+    # handle_item returns Path("") (str -> ".") for a cancelled or cap-rejected
+    # item; those are not real destinations, so drop them before resolving.
+    dirs = [
+        Path(p).parent
+        for p, _item in track_paths
+        if p and str(p) not in ("", ".")
+    ]
+    if not dirs:
+        return None
+    try:
+        common = Path(os.path.commonpath([str(d) for d in dirs]))
+    except ValueError:
+        # Paths on different drives (Windows) have no common path — fall back to
+        # the first track's own folder rather than raising.
+        common = dirs[0]
+    # Never write to (or above) the download root itself — that is the very bug
+    # this replaces. Only place the cover when the tracks share a real subfolder
+    # (the normal case: root/<artist>/<album>). A flat template that drops every
+    # track straight into the root has no per-album folder to hold one cover, so
+    # skip it there rather than littering the root.
+    try:
+        if common == download_root or common in download_root.parents:
+            return None
+    except Exception:
+        pass
+    return common / "cover"
 
 
 def _write_lrc_guarded(item_root: Path, lrc_path: Path, mode: str, text: str) -> None:
@@ -1075,6 +1145,12 @@ def download_callback(
         return predict_item_quality().upper()
 
     async def download_resources():
+        # Mute the benign Windows ProactorEventLoop socket-teardown noise
+        # (OSError [WinError 10022]) that aiohttp triggers on connection close.
+        # Harmless, but its traceback otherwise floods the log / GUI console.
+        if sys.platform == "win32":
+            _install_proactor_teardown_filter(asyncio.get_running_loop())
+
         import datetime as _dt
         from tiddl.cli.commands.web_login import auto_refresh_if_needed
         await auto_refresh_if_needed(threshold_minutes=30)
@@ -1972,17 +2048,25 @@ def download_callback(
                 )
 
                 if save_cover and cover:
-                    _album_cover_path = DOWNLOAD_PATH / format_template(
-                        template=CONFIG.cover.templates.album, album=album,
-                        artist_separator=CONFIG.templates.artist_separator,
-                    )
+                    if CONFIG.cover.templates.album:
+                        _album_cover_path = DOWNLOAD_PATH / format_template(
+                            template=CONFIG.cover.templates.album, album=album,
+                            artist_separator=CONFIG.templates.artist_separator,
+                        )
+                    else:
+                        # Empty template -> documented "next to the audio, default
+                        # name": drop cover.jpg in the album folder itself.
+                        _album_cover_path = _default_cover_target(
+                            tracks_with_path, DOWNLOAD_PATH
+                        )
                     # Operation 8 — via the guarded helper (P1 #3 audit fix);
                     # see _guarded_save_cover's docstring.
-                    await _guarded_save_cover(
-                        cover, DOWNLOAD_PATH, _album_cover_path,
-                        CONFIG.download.destination_identity,
-                        identity_tracker, "album",
-                    )
+                    if _album_cover_path is not None:
+                        await _guarded_save_cover(
+                            cover, DOWNLOAD_PATH, _album_cover_path,
+                            CONFIG.download.destination_identity,
+                            identity_tracker, "album",
+                        )
 
             # resources should be collected from a distinct function
             # that would yield the resources.
@@ -1998,7 +2082,7 @@ def download_callback(
                 ctx.obj.console.print(f"[dim]Track ID: {resource.id}[/]\n")
 
                 await _dispatch_delay()
-                await handle_item(
+                _track_dl_path, _ = await handle_item(
                     item=track,
                     file_path=format_template(
                         template=resolve_template(TRACK_TEMPLATE, CONFIG.templates.track),
@@ -2022,17 +2106,25 @@ def download_callback(
                     and track.album.cover
                 ):
                     _track_cover = Cover(track.album.cover, size=CONFIG.cover.size)
-                    _track_cover_path = DOWNLOAD_PATH / format_template(
-                        CONFIG.cover.templates.track, item=track, album=album,
-                        artist_separator=CONFIG.templates.artist_separator,
-                    )
+                    if CONFIG.cover.templates.track:
+                        _track_cover_path = DOWNLOAD_PATH / format_template(
+                            CONFIG.cover.templates.track, item=track, album=album,
+                            artist_separator=CONFIG.templates.artist_separator,
+                        )
+                    else:
+                        # Empty template -> "next to the audio, default name":
+                        # cover.jpg in the track's own folder.
+                        _track_cover_path = _default_cover_target(
+                            [(_track_dl_path, track)], DOWNLOAD_PATH
+                        )
                     # Operation 8 — via the guarded helper (P1 #3 audit fix);
                     # see _guarded_save_cover's docstring.
-                    await _guarded_save_cover(
-                        _track_cover, DOWNLOAD_PATH, _track_cover_path,
-                        CONFIG.download.destination_identity,
-                        identity_tracker, "track",
-                    )
+                    if _track_cover_path is not None:
+                        await _guarded_save_cover(
+                            _track_cover, DOWNLOAD_PATH, _track_cover_path,
+                            CONFIG.download.destination_identity,
+                            identity_tracker, "track",
+                        )
 
             elif resource_type == "video":
                 video = await asyncio.to_thread(ctx.obj.api.get_video, resource.id)
@@ -2617,18 +2709,26 @@ def download_callback(
                     and playlist.squareImage
                 ):
                     _pl_cover = Cover(playlist.squareImage, size=max(CONFIG.cover.size, 1080))
-                    _pl_cover_path = DOWNLOAD_PATH / format_template(
-                        template=CONFIG.cover.templates.playlist,
-                        playlist=playlist,
-                        artist_separator=CONFIG.templates.artist_separator,
-                    )
+                    if CONFIG.cover.templates.playlist:
+                        _pl_cover_path = DOWNLOAD_PATH / format_template(
+                            template=CONFIG.cover.templates.playlist,
+                            playlist=playlist,
+                            artist_separator=CONFIG.templates.artist_separator,
+                        )
+                    else:
+                        # Empty template -> "next to the audio, default name":
+                        # cover.jpg in the shared playlist folder.
+                        _pl_cover_path = _default_cover_target(
+                            tracks_with_path, DOWNLOAD_PATH
+                        )
                     # Operation 8 — via the guarded helper (P1 #3 audit fix);
                     # see _guarded_save_cover's docstring.
-                    await _guarded_save_cover(
-                        _pl_cover, DOWNLOAD_PATH, _pl_cover_path,
-                        CONFIG.download.destination_identity,
-                        identity_tracker, "playlist",
-                    )
+                    if _pl_cover_path is not None:
+                        await _guarded_save_cover(
+                            _pl_cover, DOWNLOAD_PATH, _pl_cover_path,
+                            CONFIG.download.destination_identity,
+                            identity_tracker, "playlist",
+                        )
 
                 ctx.obj.console.print(f"\n[bold green]✅ Playlist download completed:[/] {playlist.title}")
                 ctx.obj.console.print(f"   • Downloaded: {len(tracks_with_path)} items")

@@ -56,12 +56,14 @@ size = 1280                    # default: 1280  (max: 1280)
 # Which download types get the .jpg. A list; empty = none.
 allowed = []                   # default: []  — options: ["track", "album", "playlist"]
 
-# Path/name templates for the .jpg (empty = next to the audio, default name).
-# Uses the same tokens as [templates] (see below).
+# Path/name templates for the .jpg. Empty = save it next to the audio as
+# "cover.jpg" (in the album/track/playlist folder). Set a template to override
+# the path/name; it uses the same tokens as [templates] (see below), e.g.
+# album = "{album.artist}/{album.title}/folder".
 [cover.templates]
-track = ""                     # default: ""
-album = ""                     # default: ""
-playlist = ""                  # default: ""
+track = ""                     # default: ""  (empty -> <track folder>/cover.jpg)
+album = ""                     # default: ""  (empty -> <album folder>/cover.jpg)
+playlist = ""                  # default: ""  (empty -> <playlist folder>/cover.jpg)
 
 
 # =============================================================================
