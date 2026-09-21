@@ -68,7 +68,11 @@ def _is_benign_proactor_teardown(context: dict) -> bool:
         return False
     callback = getattr(context.get("handle"), "_callback", None)
     qualname = getattr(callback, "__qualname__", "") or ""
-    return qualname.endswith("_ProactorBasePipeTransport._call_connection_lost")
+    # Exact match, not endswith: the teardown method's __qualname__ is precisely
+    # "_ProactorBasePipeTransport._call_connection_lost" (no module prefix), so an
+    # exact compare avoids matching an unrelated callback that merely shares that
+    # suffix.
+    return qualname == "_ProactorBasePipeTransport._call_connection_lost"
 
 
 def _install_proactor_teardown_filter(loop: asyncio.AbstractEventLoop) -> None:

@@ -48,6 +48,11 @@ def test_predicate_matches_only_proactor_teardown_10022():
     assert _is_benign_proactor_teardown(_teardown_ctx()) is True
     # Same winerror but a DIFFERENT source (unrelated task) must NOT be swallowed.
     assert _is_benign_proactor_teardown(_teardown_ctx(qualname="SomeOther.run")) is False
+    # A qualname that only *ends with* the teardown suffix (not exactly it) must
+    # NOT be swallowed — the match is exact, not endswith.
+    assert _is_benign_proactor_teardown(
+        _teardown_ctx(qualname="evil._ProactorBasePipeTransport._call_connection_lost")
+    ) is False
     # WinError 10022 with no handle context is not the teardown callback either.
     assert _is_benign_proactor_teardown({"exception": _oserror(10022)}) is False
     # A different OSError winerror is a real failure — do not swallow it.
