@@ -54,9 +54,21 @@ def _is_benign_proactor_teardown(context: dict) -> bool:
     loop's default exception handler prints its traceback to stderr (the warnings
     filter cannot mute it, since it is not a warning), which floods the log and,
     in the GUI, its stderr-backed console.
+
+    Scoped strictly to that teardown callback: the WinError 10022 check alone is
+    not enough, since an unrelated WSAEINVAL that reaches the loop's exception
+    handler would then be swallowed silently. The context of the benign case is
+    a scheduled ``Handle`` whose callback is
+    ``_ProactorBasePipeTransport._call_connection_lost``, so we require that too.
+    Failing the source check errs on the safe side — the cosmetic noise reappears
+    rather than a real error being hidden.
     """
     exc = context.get("exception")
-    return isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10022
+    if not (isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10022):
+        return False
+    callback = getattr(context.get("handle"), "_callback", None)
+    qualname = getattr(callback, "__qualname__", "") or ""
+    return qualname.endswith("_ProactorBasePipeTransport._call_connection_lost")
 
 
 def _install_proactor_teardown_filter(loop: asyncio.AbstractEventLoop) -> None:
