@@ -267,11 +267,22 @@ def parse_date_safe(date_str: Any) -> datetime:
         return datetime.min
     if isinstance(date_str, datetime):
         return date_str
+    s = str(date_str)
     try:
+        # TIDAL sometimes returns a PARTIAL release date: year only ("2019") or
+        # year-month ("2019-05"). Pad it to a full date so it resolves to the
+        # real year instead of datetime.min — which renders as the folder
+        # "(0001)" in path templates and silently diverges from consumers that
+        # DO normalize partial dates (e.g. tidmon-cli), causing the same album
+        # to land in "(0001)" here and "(2019)" there -> duplicate downloads.
+        if len(s) == 4 and s.isdigit():
+            s = f"{s}-01-01"
+        elif len(s) == 7 and s[4:5] == "-":
+            s = f"{s}-01"
         # Handle simple date strings like "2023-01-01"
-        if len(str(date_str)) == 10 and '-' in str(date_str):
-             return datetime.strptime(str(date_str), "%Y-%m-%d")
-        return datetime.fromisoformat(str(date_str))
+        if len(s) == 10 and '-' in s:
+            return datetime.strptime(s, "%Y-%m-%d")
+        return datetime.fromisoformat(s)
     except ValueError:
         return datetime.min
 
