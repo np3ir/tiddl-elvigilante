@@ -2839,6 +2839,19 @@ def download_callback(
                         new_resources.append(r)
                 ctx.obj.resources = new_resources
 
+            # Several inputs can normalize to the same resource (e.g. a TIDAL
+            # "View all" URL and the canonical artist URL). Dispatching both
+            # would race on the same tracks, so keep the first of each
+            # (type, id) and preserve order.
+            _seen_dispatch: set = set()
+            _unique_resources: list[TidalResource] = []
+            for r in ctx.obj.resources:
+                _key = (r.type, r.id)
+                if _key not in _seen_dispatch:
+                    _seen_dispatch.add(_key)
+                    _unique_resources.append(r)
+            ctx.obj.resources = _unique_resources
+
             if expanded_run or len(ctx.obj.resources) > 1:
                 # Multi-resource runs (expansions or many pasted URLs) can be
                 # hundreds of THOUSANDS of resources (a playlist expanded into
