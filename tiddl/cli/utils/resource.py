@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from typing import Literal, get_args
 
@@ -26,7 +26,8 @@ class TidalResource(BaseModel):
         in the format `resource_type/resource_id` (e.g., `track/12345678`).
         """
 
-        segments = [seg for seg in urlparse(string).path.split("/") if seg]
+        parsed = urlparse(string)
+        segments = [seg for seg in parsed.path.split("/") if seg]
 
         resource_type = next(
             (seg for seg in segments if seg in get_args(ResourceTypeLiteral)), None
@@ -39,6 +40,16 @@ class TidalResource(BaseModel):
             resource_id = segments[segments.index(resource_type) + 1]
         except IndexError:
             raise ValueError(f"No resource ID found {resource_type=} {string=}")
+
+        # TIDAL "View all" pages carry the real id in the query string and a
+        # section name in the path, e.g.
+        #   https://tidal.com/artist/ARTIST_ALBUMS/view-all?artistId=8405
+        # Fall back to ``artistId`` so that URL resolves to artist/8405.
+        if resource_type == "artist" and not resource_id.isdigit():
+            query = {k.lower(): v for k, v in parse_qs(parsed.query).items()}
+            candidate = (query.get("artistid") or [""])[0]
+            if candidate.isdigit():
+                resource_id = candidate
 
         digit_resource_types: list[ResourceTypeLiteral] = [
             "track",
